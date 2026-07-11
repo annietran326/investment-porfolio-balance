@@ -1,0 +1,124 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { validate, defaultState, SCHEMA_VERSION } from "../src/model/schema.mjs";
+import { migrate, MissingVersionError, FutureVersionError } from "../src/model/migrate.mjs";
+import { placeholderState } from "../src/model/placeholder.mjs";
+
+// A v0 export fixture matching the prototype's localStorage shape (no schemaVersion,
+// endState {mode, amount}, silent-fallback-era gaps like a missing toYear).
+const V0_EXPORT = {
+  profile: { currentAge: 40, endAge: 92, currentYear: 2026 },
+  portfolio: { balance: 1500000, realReturnPct: 4.0 },
+  properties: [
+    { name: "Rental A", rentMonthly: 3200, costsMonthly: 900, mortgageMonthly: 2400, payoffYear: 2049, saleYear: 2027, saleNetProceeds: 250000 },
+    { name: "Rental B (keep)", rentMonthly: 2800, costsMonthly: 800, mortgageMonthly: 1900, payoffYear: 2047, saleYear: null, saleNetProceeds: null },
+  ],
+  incomes: [{ name: "W2", annual: 180000, fromYear: 2026 }], // toYear missing on purpose
+  spending: [{ name: "living", monthly: 2500 }],
+  social: { startAge: 67, monthly: 2800, haircutPct: 25 },
+  health: { preMedicareAnnual: 18000, postMedicareAnnual: 7000, employerCoverageUntilAge: 40 },
+  endState: { mode: "bequest", amount: 500000 },
+  work: { untilAge: 50 },
+};
+
+test("placeholder and default states pass validation with no errors or warnings", () => {
+  for (const s of [placeholderState(), defaultState()]) {
+    const { errors, warnings } = validate(s);
+    assert.deepEqual(errors, []);
+    // placeholder has a 2027 sale with proceeds — no warnings expected either
+    assert.deepEqual(warnings, []);
+  }
+});
+
+test("sale year in the past is a warning, not an error", () => {
+  const s = placeholderState();
+  s.properties[0].saleYear = 2020;
+  const { errors, warnings } = validate(s);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.path === "properties[0].saleYear" && w.message.includes("past")));
+});
+
+test("text in a numeric field is an error naming the path", () => {
+  const s = placeholderState();
+  // @ts-expect-error deliberate corruption
+  s.properties[0].rentMonthly = "abc";
+  const { errors } = validate(s);
+  assert.ok(errors.some((e) => e.path === "properties[0].rentMonthly" && e.message.includes("number")));
+});
+
+test("saleYear null is keep-forever (valid); 0 is an error; number is valid", () => {
+  const s = placeholderState();
+  s.properties[1].saleYear = null;
+  assert.deepEqual(validate(s).errors, []);
+  s.properties[1].saleYear = 0;
+  assert.ok(validate(s).errors.some((e) => e.path === "properties[1].saleYear"));
+});
+
+test("sale year set without proceeds warns", () => {
+  const s = placeholderState();
+  s.properties[1].saleYear = 2030;
+  s.properties[1].saleNetProceeds = null;
+  const { errors, warnings } = validate(s);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.path === "properties[1].saleNetProceeds"));
+});
+
+test("income window and end-age ordering rules", () => {
+  const s = placeholderState();
+  s.incomes[0].toYear = s.incomes[0].fromYear - 1;
+  assert.ok(validate(s).errors.some((e) => e.path === "incomes[0].toYear"));
+
+  const s2 = placeholderState();
+  s2.profile.endAge = s2.profile.currentAge;
+  assert.ok(validate(s2).errors.some((e) => e.path === "profile.endAge"));
+
+  const s3 = placeholderState();
+  s3.work.untilAge = s3.profile.currentAge - 5;
+  const r3 = validate(s3);
+  assert.deepEqual(r3.errors, []);
+  assert.ok(r3.warnings.some((w) => w.path === "work.untilAge"));
+});
+
+test("v0 export migrates via declaredVersion 0 and passes validation", () => {
+  const { state, fromVersion, migrated } = migrate(V0_EXPORT, { declaredVersion: 0 });
+  assert.equal(fromVersion, 0);
+  assert.equal(migrated, true);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(validate(state).errors, []);
+  // endState amount landed in the right mode slot
+  assert.equal(state.endState.mode, "bequest");
+  assert.equal(state.endState.amounts.bequest, 500000);
+  assert.equal(state.endState.amounts.floor, 0);
+  // missing toYear preserved v0's income-forever behavior (horizon end)
+  assert.equal(state.incomes[0].toYear, 2026 + (92 - 40));
+});
+
+test("migration is idempotent on already-current data", () => {
+  const once = migrate(V0_EXPORT, { declaredVersion: 0 }).state;
+  const twice = migrate(once);
+  assert.equal(twice.migrated, false);
+  assert.deepEqual(twice.state, once);
+});
+
+test("missing schemaVersion without declaration is corrupt, never sniffed", () => {
+  assert.throws(() => migrate(V0_EXPORT), MissingVersionError);
+  assert.throws(() => migrate({ some: "garbage" }), MissingVersionError);
+  assert.throws(() => migrate({ schemaVersion: "1" }), MissingVersionError);
+});
+
+test("future schemaVersion refuses with a clear message", () => {
+  assert.throws(() => migrate({ schemaVersion: SCHEMA_VERSION + 1 }), FutureVersionError);
+  try {
+    migrate({ schemaVersion: 99 });
+  } catch (e) {
+    assert.match(/** @type {Error} */ (e).message, /update the app/);
+  }
+});
+
+test("ladder purity: migrate.mjs performs no I/O (no node:fs, no Date, no clock)", () => {
+  const src = readFileSync(fileURLToPath(new URL("../src/model/migrate.mjs", import.meta.url)), "utf8");
+  assert.ok(!/node:fs/.test(src), "migrate.mjs must not import node:fs");
+  assert.ok(!/\bDate\b/.test(src), "migrate.mjs must not read the clock");
+});
