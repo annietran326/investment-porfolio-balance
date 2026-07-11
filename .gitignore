@@ -1,0 +1,21 @@
+# Real financial data never enters this repo.
+# The app stores user data OUTSIDE the repo (default ~/runway-data),
+# but belt-and-suspenders in case anything lands here:
+*.local.json
+runway-data/
+data/
+
+# Node
+node_modules/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+*.swp

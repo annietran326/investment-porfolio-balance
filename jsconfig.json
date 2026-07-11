@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": [
+      "es2022"
+    ],
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true,
+    "typeRoots": [
+      "./node_modules/@types"
+    ],
+    "maxNodeModuleJsDepth": 0
+  },
+  "include": [
+    "src/**/*.mjs"
+  ],
+  "exclude": [
+    "node_modules",
+    "public"
+  ]
+}

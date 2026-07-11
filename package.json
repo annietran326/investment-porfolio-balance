@@ -1,0 +1,19 @@
+{
+  "name": "runway",
+  "version": "0.1.0",
+  "description": "Local-first runway / die-with-zero retirement calculator. Answers: do I still need to work — and if so, how much per year, until when?",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node src/server/index.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "typecheck": "tsc -p jsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.5.0"
+  }
+}
