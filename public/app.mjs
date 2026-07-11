@@ -17,6 +17,7 @@ import { createSavePipeline } from "./ui/save.mjs";
 import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
 import { initTrends } from "./ui/trends.mjs";
 import { initSnapshots } from "./ui/snapshots.mjs";
+import { initImports } from "./ui/imports.mjs";
 import {
   addRow,
   removeRow,
@@ -422,3 +423,5 @@ if (boot.recovery) {
 // once per day, and restore ends in location.reload() — nothing to keep live).
 void initTrends(qs("#trendsBody"));
 void initSnapshots(qs("#snapshotsBody"), { pipeline });
+// U8: spreadsheet export + template import (apply ends in location.reload()).
+initImports(qs("#importsBody"), { pipeline });

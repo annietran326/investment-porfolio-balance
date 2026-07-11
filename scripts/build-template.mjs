@@ -1,0 +1,138 @@
+// The XLSX template's single source of truth (U8). TEMPLATE_DEF describes
+// every tab, column, unit, and assumption key; src/import/template.mjs imports
+// it, so the parser and the generated template can never drift apart.
+//
+// Run directly (`node scripts/build-template.mjs`) to regenerate
+// template/runway-template.xlsx from the schema defaults. This is an optional
+// maintenance tool — it is NOT part of npm start or npm test.
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * @typedef {Object} ColumnDef
+ * @property {string} header   carries the unit — this exact text is matched on import
+ * @property {string} field    state field the column maps to
+ * @property {"text"|"number"} type
+ * @property {boolean} [nullable] empty cell → null (meaningful), NEVER 0
+ * @property {boolean} [optional] column may be absent from an imported sheet
+ * @property {string} [zeroError] error message when the cell holds 0 (sale year)
+ *
+ * @typedef {Object} SettingDef
+ * @property {string} key   dotted state path ("endState.bequest" → endState.amounts.bequest)
+ * @property {"number"|"mode"} type
+ * @property {string} doc   unit / notes column text
+ *
+ * @typedef {Object} TabDef
+ * @property {"accounts"|"properties"|"income"|"spending"|"assumptions"} key
+ * @property {string} name  sheet name (matched case-insensitively on import)
+ * @property {"single"|"list"|"settings"} kind
+ * @property {"properties"|"incomes"|"spending"} [section] state array for list tabs
+ * @property {ColumnDef[]} columns
+ * @property {SettingDef[]} [settings]
+ * @property {string} [note] comment row ("#" prefix — ignored by the parser)
+ */
+
+/** @type {{tabs: TabDef[]}} */
+export const TEMPLATE_DEF = {
+  tabs: [
+    {
+      key: "accounts",
+      name: "Accounts",
+      kind: "single",
+      columns: [
+        { header: "Balance $", field: "balance", type: "number" },
+        { header: "Real return %/yr", field: "realReturnPct", type: "number" },
+      ],
+    },
+    {
+      key: "properties",
+      name: "Properties",
+      kind: "list",
+      section: "properties",
+      columns: [
+        { header: "Name", field: "name", type: "text" },
+        { header: "Rent $/mo", field: "rentMonthly", type: "number" },
+        { header: "Costs $/mo", field: "costsMonthly", type: "number" },
+        { header: "Mortgage P&I $/mo", field: "mortgageMonthly", type: "number" },
+        { header: "Payoff year", field: "payoffYear", type: "number", nullable: true },
+        {
+          header: "Sale year (leave empty to keep)",
+          field: "saleYear",
+          type: "number",
+          nullable: true,
+          zeroError: "0 is not a year — leave the cell empty to keep forever",
+        },
+        { header: "Net sale proceeds $", field: "saleNetProceeds", type: "number", nullable: true },
+      ],
+    },
+    {
+      key: "income",
+      name: "Income",
+      kind: "list",
+      section: "incomes",
+      columns: [
+        { header: "Name", field: "name", type: "text" },
+        { header: "Net $/yr", field: "annual", type: "number" },
+        { header: "From year", field: "fromYear", type: "number" },
+        { header: "To year", field: "toYear", type: "number" },
+      ],
+    },
+    {
+      key: "spending",
+      name: "Spending",
+      kind: "list",
+      section: "spending",
+      columns: [
+        { header: "Name", field: "name", type: "text" },
+        { header: "$/mo (excl. property costs & healthcare)", field: "monthly", type: "number" },
+      ],
+    },
+    {
+      key: "assumptions",
+      name: "Assumptions",
+      kind: "settings",
+      columns: [
+        { header: "Setting", field: "key", type: "text" },
+        { header: "Value", field: "value", type: "number" },
+        { header: "Unit / notes", field: "doc", type: "text", optional: true },
+      ],
+      settings: [
+        { key: "profile.currentAge", type: "number", doc: "years" },
+        { key: "profile.endAge", type: "number", doc: "plan-to age (years)" },
+        { key: "profile.currentYear", type: "number", doc: "simulation clock origin (calendar year)" },
+        { key: "social.startAge", type: "number", doc: "Social Security start age (years)" },
+        { key: "social.monthly", type: "number", doc: "Social Security $/mo, today's dollars, pre-haircut" },
+        { key: "social.haircutPct", type: "number", doc: "% cut applied to Social Security (plain number, 25 = 25%)" },
+        { key: "health.preMedicareAnnual", type: "number", doc: "healthcare $/yr before 65, after employer coverage ends" },
+        { key: "health.postMedicareAnnual", type: "number", doc: "healthcare $/yr from age 65" },
+        { key: "health.employerCoverageUntilAge", type: "number", doc: "age employer health coverage ends" },
+        { key: "endState.mode", type: "mode", doc: "one of: zero, bequest, floor" },
+        { key: "endState.bequest", type: "number", doc: "$ to leave (used when mode is bequest)" },
+        { key: "endState.floor", type: "number", doc: "$ the balance never drops below (used when mode is floor)" },
+        { key: "work.untilAge", type: "number", doc: "willing-to-work-until age (the solver's income window)" },
+      ],
+      note: "# Inflation is NOT an input; returns are real (after inflation and tax)",
+    },
+  ],
+};
+
+// --- maintenance entry point ------------------------------------------------
+// template.mjs statically imports TEMPLATE_DEF from this file, so the writer
+// must import template.mjs DYNAMICALLY and must NOT block this module's
+// evaluation (no top-level await) — otherwise the circular import deadlocks.
+async function main() {
+  const { buildTemplateWorkbook } = await import("../src/import/template.mjs");
+  const { defaultState } = await import("../src/model/schema.mjs");
+  const out = join(dirname(fileURLToPath(import.meta.url)), "..", "template", "runway-template.xlsx");
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, buildTemplateWorkbook(defaultState()));
+  process.stdout.write(`wrote ${out}\n`);
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    process.stderr.write(`build-template failed: ${e instanceof Error ? e.stack : e}\n`);
+    process.exitCode = 1;
+  });
+}

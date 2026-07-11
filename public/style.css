@@ -364,3 +364,37 @@ button.linklike {
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* spreadsheet import/export card (U8) */
+.import-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0; }
+.import-preview {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.import-tab {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+  border-bottom: 1px solid #21262f;
+}
+.import-tab:last-child { border-bottom: none; }
+.import-tab-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  min-width: 130px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.import-tab-name input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+.import-blocked { color: var(--bad); border-color: #7f1d1d; }
+.import-errors { flex-basis: 100%; }
+.import-headline { font-size: 12px; color: var(--dim); }
