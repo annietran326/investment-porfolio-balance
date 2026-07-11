@@ -15,5 +15,9 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "papaparse": "^5.5.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
