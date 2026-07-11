@@ -20,7 +20,8 @@ function* walk(dir) {
 
 const FORBIDDEN = [
   /\bfetch\s*\(/,
-  /node:https?\b/,
+  /node:https\b/,
+  /from\s+["']https?["']/,
   /\bhttp\.request\b/,
   /\bhttps\./,
   /node:net\b/,
@@ -29,7 +30,7 @@ const FORBIDDEN = [
   /XMLHttpRequest/,
   /WebSocket\s*\(/,
 ];
-// The one sanctioned exception: the server imports node:http to LISTEN, never to request.
+// The one sanctioned exception: src/server/ imports node:http to LISTEN, never to request.
 const HTTP_IMPORT = /from\s+["']node:http["']/;
 
 test("src/ contains no outbound-network APIs", () => {
