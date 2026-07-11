@@ -279,3 +279,88 @@ td {
   font-size: 13px;
 }
 td.name { font-family: inherit; }
+
+/* ---------- charts (U7) ---------- */
+
+/* One custom property per scenario drives the line stroke, the chip swatch,
+   AND the readout text color — CSP forbids style attributes, classes don't. */
+.scen-base { --scen: #5eead4; }
+.scen-stress { --scen: #f59e0b; }
+.scen-drawdown { --scen: #f87171; }
+.scen-spend { --scen: #c084fc; }
+.scen-everything { --scen: #60a5fa; }
+
+.chart-wrap svg { display: block; width: 100%; height: auto; cursor: crosshair; }
+
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  font: 12px var(--mono);
+  border-radius: 999px;
+}
+.chip .swatch { width: 9px; height: 9px; border-radius: 50%; background: var(--scen); }
+.chip.off { opacity: .45; }
+.chip.off .swatch { background: transparent; border: 1px solid var(--scen); }
+
+path.scen-line { fill: none; stroke: var(--scen); stroke-width: 1.4; }
+path.scen-line.scen-base { stroke-width: 2.6; }
+.chart .gridline { stroke: var(--border); stroke-width: 1; }
+.chart .zero-line { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart .tick-label { fill: var(--dim); font: 10px var(--mono); }
+.chart .crosshair { stroke: var(--dim); stroke-width: 1; }
+
+/* fixed readout bar below the chart — never a floating tooltip */
+.chart-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 12px var(--mono);
+  color: var(--dim);
+}
+.chart-readout .ro-year { color: var(--text); font-weight: 600; }
+.chart-readout .ro { color: var(--scen); }
+
+/* cash-flow drill-down */
+.drill summary { cursor: pointer; color: var(--dim); font-size: 13px; margin-top: 10px; }
+.drill summary:hover { color: var(--text); }
+.drill table { margin-top: 8px; }
+.drill th, .drill td { font-size: 12px; padding: 3px 8px 3px 0; }
+.drill th.num, .drill td.num { text-align: right; }
+.drill .showall { margin-top: 8px; }
+
+/* trends — small multiples */
+.trend-empty { color: var(--dim); font-size: 13px; }
+.trend-multiple { margin-bottom: 12px; }
+.trend-multiple:last-child { margin-bottom: 0; }
+.trend-multiple svg { display: block; width: 100%; height: auto; }
+.trend-head { display: flex; justify-content: space-between; align-items: baseline; }
+.trend-head .l { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .8px; }
+.trend-head .v { font: 600 13px var(--mono); }
+.trend-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.trend-dot { fill: var(--accent); }
+
+/* snapshots browser — reuses the recovery panel's .snapshot-row pattern */
+.snapshot-scroll { max-height: 280px; overflow-y: auto; }
+.snapshot-chip {
+  font: 11px var(--mono);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--dim);
+}
+button.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: underline;
+}

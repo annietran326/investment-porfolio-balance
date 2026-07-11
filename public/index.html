@@ -172,6 +172,27 @@
     </table>
     <div class="footnote">Runway = first year the balance goes below $0. Required income = minimum net $/yr from now until your work-until age so the plan lands on the goal.</div>
   </section>
+
+  <section class="card">
+    <h2>Balance over time <span class="hint">hover or tap for a year; click a chip to toggle a scenario</span></h2>
+    <div id="balanceChart" class="chart-wrap"></div>
+    <details class="drill">
+      <summary>Year-by-year cash flow (base case)</summary>
+      <div id="cashflowTable"></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Trends <span class="hint">one point per day you save</span></h2>
+    <div id="trendsBody"></div>
+    <div class="footnote">Loaded once per page load — a trend row lands on the first save of each day.</div>
+  </section>
+
+  <section class="card">
+    <h2>Snapshots <span class="hint">restore any earlier state</span></h2>
+    <div id="snapshotsBody"></div>
+    <div class="footnote">A snapshot is taken on the first save of each day and before every import, restore, or reset.</div>
+  </section>
 </div>
 </main>
 

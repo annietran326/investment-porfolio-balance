@@ -14,6 +14,9 @@ import { validate, PLAN_TO_AGE_PRESETS } from "/model/schema.mjs";
 import { qs, el, setText, show } from "./ui/dom.mjs";
 import { verdictCopy, fmtCompact, requiredCell, runwayCell } from "./ui/verdict.mjs";
 import { createSavePipeline } from "./ui/save.mjs";
+import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
+import { initTrends } from "./ui/trends.mjs";
+import { initSnapshots } from "./ui/snapshots.mjs";
 import {
   addRow,
   removeRow,
@@ -45,6 +48,11 @@ const LISTS = {
   incomes: { container: qs("#incomeList"), template: qs("#tpl-income"), addBtn: qs("#addIncome") },
   spending: { container: qs("#spendList"), template: qs("#tpl-spend"), addBtn: qs("#addSpend") },
 };
+
+// U7 chart controllers — built once; renderResults() feeds them on every
+// valid change, so legend toggles and the hover readout survive re-renders.
+const balanceChart = createBalanceChart(qs("#balanceChart"));
+const cashflow = createCashflowTable(qs("#cashflowTable"));
 
 // ---------------------------------------------------------------------------
 // state → DOM
@@ -150,6 +158,7 @@ function setKpi(sel, text, cls) {
 
 function renderResults() {
   const results = SCENARIOS.map((sc) => ({
+    key: sc.key,
     label: sc.label,
     sim: simulate(state, sc.overlay, 0),
     req: requiredIncome(state, sc.overlay),
@@ -189,6 +198,9 @@ function renderResults() {
       )
     );
   }
+
+  balanceChart.update(results.map((r) => ({ key: r.key, label: r.label, path: r.sim.path })));
+  cashflow.update(base.sim.rows);
 }
 
 // ---------------------------------------------------------------------------
@@ -406,3 +418,7 @@ if (boot.recovery) {
   placeholderBannerLive = true;
   show(qs("#placeholderBanner"), true);
 }
+// U7: trends + snapshots load once per page load (a trend row lands at most
+// once per day, and restore ends in location.reload() — nothing to keep live).
+void initTrends(qs("#trendsBody"));
+void initSnapshots(qs("#snapshotsBody"), { pipeline });
