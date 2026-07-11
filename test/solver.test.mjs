@@ -63,6 +63,32 @@ test("monotonicity: every stress scenario requires at least the base case", () =
   }
 });
 
+test("monotonicity with properties kept: a past sale is never resurrected by saleDelayYears", () => {
+  // Unlike the lean fixture above (which strips properties), this one KEEPS
+  // the placeholder's two properties and adds one already sold BEFORE the
+  // window — one year back, so the stress overlay's 2-year saleDelayYears
+  // would push it INSIDE the window (phantom rent + proceeds) if unguarded.
+  const s = placeholderState();
+  s.portfolio.balance = 300_000;
+  s.incomes = [];
+  s.properties.push({
+    name: "Sold before the window",
+    rentMonthly: 4000,
+    costsMonthly: 500,
+    mortgageMonthly: 0,
+    payoffYear: null,
+    saleYear: s.profile.currentYear - 1,
+    saleNetProceeds: 750_000,
+  });
+  const base = perYearOf(requiredIncome(s, {}));
+  for (const key of ["stress", "everything"]) {
+    const sc = SCENARIOS.find((x) => x.key === key);
+    assert.ok(sc);
+    const req = perYearOf(requiredIncome(s, sc.overlay));
+    assert.ok(req >= base, `${key} (${req}) should require >= base (${base})`);
+  }
+});
+
 test("monotonicity: bequest and floor require at least die-with-zero", () => {
   const s = lean();
   const zero = perYearOf(requiredIncome(s));

@@ -12,7 +12,7 @@ import { requiredIncome } from "/engine/solver.mjs";
 import { SCENARIOS } from "/engine/scenarios.mjs";
 import { validate, PLAN_TO_AGE_PRESETS } from "/model/schema.mjs";
 import { qs, el, setText, show } from "./ui/dom.mjs";
-import { verdictCopy, fmtCompact, requiredCell, runwayCell } from "./ui/verdict.mjs";
+import { verdictCopy, fmtCompact, requiredCell, runwayCell, errorsText } from "./ui/verdict.mjs";
 import { createSavePipeline } from "./ui/save.mjs";
 import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
 import { initTrends } from "./ui/trends.mjs";
@@ -389,7 +389,7 @@ function buildStaticBindings() {
         return;
       }
       const body = await res.json().catch(() => null);
-      setText(errEl, body?.errors?.map((er) => er.message).join("; ") || `Import failed (HTTP ${res.status}).`);
+      setText(errEl, errorsText(body, `Import failed (HTTP ${res.status}).`));
     } catch {
       setText(errEl, "Import failed — is the server still running?");
     }

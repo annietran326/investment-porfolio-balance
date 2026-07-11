@@ -87,11 +87,23 @@ export function requiredCell(result) {
 }
 
 /**
- * Runway cell: first-negative year + years-from-now, or "never".
- * @param {{firstNegYear: number|null, startYear: number}} sim
+ * Runway cell: first breach year (below $0, or below the floor in floor mode)
+ * + years-from-now, or "never".
+ * @param {{firstBreachYear: number|null, startYear: number}} sim
  * @returns {{text: string, cls: "pos"|"neg"}}
  */
 export function runwayCell(sim) {
-  if (sim.firstNegYear === null) return { text: "never", cls: "pos" };
-  return { text: yearDelta(sim.firstNegYear, sim.startYear), cls: "neg" };
+  if (sim.firstBreachYear === null) return { text: "never", cls: "pos" };
+  return { text: yearDelta(sim.firstBreachYear, sim.startYear), cls: "neg" };
+}
+
+/**
+ * One-line rendering of a server error body ({errors: [{path, message}]}),
+ * path-prefixed; the fallback covers bodies with no errors array.
+ * @param {any} body @param {string} fallback
+ */
+export function errorsText(body, fallback) {
+  return Array.isArray(body?.errors) && body.errors.length
+    ? body.errors.map((/** @type {any} */ e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join("; ")
+    : fallback;
 }

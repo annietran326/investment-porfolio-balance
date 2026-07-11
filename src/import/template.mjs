@@ -245,10 +245,13 @@ function readNumber(cell, nullable) {
   }
   if (c.t === "s") {
     const raw = unguardText(String(c.v)).trim();
+    // A real numeric cell is short — reject anything longer before it reaches
+    // the regex below.
+    if (raw.length > 64) return { error: "expected a number, got a cell over 64 characters" };
     let t = raw;
     if (t.endsWith("%")) t = t.slice(0, -1);
     t = t.replace(/\$/g, "").replace(/,/g, "").trim();
-    if (t === "" || !/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(t)) {
+    if (t === "" || !/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(t)) {
       return { error: `expected a number, got '${raw}'` };
     }
     return { value: Number(t) };

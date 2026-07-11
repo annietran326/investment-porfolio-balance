@@ -10,6 +10,7 @@
 //     failed one, and a debounce armed by a newer edit stays armed.
 //   - 409 → "conflict": the queue is cancelled and the pipeline goes inert
 //     (the app shows a persistent reload banner; only a reload recovers).
+import { errorsText } from "./verdict.mjs";
 
 /**
  * Debounce with injectable timers.
@@ -82,11 +83,7 @@ export async function putState(fetchFn, state, baseRev, opts = {}) {
     return { kind: "error", message: "malformed save response" };
   }
   if (res.status === 409) return { kind: "conflict", rev: body?.rev };
-  const message =
-    Array.isArray(body?.errors) && body.errors.length
-      ? body.errors.map((e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join("; ")
-      : `HTTP ${res.status}`;
-  return { kind: "error", message };
+  return { kind: "error", message: errorsText(body, `HTTP ${res.status}`) };
 }
 
 /**

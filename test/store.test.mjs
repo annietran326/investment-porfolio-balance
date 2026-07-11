@@ -341,6 +341,12 @@ test("v0 import: provenance copy saved, migrated state validates, rev bumped", (
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "snapshots", provenance), "utf8")), V0_EXPORT);
   assert.equal(JSON.parse(readFileSync(join(dir, "current.json"), "utf8")).schemaVersion, SCHEMA_VERSION);
 
+  // The provenance copy stays ON DISK but is hidden from listSnapshots() —
+  // it has no schemaVersion, so listing it would be a one-click-restore trap.
+  const listed = store.listSnapshots();
+  assert.ok(!listed.some((s) => s.source === "migration-v0-export"), "provenance absent from the restorable listing");
+  assert.ok(!listed.some((s) => s.file === provenance));
+
   assert.throws(() => store.importV0(V0_EXPORT, { baseRev: 0 }), RevConflictError);
 });
 

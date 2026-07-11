@@ -14,6 +14,7 @@
 // Pure copy helpers live up top (no DOM at module top level — node:test can
 // import this file under plain Node); DOM wiring below.
 import { el, setText, show } from "./dom.mjs";
+import { errorsText, fmtMoney } from "./verdict.mjs";
 
 export const IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 
@@ -39,15 +40,10 @@ export function countsCopy(t) {
   return parts.length ? parts.join(", ") : "no changes";
 }
 
-/** @param {number} n */
-export function fmtUsd(n) {
-  return `$${Math.round(n).toLocaleString("en-US")}`;
-}
-
 /** Headline delta line. @param {string} label @param {{before: number, after: number}} d */
 export function deltaCopy(label, d) {
-  if (d.before === d.after) return `${label}: ${fmtUsd(d.before)} (unchanged)`;
-  return `${label}: ${fmtUsd(d.before)} → ${fmtUsd(d.after)}`;
+  if (d.before === d.after) return `${label}: ${fmtMoney(d.before)} (unchanged)`;
+  return `${label}: ${fmtMoney(d.before)} → ${fmtMoney(d.after)}`;
 }
 
 export const MISSING_TAB_COPY = "not present — section unchanged";
@@ -164,6 +160,49 @@ export function initImports(mount, opts) {
     fileInput.value = "";
   }
 
+  /**
+   * The shared apply-status state machine for both import flows: disable the
+   * buttons, flush pending saves, POST the apply payload, then route the
+   * outcome — 200 reloads, 409/410 explain and reset the panel, anything else
+   * renders the server's errors and re-enables the buttons. Returns true only
+   * on that final fall-through (the panel is still alive and editable).
+   * @param {string} url @param {object} payload
+   * @param {{errEl: HTMLElement, resetPanelFn: () => void, buttons: HTMLButtonElement[]}} o
+   * @returns {Promise<boolean>}
+   */
+  async function postApply(url, payload, { errEl, resetPanelFn, buttons }) {
+    for (const b of buttons) b.disabled = true;
+    setText(errEl, "");
+    try {
+      await pipeline.flushOrCancel(); // settle any pending save before mutating server-side
+      const res = await fetchFn(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 200) {
+        reload(); // full reload re-fetches state cleanly — nothing else to render
+        return false;
+      }
+      if (res.status === 409) {
+        setText(errEl, "Your data changed since this preview — choose the file again.");
+        resetPanelFn();
+        return false;
+      }
+      if (res.status === 410) {
+        setText(errEl, "This preview expired — choose the file again.");
+        resetPanelFn();
+        return false;
+      }
+      const body = await res.json().catch(() => null);
+      setText(errEl, errorsText(body, `Import failed (HTTP ${res.status}).`));
+    } catch {
+      setText(errEl, "Import failed — is the server still running?");
+    }
+    for (const b of buttons) b.disabled = false;
+    return true;
+  }
+
   fileInput.addEventListener("change", () => void onFile());
   csvInput.addEventListener("change", () => void onCsvFile());
 
@@ -204,7 +243,7 @@ export function initImports(mount, opts) {
     if (res.status !== 200 || !body?.preview || typeof body.token !== "string") {
       // Distinct server rejections (bounds, macro content, no recognized
       // tabs, oversized) each arrive with their own message.
-      setText(err, body?.errors?.map((/** @type {any} */ e) => e.message).join("; ") || `Preview failed (HTTP ${res.status}).`);
+      setText(err, errorsText(body, `Preview failed (HTTP ${res.status}).`));
       fileInput.value = "";
       return;
     }
@@ -275,42 +314,12 @@ export function initImports(mount, opts) {
     applyBtn.addEventListener("click", () => void apply());
 
     async function apply() {
-      applyBtn.disabled = true;
-      cancelBtn.disabled = true;
-      setText(err, "");
-      try {
-        await pipeline.flushOrCancel(); // settle any pending save before mutating server-side
-        const res = await fetchFn("/api/import/template/apply", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, tabs: [...selected], baseRev: rev }),
-        });
-        if (res.status === 200) {
-          reload(); // full reload re-fetches state cleanly — nothing else to render
-          return;
-        }
-        if (res.status === 409) {
-          setText(err, "Your data changed since this preview — choose the file again.");
-          resetPanel();
-          return;
-        }
-        if (res.status === 410) {
-          setText(err, "This preview expired — choose the file again.");
-          resetPanel();
-          return;
-        }
-        const body = await res.json().catch(() => null);
-        setText(
-          err,
-          body?.errors?.map((/** @type {any} */ e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join("; ") ||
-            `Import failed (HTTP ${res.status}).`
-        );
-      } catch {
-        setText(err, "Import failed — is the server still running?");
-      }
-      applyBtn.disabled = false;
-      cancelBtn.disabled = false;
-      refreshApply();
+      const retryable = await postApply(
+        "/api/import/template/apply",
+        { token, tabs: [...selected], baseRev: rev },
+        { errEl: err, resetPanelFn: resetPanel, buttons: [applyBtn, cancelBtn] }
+      );
+      if (retryable) refreshApply();
     }
   }
 
@@ -378,7 +387,7 @@ export function initImports(mount, opts) {
     if (res.status !== 200 || !body?.preview) {
       // Non-destructive: keep the current panel (mapping picks survive) so
       // the user can adjust; allow re-picking the same file.
-      setText(csvErr, body?.errors?.map((/** @type {any} */ e) => e.message).join("; ") || `Preview failed (HTTP ${res.status}).`);
+      setText(csvErr, errorsText(body, `Preview failed (HTTP ${res.status}).`));
       csvInput.value = "";
       return;
     }
@@ -537,9 +546,9 @@ export function initImports(mount, opts) {
             {},
             el("td", { class: "txn-include" }, cb),
             el("td", { class: "name" }, c.name),
-            el("td", {}, fmtUsd(c.monthly)),
+            el("td", {}, fmtMoney(c.monthly)),
             el("td", {}, String(c.months)),
-            el("td", {}, fmtUsd(c.total)),
+            el("td", {}, fmtMoney(c.total)),
             el("td", {}, c.flagged ? el("span", { class: "snapshot-chip txn-flagged" }, "modeled elsewhere — excluded") : el("span", {}))
           )
         );
@@ -573,43 +582,13 @@ export function initImports(mount, opts) {
     applyBtn.addEventListener("click", () => void applyCsv());
 
     async function applyCsv() {
-      applyBtn.disabled = true;
-      cancelBtn.disabled = true;
-      setText(csvErr, "");
       const includeCategories = [...includeBoxes.entries()].filter(([, cb]) => cb.checked).map(([name]) => name);
       const mode = modeRadios.find((r) => r.checked)?.value ?? "update-matching-names";
-      try {
-        await pipeline.flushOrCancel(); // settle any pending save before mutating server-side
-        const res = await fetchFn("/api/import/transactions/apply", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, mode, includeCategories, baseRev: rev }),
-        });
-        if (res.status === 200) {
-          reload(); // full reload re-fetches state cleanly — nothing else to render
-          return;
-        }
-        if (res.status === 409) {
-          setText(csvErr, "Your data changed since this preview — choose the file again.");
-          resetCsvPanel();
-          return;
-        }
-        if (res.status === 410) {
-          setText(csvErr, "This preview expired — choose the file again.");
-          resetCsvPanel();
-          return;
-        }
-        const resBody = await res.json().catch(() => null);
-        setText(
-          csvErr,
-          resBody?.errors?.map((/** @type {any} */ e) => (e.path ? `${e.path}: ${e.message}` : e.message)).join("; ") ||
-            `Import failed (HTTP ${res.status}).`
-        );
-      } catch {
-        setText(csvErr, "Import failed — is the server still running?");
-      }
-      applyBtn.disabled = false;
-      cancelBtn.disabled = false;
+      await postApply(
+        "/api/import/transactions/apply",
+        { token, mode, includeCategories, baseRev: rev },
+        { errEl: csvErr, resetPanelFn: resetCsvPanel, buttons: [applyBtn, cancelBtn] }
+      );
     }
   }
 }

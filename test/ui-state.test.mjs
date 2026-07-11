@@ -167,9 +167,11 @@ test("requiredCell: never blank; unreachable is red and names the cap", () => {
   assert.equal(u.text, "not achievable even at $2M/yr");
 });
 
-test("runwayCell: finite year is red with years-from-now; never is green", () => {
-  assert.deepEqual(runwayCell({ firstNegYear: 2043, startYear: 2026 }), { text: "2043 (17 yrs)", cls: "neg" });
-  assert.deepEqual(runwayCell({ firstNegYear: null, startYear: 2026 }), { text: "never", cls: "pos" });
+test("runwayCell: finite breach year is red with years-from-now; never is green", () => {
+  // Consumes firstBreachYear (below $0, or below the floor in floor mode) —
+  // NOT firstNegYear, so floor-mode runway respects the floor.
+  assert.deepEqual(runwayCell({ firstBreachYear: 2043, startYear: 2026 }), { text: "2043 (17 yrs)", cls: "neg" });
+  assert.deepEqual(runwayCell({ firstBreachYear: null, startYear: 2026 }), { text: "never", cls: "pos" });
 });
 
 // ---------------------------------------------------------------------------

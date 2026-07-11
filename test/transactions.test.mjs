@@ -22,7 +22,7 @@ import {
   suggestMapping,
   suggestSignConvention,
 } from "../src/import/transactions.mjs";
-import { clientCsvError, excludedCopy, fmtMonth, signDetectedCopy, windowCopy } from "../public/ui/imports.mjs";
+import { clientCsvError, deltaCopy, excludedCopy, fmtMonth, signDetectedCopy, windowCopy } from "../public/ui/imports.mjs";
 
 const NOW = new Date("2026-07-15T10:00:00.000Z"); // current month = 2026-07
 
@@ -167,6 +167,17 @@ test("sign suggestion: majority sign with the counts as the basis; both conventi
 // ---------------------------------------------------------------------------
 // dates: formats, unparseable rows, DD/MM ambiguity
 // ---------------------------------------------------------------------------
+
+test("a 1MB amount cell is bucketed as a bad amount in bounded time (ReDoS guard)", () => {
+  const huge = "1".repeat(1024 * 1024); // one megabyte of digits
+  const csv = `Date,Amount,Description\n2026-05-01,${huge},HUGE CELL\n2026-05-02,5.00,OK\n`;
+  const started = performance.now();
+  const norm = parseAndNormalize(csv, { date: "Date", amount: "Amount", description: "Description", category: null }, "positive-is-charge");
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 500, `preview-path parsing took ${Math.round(elapsed)}ms — expected < 500ms`);
+  assert.deepEqual(norm.excluded.badAmounts, { count: 1, rowNumbers: [2] }, "overlong cell lands in bad amounts");
+  assert.equal(norm.rows.length, 1, "the normal row still parses");
+});
 
 test("unparseable dates and amounts are excluded WITH row numbers, never guessed", () => {
   const csv =
@@ -357,6 +368,9 @@ test("UI copy helpers: window line, sign-detection basis, client CSV checks, exc
     excludedCopy({ parsed: 20, storedNew: 14, dupes: 3, refunds: 1, badDates: { count: 2, rowNumbers: [5, 9] }, badAmounts: { count: 0, rowNumbers: [] } }),
     ["20 rows parsed", "14 new", "3 duplicates (already stored)", "1 refund/income row", "2 unparseable dates (rows 5, 9)"]
   );
+  // deltaCopy renders through fmtMoney: commas, true minus (−) for negatives.
+  assert.equal(deltaCopy("Total balance", { before: 1_500_000, after: -1234 }), "Total balance: $1,500,000 → −$1,234");
+  assert.equal(deltaCopy("Monthly spend", { before: -1234, after: -1234 }), "Monthly spend: −$1,234 (unchanged)");
 });
 
 // ---------------------------------------------------------------------------

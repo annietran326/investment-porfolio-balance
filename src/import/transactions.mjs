@@ -264,6 +264,9 @@ export function parseDate(raw) {
 export function parseAmount(raw) {
   let s = String(raw ?? "").trim();
   if (s === "") return null;
+  // A real currency cell is short — bucket anything longer as a bad value
+  // instead of feeding it to the regexes below.
+  if (s.length > 64) return null;
   let neg = false;
   const paren = /^\((.*)\)$/.exec(s);
   if (paren) {
@@ -277,7 +280,7 @@ export function parseAmount(raw) {
   } else if (s.startsWith("+")) {
     s = s.slice(1).trim();
   }
-  if (!/^(\d+\.?\d*|\.\d+)$/.test(s)) return null;
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(s)) return null;
   const v = Number(s);
   if (!Number.isFinite(v)) return null;
   return neg ? -v : v;

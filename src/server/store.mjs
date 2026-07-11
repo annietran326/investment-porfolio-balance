@@ -118,6 +118,11 @@ function tsSlug(d) {
 
 const SNAP_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-(.+)\.json$/;
 
+// Source tag of the raw v0-export provenance copy written by importV0. It is
+// versionless (no schemaVersion), so restore would always refuse it — kept on
+// disk but hidden from listSnapshots() so the UI never offers to restore it.
+const V0_PROVENANCE_SOURCE = "migration-v0-export";
+
 let tmpCounter = 0;
 
 /**
@@ -582,7 +587,7 @@ export function createStore(dataDir, opts = {}) {
     return { file };
   }
 
-  /** @returns {SnapshotInfo[]} sorted newest-first */
+  /** @returns {SnapshotInfo[]} sorted newest-first; v0 provenance copies are excluded (not restorable) */
   function listSnapshots() {
     /** @type {SnapshotInfo[]} */
     const out = [];
@@ -595,6 +600,7 @@ export function createStore(dataDir, opts = {}) {
     for (const name of names) {
       const m = SNAP_RE.exec(name);
       if (!m) continue;
+      if (m[6] === V0_PROVENANCE_SOURCE) continue; // provenance only — never a restore target
       out.push({ file: name, ts: `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`, source: m[6] });
     }
     out.sort((a, b) => (a.file < b.file ? 1 : a.file > b.file ? -1 : 0));
@@ -656,7 +662,7 @@ export function createStore(dataDir, opts = {}) {
    */
   function importV0(rawData, { baseRev }) {
     if (baseRev !== manifest.rev) throw new RevConflictError(manifest.rev);
-    writeSnapshotBytes(JSON.stringify(rawData, null, 2) + "\n", "migration-v0-export");
+    writeSnapshotBytes(JSON.stringify(rawData, null, 2) + "\n", V0_PROVENANCE_SOURCE);
     const { state } = migrate(rawData, { declaredVersion: 0 });
     if (existsSync(currentPath)) snapshotNow("import");
     const { rev, warnings } = save(state, { source: "migration" });

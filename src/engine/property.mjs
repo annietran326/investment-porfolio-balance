@@ -26,7 +26,8 @@ export const SALE_YEAR_OWNED_MONTHS = 6;
  *     while the simulation runs in real dollars, so late-year mortgage cost is
  *     overstated (conservative direction). Documented in the README.
  *   - A sale year already in the past (before the simulation window) never
- *     books proceeds — validation warns about this upstream.
+ *     books proceeds — in ANY scenario, saleDelayYears included — validation
+ *     warns about this upstream.
  *
  * @param {import("../model/schema.mjs").Property} p
  * @param {number} year
@@ -34,7 +35,9 @@ export const SALE_YEAR_OWNED_MONTHS = 6;
  * @returns {{cf: number, proceeds: number}}
  */
 export function propertyCashflowYear(p, year, overlay = {}) {
-  const saleYear = p.saleYear === null ? null : p.saleYear + (overlay.saleDelayYears ?? 0);
+  // A sale predating the simulation window stays sold in every scenario — saleDelayYears must never resurrect it.
+  const pastSale = p.saleYear !== null && typeof overlay.startYear === "number" && p.saleYear < overlay.startYear;
+  const saleYear = p.saleYear === null ? null : pastSale ? p.saleYear : p.saleYear + (overlay.saleDelayYears ?? 0);
   if (saleYear !== null && year > saleYear) return { cf: 0, proceeds: 0 };
 
   const proceeds = saleYear !== null && year === saleYear ? (p.saleNetProceeds ?? 0) : 0;

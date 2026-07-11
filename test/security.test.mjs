@@ -126,6 +126,31 @@ test("loopback Origin on the bound port is allowed to mutate", async () => {
   assert.equal(res.status, 200);
 });
 
+test("Origin-absent invariant: no-Origin mutations pass the origin gate ONLY for non-CORS-simple content types", async () => {
+  // The origin guard deliberately lets Origin-less requests through — safe
+  // only while every accepted content type is non-CORS-simple. Pin both halves:
+  // (1) a no-Origin application/json mutation is never 403'd by the guard…
+  const rev = await healthRev();
+  const ok = await raw({
+    method: "PUT",
+    path: "/api/state",
+    headers: { "Content-Type": "application/json" }, // NO Origin header
+    body: putBody(4_000_000, rev),
+  });
+  assert.notEqual(ok.status, 403, "no-Origin JSON must not be rejected by the origin guard");
+  assert.equal(ok.status, 200);
+
+  // …(2) and a no-Origin CORS-simple content type (text/plain) is refused by
+  // the content-type gate — the invariant the allowance depends on.
+  const plain = await raw({
+    method: "POST",
+    path: "/api/restore",
+    headers: { "Content-Type": "text/plain" }, // NO Origin header
+    body: "{}",
+  });
+  assert.equal(plain.status, 415, "CORS-simple content types stay locked out of mutations");
+});
+
 test("no Access-Control-Allow-* header, ever (OPTIONS and normal responses)", async () => {
   for (const opts of [
     { method: "OPTIONS", path: "/api/state", headers: { Origin: "https://evil.com" } },
@@ -206,8 +231,9 @@ test("HTML responses carry the CSP header; missing public/ 404s gracefully", asy
   assert.ok(html.headers["content-type"].startsWith("text/html"));
   assert.equal(
     html.headers["content-security-policy"],
-    "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'"
+    "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
   );
+  assert.ok(html.headers["content-security-policy"].includes("frame-ancestors 'none'"), "clickjacking defense pinned");
 
   // The bare server's public/ root doesn't exist: / must 404, not crash —
   // and the HTML-less check: engine module still serves fine.

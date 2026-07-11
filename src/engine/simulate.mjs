@@ -35,6 +35,7 @@ const MEDICARE_AGE = 65;
  * @property {YearRow[]} rows
  * @property {number} endBal
  * @property {number|null} firstNegYear first year balance < 0, or null
+ * @property {number|null} firstBreachYear first year balance < the runway threshold (the floor in floor mode, else $0 — where it equals firstNegYear), or null
  * @property {number} minBal
  * @property {number} workUntilYear last year the solver's extra income applies
  * @property {number} startYear
@@ -69,12 +70,17 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
     vacancyYears: overlay.vacancyYears,
   };
 
+  // R2: runway ends at the first year below $0 OR below the floor — the
+  // breach threshold is the floor in floor mode, else $0.
+  const breachThreshold = s.endState.mode === "floor" ? s.endState.amounts.floor : 0;
+
   let bal = s.portfolio.balance;
   if (overlay.drawdownPct) bal *= 1 - overlay.drawdownPct / 100;
 
   const path = [{ year: startYear - 1, age: s.profile.currentAge - 1, bal }];
   /** @type {YearRow[]} */ const rows = [];
   /** @type {number|null} */ let firstNegYear = null;
+  /** @type {number|null} */ let firstBreachYear = null;
   let minBal = bal;
 
   for (let i = 0; i <= years; i++) {
@@ -112,10 +118,11 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
 
     if (bal < minBal) minBal = bal;
     if (firstNegYear === null && bal < 0) firstNegYear = year;
+    if (firstBreachYear === null && bal < breachThreshold) firstBreachYear = year;
 
     path.push({ year, age, bal });
     rows.push({ year, age, income, ss, propCF, proceeds, health, spend, bal });
   }
 
-  return { path, rows, endBal: bal, firstNegYear, minBal, workUntilYear, startYear };
+  return { path, rows, endBal: bal, firstNegYear, firstBreachYear, minBal, workUntilYear, startYear };
 }

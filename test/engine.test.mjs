@@ -47,6 +47,16 @@ test("sale year books part-year ownership plus proceeds exactly once", () => {
   assert.equal(before.cf, (p.rentMonthly - p.costsMonthly - p.mortgageMonthly) * 12);
 });
 
+test("a sale predating the simulation window stays sold under saleDelayYears — zero cf, zero proceeds", () => {
+  // saleYear 2025 is one year before the window; a 2-year delay would land it
+  // at 2027 (INSIDE the window) if the overlay were allowed to resurrect it.
+  const p = { ...state().properties[0], saleYear: 2025, saleNetProceeds: 250_000 };
+  const overlay = { startYear: 2026, saleDelayYears: 2 };
+  for (let year = 2026; year <= 2032; year++) {
+    assert.deepEqual(propertyCashflowYear(p, year, overlay), { cf: 0, proceeds: 0 }, `year ${year}`);
+  }
+});
+
 test("delayed sale shifts proceeds; keep-forever property cashflows forever", () => {
   const p = state().properties[0];
   const saleYear = /** @type {number} */ (p.saleYear);
@@ -104,6 +114,30 @@ test("scenario knobs: drawdown haircuts the starting balance; one-time cost land
   const shock = simulate(s, { oneTimeCost: 50000, oneTimeCostYearIdx: 3 });
   assert.equal(shock.rows[3].spend - base.rows[3].spend, 50000);
   assert.equal(shock.rows[2].spend, base.rows[2].spend);
+});
+
+test("floor mode: firstBreachYear marks the first dip below the floor while firstNegYear stays null", () => {
+  // 600k, flat return, 24k/yr spend: 576, 552, 528, 504, 480 (< 500k floor in
+  // 2030), … never below $0 over the 11-year horizon.
+  const s = state();
+  s.profile = { currentAge: 40, endAge: 50, currentYear: 2026 };
+  s.portfolio = { balance: 600_000, realReturnPct: 0 };
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [{ name: "living", monthly: 2000 }];
+  s.social.monthly = 0;
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 40 };
+  s.endState = { mode: "floor", amounts: { bequest: 0, floor: 500_000 } };
+  const sim = simulate(s);
+  assert.equal(sim.firstNegYear, null, "never below $0");
+  assert.equal(sim.firstBreachYear, 2030, "the floor breach IS the runway end");
+  assert.ok(sim.minBal >= 0);
+
+  // zero/bequest modes: the breach threshold is $0 — firstBreachYear tracks firstNegYear.
+  s.endState = { mode: "zero", amounts: { bequest: 0, floor: 500_000 } };
+  const zeroSim = simulate(s);
+  assert.equal(zeroSim.firstBreachYear, null);
+  assert.equal(zeroSim.firstBreachYear, zeroSim.firstNegYear);
 });
 
 test("zero assets and no income runs out immediately", () => {

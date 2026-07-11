@@ -55,7 +55,7 @@ import {
 const MB = 1024 * 1024;
 const HOST_OK = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 const CSP =
-  "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'";
+  "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** @type {Record<string, string>} */
 const CONTENT_TYPES = {
@@ -129,48 +129,27 @@ function contained(p, root) {
 }
 
 /**
- * Read a JSON body up to `cap` bytes. Once over the cap, chunks are drained
- * but no longer buffered. Sends 413/400 itself and resolves undefined when
- * the caller should stop.
+ * Read a JSON body up to `cap` bytes, on top of readRawBody (which owns the
+ * drain-past-the-cap discipline and the 413). Sends 400 itself on a parse
+ * failure and resolves undefined when the caller should stop.
  * @param {Req} req @param {Res} res @param {number} cap
  * @returns {Promise<any|undefined>}
  */
-function readJsonBody(req, res, cap) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    /** @type {Buffer[]} */
-    const chunks = [];
-    let total = 0;
-    let over = false;
-    req.on("data", (chunk) => {
-      total += chunk.length;
-      if (over) return;
-      if (total > cap) {
-        over = true;
-        chunks.length = 0; // never hold more than the cap
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (over) {
-        sendJson(res, 413, { errors: [{ path: "", message: `body exceeds ${cap} byte cap` }] });
-        return resolvePromise(undefined);
-      }
-      try {
-        resolvePromise(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        sendJson(res, 400, { errors: [{ path: "", message: "body is not valid JSON" }] });
-        resolvePromise(undefined);
-      }
-    });
-    req.on("error", rejectPromise);
-  });
+async function readJsonBody(req, res, cap) {
+  const body = await readRawBody(req, res, cap);
+  if (body === undefined) return undefined;
+  try {
+    return JSON.parse(body.toString("utf8"));
+  } catch {
+    sendJson(res, 400, { errors: [{ path: "", message: "body is not valid JSON" }] });
+    return undefined;
+  }
 }
 
 /**
- * Read a raw (binary) body up to `cap` bytes with the same drain-past-the-cap
- * discipline as readJsonBody. Sends 413 itself and resolves undefined when
- * the caller should stop.
+ * Read a raw (binary) body up to `cap` bytes. Once over the cap, chunks are
+ * drained but no longer buffered. Sends 413 itself and resolves undefined
+ * when the caller should stop.
  * @param {Req} req @param {Res} res @param {number} cap
  * @returns {Promise<Buffer|undefined>}
  */
@@ -293,6 +272,11 @@ export function createApi(store, opts = {}) {
     const mutating = method === "PUT" || method === "POST" || method === "DELETE";
     if (mutating) {
       // (2) Origin check — only loopback origins on the bound port may mutate.
+      // Origin-ABSENT requests are allowed through. Safe ONLY while every
+      // accepted content type (application/json, text/csv,
+      // application/octet-stream) is non-CORS-simple — adding text/plain,
+      // form-urlencoded, or multipart to any mutating route would open
+      // Origin-less CSRF.
       const origin = req.headers.origin;
       if (origin !== undefined && !allowedOrigin(origin, req.socket.localPort)) {
         return sendJson(res, 403, { errors: [{ path: "", message: "forbidden origin" }] });
@@ -353,16 +337,35 @@ export function createApi(store, opts = {}) {
     sendJson(res, 200, body);
   }
 
+  /**
+   * Shared baseRev gate: 400 when baseRev is not a number, 409 with {rev}
+   * when it is stale. Returns the numeric baseRev, or undefined after having
+   * sent the error response. Staleness is gated inline here for apiPutState,
+   * apiTemplateApply, and apiTxnApply; apiReset uses the type check only and
+   * apiRestore/apiImportV0/apiReset rely on the store throwing
+   * RevConflictError for staleness.
+   * @param {any} body @param {Res} res @param {{checkStale?: boolean}} [o]
+   * @returns {number|undefined}
+   */
+  function requireBaseRev(body, res, { checkStale = true } = {}) {
+    const baseRev = body?.baseRev;
+    if (typeof baseRev !== "number") {
+      sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
+      return undefined;
+    }
+    if (checkStale && baseRev !== store.rev()) {
+      sendJson(res, 409, { rev: store.rev() });
+      return undefined;
+    }
+    return baseRev;
+  }
+
   /** @param {Req} req @param {Res} res */
   async function apiPutState(req, res) {
     const body = await readJsonBody(req, res, 5 * MB);
     if (body === undefined) return;
     const candidate = body?.state;
-    const baseRev = body?.baseRev;
-    if (typeof baseRev !== "number") {
-      return sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
-    }
-    if (baseRev !== store.rev()) return sendJson(res, 409, { rev: store.rev() });
+    if (requireBaseRev(body, res) === undefined) return;
     try {
       const result = store.save(candidate);
       state = candidate;
@@ -477,11 +480,7 @@ export function createApi(store, opts = {}) {
   async function apiTemplateApply(req, res) {
     const body = await readJsonBody(req, res, MB);
     if (body === undefined) return;
-    const baseRev = body?.baseRev;
-    if (typeof baseRev !== "number") {
-      return sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
-    }
-    if (baseRev !== store.rev()) return sendJson(res, 409, { rev: store.rev() });
+    if (requireBaseRev(body, res) === undefined) return;
     const token = body?.token;
     const entry = typeof token === "string" ? templatePreviews.get(token) : undefined;
     if (!entry) {
@@ -677,11 +676,7 @@ export function createApi(store, opts = {}) {
   async function apiTxnApply(req, res) {
     const body = await readJsonBody(req, res, MB);
     if (body === undefined) return;
-    const baseRev = body?.baseRev;
-    if (typeof baseRev !== "number") {
-      return sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
-    }
-    if (baseRev !== store.rev()) return sendJson(res, 409, { rev: store.rev() });
+    if (requireBaseRev(body, res) === undefined) return;
     const token = body?.token;
     const entry = typeof token === "string" ? txnPreviews.get(token) : undefined;
     if (!entry) {
@@ -765,10 +760,8 @@ export function createApi(store, opts = {}) {
   async function apiReset(req, res) {
     const body = await readJsonBody(req, res, MB);
     if (body === undefined) return;
-    const baseRev = body?.baseRev;
-    if (typeof baseRev !== "number") {
-      return sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
-    }
+    const baseRev = requireBaseRev(body, res, { checkStale: false }); // store.reset gates staleness
+    if (baseRev === undefined) return;
     try {
       const result = store.reset({ baseRev });
       state = null;
