@@ -1,0 +1,461 @@
+// Pure-logic UI tests (U6): verdict copy, formatting, form transforms, and
+// the save pipeline state machine. No DOM — public/ui/*.mjs must load under
+// plain Node (no DOM globals at module top level), which this file enforces
+// by importing them.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  verdictCopy,
+  goalText,
+  fmtMoney,
+  fmtCompact,
+  yearDelta,
+  requiredCell,
+  runwayCell,
+} from "../public/ui/verdict.mjs";
+import { createDebouncer, createSavePipeline, putState } from "../public/ui/save.mjs";
+import {
+  addRow,
+  removeRow,
+  setRowValue,
+  setValueAtPath,
+  setEndStateMode,
+  setEndStateAmount,
+  endStateAmountValue,
+  parseNumField,
+} from "../public/ui/forms.mjs";
+import { placeholderState } from "../src/model/placeholder.mjs";
+import { validate } from "../src/model/schema.mjs";
+
+// ---------------------------------------------------------------------------
+// harness: fake timers + a fake /api/state server honoring the rev contract
+// ---------------------------------------------------------------------------
+
+function fakeTimers() {
+  let now = 0;
+  let seq = 0;
+  const timers = new Map();
+  return {
+    setTimer: (fn, ms) => {
+      seq += 1;
+      timers.set(seq, { at: now + ms, fn });
+      return seq;
+    },
+    clearTimer: (h) => {
+      timers.delete(h);
+    },
+    advance(ms) {
+      now += ms;
+      for (const [h, t] of [...timers.entries()].sort((a, b) => a[1].at - b[1].at)) {
+        if (t.at <= now) {
+          timers.delete(h);
+          t.fn();
+        }
+      }
+    },
+  };
+}
+
+/** In-memory server: 200+rev bump when baseRev matches, else 409 {rev}. */
+function makeServer(initialRev = 0) {
+  let rev = initialRev;
+  const calls = [];
+  return {
+    calls,
+    rev: () => rev,
+    fetchFn: async (url, init) => {
+      const body = JSON.parse(init.body);
+      const call = { url, baseRev: body.baseRev, state: body.state, keepalive: init.keepalive === true, status: 0 };
+      calls.push(call);
+      if (body.baseRev !== rev) {
+        call.status = 409;
+        const conflictRev = rev;
+        return { status: 409, json: async () => ({ rev: conflictRev }) };
+      }
+      rev += 1;
+      const okRev = rev;
+      call.status = 200;
+      return { status: 200, json: async () => ({ rev: okRev, warnings: [] }) };
+    },
+  };
+}
+
+/** Gate a fetchFn so each request stays in flight until release(). */
+function gated(server) {
+  const gates = [];
+  return {
+    fetchFn: (url, init) =>
+      new Promise((resolve, reject) => {
+        gates.push(() => server.fetchFn(url, init).then(resolve, reject));
+      }),
+    release: () => gates.shift()?.(),
+  };
+}
+
+const settle = () => new Promise((r) => setImmediate(r));
+
+function makePipeline({ server, initialRev = 0 } = {}) {
+  const srv = server ?? makeServer();
+  const timers = fakeTimers();
+  const statuses = [];
+  const pipeline = createSavePipeline({
+    fetchFn: srv.fetchFn,
+    initialRev,
+    debounceMs: 1500,
+    onState: (s) => statuses.push(s.status),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  return { srv, timers, statuses, pipeline };
+}
+
+// ---------------------------------------------------------------------------
+// verdict copy — three-way, never blank
+// ---------------------------------------------------------------------------
+
+test("verdictCopy: distinct non-empty copy for met / value / unreachable", () => {
+  const s = placeholderState();
+  const met = verdictCopy({ kind: "met" }, s);
+  const value = verdictCopy({ kind: "value", perYear: 85_500, untilAge: 50 }, s);
+  const unreach = verdictCopy({ kind: "unreachable", cap: 2_000_000 }, s);
+  for (const c of [met, value, unreach]) {
+    assert.ok(c.headline.length > 0, "headline never blank");
+    assert.ok(c.detail.length > 0, "detail never blank");
+    assert.ok(["good", "bad"].includes(c.tone));
+  }
+  assert.equal(new Set([met.headline, value.headline, unreach.headline]).size, 3, "pairwise distinct");
+});
+
+test("verdictCopy met: good tone, names the goal", () => {
+  const c = verdictCopy({ kind: "met" }, placeholderState());
+  assert.equal(c.tone, "good");
+  assert.match(c.headline, /^No — /);
+  assert.match(c.detail, /die with zero/);
+  assert.match(c.detail, /no additional income/);
+});
+
+test("verdictCopy value: names $/yr and the work-until age", () => {
+  const c = verdictCopy({ kind: "value", perYear: 85_500, untilAge: 52 }, placeholderState());
+  assert.equal(c.tone, "bad");
+  assert.match(c.headline, /^Yes — /);
+  assert.match(c.headline, /\$85,500\/yr/);
+  assert.match(c.headline, /age 52/);
+  assert.match(c.headline, /then never again/);
+});
+
+test("verdictCopy unreachable: names the $2M cap", () => {
+  const c = verdictCopy({ kind: "unreachable", cap: 2_000_000 }, placeholderState());
+  assert.equal(c.tone, "bad");
+  assert.match(c.headline, /\$2,000,000\/yr/);
+  assert.match(c.headline, /extend the window or cut spending/);
+});
+
+test("goalText follows the end-state mode and its own amount", () => {
+  const s = placeholderState();
+  assert.equal(goalText(s), "die with zero");
+  const bequest = setEndStateAmount(setEndStateMode(s, "bequest"), 500_000);
+  assert.equal(goalText(bequest), "leave $500,000");
+  const floor = setEndStateAmount(setEndStateMode(s, "floor"), 250_000);
+  assert.equal(goalText(floor), "never drop below $250,000");
+});
+
+test("requiredCell: never blank; unreachable is red and names the cap", () => {
+  assert.deepEqual(requiredCell({ kind: "met" }), { text: "none", cls: "pos" });
+  assert.deepEqual(requiredCell({ kind: "value", perYear: 42_000, untilAge: 50 }), { text: "$42,000", cls: "warn" });
+  const u = requiredCell({ kind: "unreachable", cap: 2_000_000 });
+  assert.equal(u.cls, "neg");
+  assert.equal(u.text, "not achievable even at $2M/yr");
+});
+
+test("runwayCell: finite year is red with years-from-now; never is green", () => {
+  assert.deepEqual(runwayCell({ firstNegYear: 2043, startYear: 2026 }), { text: "2043 (17 yrs)", cls: "neg" });
+  assert.deepEqual(runwayCell({ firstNegYear: null, startYear: 2026 }), { text: "never", cls: "pos" });
+});
+
+// ---------------------------------------------------------------------------
+// end-state amounts round-trip
+// ---------------------------------------------------------------------------
+
+test("end-state amounts round-trip: zero→bequest→floor→bequest preserves each mode's amount", () => {
+  const s0 = placeholderState(); // starts in zero mode
+  const before = structuredClone(s0);
+  let s = setEndStateMode(s0, "bequest");
+  s = setEndStateAmount(s, 500_000);
+  s = setEndStateMode(s, "floor");
+  s = setEndStateAmount(s, 120_000);
+  s = setEndStateMode(s, "bequest");
+  assert.equal(s.endState.amounts.bequest, 500_000, "bequest amount preserved across switches");
+  assert.equal(endStateAmountValue(s), 500_000);
+  s = setEndStateMode(s, "floor");
+  assert.equal(endStateAmountValue(s), 120_000, "floor amount preserved across switches");
+  s = setEndStateMode(s, "zero");
+  assert.equal(endStateAmountValue(s), null, "zero has no amount — input hidden");
+  assert.deepEqual(s.endState.amounts, { bequest: 500_000, floor: 120_000 }, "amounts survive zero");
+  assert.deepEqual(s0, before, "input state never mutated");
+});
+
+test("setEndStateAmount in zero mode is a no-op on amounts", () => {
+  const next = setEndStateAmount(placeholderState(), 999);
+  assert.deepEqual(next.endState.amounts, { bequest: 0, floor: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// save pipeline state machine
+// ---------------------------------------------------------------------------
+
+test("save: a burst of edits collapses to ONE PUT carrying the latest payload", async () => {
+  const { srv, timers, statuses, pipeline } = makePipeline();
+  pipeline.edit({ n: 1 });
+  timers.advance(1000);
+  pipeline.edit({ n: 2 });
+  timers.advance(1000);
+  pipeline.edit({ n: 3 });
+  timers.advance(1500);
+  await settle();
+  assert.equal(srv.calls.length, 1, "burst collapsed");
+  assert.equal(srv.calls[0].state.n, 3, "latest payload wins");
+  assert.equal(srv.calls[0].baseRev, 0);
+  assert.equal(pipeline.snapshot().status, "saved");
+  assert.ok(statuses.includes("saving"), "went through saving");
+});
+
+test("save: response rev threads into the next PUT — no self-409 on bursts", async () => {
+  const srv = makeServer();
+  const gate = gated(srv);
+  const timers = fakeTimers();
+  const pipeline = createSavePipeline({
+    fetchFn: gate.fetchFn,
+    initialRev: 0,
+    debounceMs: 1500,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  pipeline.edit({ n: 1 });
+  timers.advance(1500); // PUT 1 starts, held in flight
+  pipeline.edit({ n: 2 }); // latest payload queues behind it
+  timers.advance(1500); // debounce fires — but only one PUT may fly
+  gate.release(); // PUT 1 completes (rev 0 → 1)
+  await settle();
+  gate.release(); // queued PUT 2 auto-fires with the fresh rev
+  await settle();
+  assert.equal(srv.calls.length, 2, "serialized: exactly two PUTs");
+  assert.deepEqual(srv.calls.map((c) => c.baseRev), [0, 1], "rev threaded");
+  assert.deepEqual(srv.calls.map((c) => c.status), [200, 200], "no self-409");
+  assert.equal(srv.calls[1].state.n, 2);
+  assert.equal(pipeline.snapshot().status, "saved");
+  assert.equal(pipeline.rev(), 2);
+});
+
+test("save: failed fetch → error; retry re-fires the LATEST payload, not the failed one", async () => {
+  const srv = makeServer();
+  let failures = 1;
+  const fetchFn = async (url, init) => {
+    if (failures > 0) {
+      failures -= 1;
+      throw new Error("network down");
+    }
+    return srv.fetchFn(url, init);
+  };
+  const timers = fakeTimers();
+  const pipeline = createSavePipeline({
+    fetchFn,
+    initialRev: 0,
+    debounceMs: 1500,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  pipeline.edit({ n: "a" });
+  timers.advance(1500);
+  await settle();
+  assert.equal(pipeline.snapshot().status, "error");
+  pipeline.edit({ n: "b" }); // arms a fresh debounce; error badge persists
+  assert.equal(pipeline.snapshot().status, "error", "new edits keep the error (and Retry) visible");
+  await pipeline.retry();
+  assert.equal(srv.calls.length, 1);
+  assert.equal(srv.calls[0].state.n, "b", "retry sent the latest payload");
+  assert.equal(pipeline.snapshot().status, "saved");
+  timers.advance(1500); // the still-armed debounce fires — nothing new to save
+  await settle();
+  assert.equal(srv.calls.length, 1, "no duplicate PUT after retry");
+});
+
+test("save: 409 → conflict state; the queue is cancelled and the pipeline goes inert", async () => {
+  const srv = makeServer(5); // server is ahead of this tab
+  const { timers, statuses, pipeline } = makePipeline({ server: srv });
+  pipeline.edit({ n: 1 });
+  timers.advance(1500);
+  await settle();
+  assert.equal(pipeline.snapshot().status, "conflict");
+  assert.equal(pipeline.rev(), 5, "learned the server's rev");
+  pipeline.edit({ n: 2 }); // ignored — only a reload recovers
+  timers.advance(10_000);
+  await settle();
+  assert.equal(srv.calls.length, 1, "no further PUTs after conflict");
+  const afterConflict = statuses.slice(statuses.indexOf("conflict") + 1);
+  assert.ok(!afterConflict.includes("saving"), "conflict is terminal");
+});
+
+test("save: markInvalid blocks the PUT until a valid edit arrives", async () => {
+  const { srv, timers, pipeline } = makePipeline();
+  pipeline.edit({ n: 1 });
+  pipeline.markInvalid("profile.endAge: must be a number");
+  timers.advance(10_000);
+  await settle();
+  assert.equal(srv.calls.length, 0, "errors block the PUT");
+  assert.equal(pipeline.snapshot().status, "invalid");
+  assert.equal(pipeline.snapshot().message, "profile.endAge: must be a number");
+  pipeline.edit({ n: 2 }); // fixed
+  timers.advance(1500);
+  await settle();
+  assert.equal(srv.calls.length, 1);
+  assert.equal(srv.calls[0].state.n, 2);
+  assert.equal(pipeline.snapshot().status, "saved");
+});
+
+test("save: flushOrCancel flushes a pending debounced edit immediately", async () => {
+  const { srv, timers, pipeline } = makePipeline();
+  pipeline.edit({ n: 7 });
+  const snap = await pipeline.flushOrCancel(); // no timer advance needed
+  assert.equal(srv.calls.length, 1);
+  assert.equal(snap.status, "saved");
+  timers.advance(10_000);
+  await settle();
+  assert.equal(srv.calls.length, 1, "debounce disarmed — no duplicate PUT");
+});
+
+test("save: flushKeepalive sends the pending edit with keepalive:true", async () => {
+  const { srv, pipeline } = makePipeline();
+  pipeline.edit({ n: 9 });
+  pipeline.flushKeepalive();
+  await settle();
+  assert.equal(srv.calls.length, 1);
+  assert.equal(srv.calls[0].keepalive, true);
+});
+
+test("save: cancel drops the pending queue (nothing fires later)", async () => {
+  const { srv, timers, pipeline } = makePipeline();
+  pipeline.edit({ n: 1 });
+  pipeline.cancel();
+  timers.advance(10_000);
+  await settle();
+  assert.equal(srv.calls.length, 0);
+  assert.equal(pipeline.snapshot().dirty, false);
+});
+
+test("putState classifies 400 (with error paths) and 409 responses", async () => {
+  const bad = await putState(
+    async () => ({ status: 400, json: async () => ({ errors: [{ path: "profile.endAge", message: "bad" }] }) }),
+    {},
+    0
+  );
+  assert.deepEqual(bad, { kind: "error", message: "profile.endAge: bad" });
+  const conflict = await putState(async () => ({ status: 409, json: async () => ({ rev: 7 }) }), {}, 0);
+  assert.deepEqual(conflict, { kind: "conflict", rev: 7 });
+});
+
+// ---------------------------------------------------------------------------
+// debounce helper
+// ---------------------------------------------------------------------------
+
+test("debounce: timer resets on new edits; flush fires immediately; cancel disarms", () => {
+  const timers = fakeTimers();
+  let fired = 0;
+  const d = createDebouncer(1500, () => fired++, { setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  d.arm();
+  timers.advance(1000);
+  d.arm();
+  timers.advance(1000);
+  assert.equal(fired, 0, "re-arming postpones the fire");
+  timers.advance(500);
+  assert.equal(fired, 1);
+  d.arm();
+  d.flush();
+  assert.equal(fired, 2, "flush fires immediately");
+  timers.advance(10_000);
+  assert.equal(fired, 2, "flushed timer does not re-fire");
+  d.arm();
+  d.cancel();
+  timers.advance(10_000);
+  assert.equal(fired, 2, "cancel disarms");
+});
+
+// ---------------------------------------------------------------------------
+// form row transforms — immutable, valid blanks
+// ---------------------------------------------------------------------------
+
+test("addRow: appends a valid blank row for each kind without mutating input", () => {
+  const s = placeholderState();
+  const before = structuredClone(s);
+  const withProp = addRow(s, "properties");
+  assert.equal(withProp.properties.length, s.properties.length + 1);
+  assert.deepEqual(withProp.properties.at(-1), {
+    name: "new property",
+    rentMonthly: 0,
+    costsMonthly: 0,
+    mortgageMonthly: 0,
+    payoffYear: null,
+    saleYear: null,
+    saleNetProceeds: null,
+  });
+  const withIncome = addRow(s, "incomes");
+  assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030 });
+  const withSpend = addRow(s, "spending");
+  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0 });
+  for (const next of [withProp, withIncome, withSpend]) {
+    assert.deepEqual(validate(next).errors, [], "blank rows validate cleanly");
+  }
+  assert.deepEqual(s, before, "input state never mutated");
+});
+
+test("removeRow: removes exactly the indexed row without mutating input", () => {
+  const s = placeholderState();
+  const before = structuredClone(s);
+  const next = removeRow(s, "incomes", 0);
+  assert.equal(next.incomes.length, s.incomes.length - 1);
+  assert.equal(next.incomes[0].name, s.incomes[1].name, "the right row was removed");
+  assert.deepEqual(s, before);
+});
+
+test("setRowValue / setValueAtPath: immutable single-field updates", () => {
+  const s = placeholderState();
+  const before = structuredClone(s);
+  const a = setRowValue(s, "properties", 0, "saleYear", null);
+  assert.equal(a.properties[0].saleYear, null);
+  const b = setValueAtPath(s, "profile.endAge", 100);
+  assert.equal(b.profile.endAge, 100);
+  assert.equal(b.portfolio.balance, s.portfolio.balance, "unrelated fields untouched");
+  assert.deepEqual(s, before, "input state never mutated");
+});
+
+test("parseNumField: empty is null (meaningful), never coerced to 0", () => {
+  assert.equal(parseNumField(""), null);
+  assert.equal(parseNumField("  "), null);
+  assert.equal(parseNumField("3.5"), 3.5);
+  assert.equal(parseNumField("2027"), 2027);
+  assert.ok(Number.isNaN(parseNumField("abc")), "garbage becomes NaN for validate() to reject");
+});
+
+// ---------------------------------------------------------------------------
+// formatting
+// ---------------------------------------------------------------------------
+
+test("fmtMoney: commas, true minus for negatives, em dash for null", () => {
+  assert.equal(fmtMoney(1_234_567), "$1,234,567");
+  assert.equal(fmtMoney(-1234), "−$1,234");
+  assert.equal(fmtMoney(0), "$0");
+  assert.equal(fmtMoney(null), "—");
+});
+
+test("fmtCompact: millions/thousands with trailing zeros stripped", () => {
+  assert.equal(fmtCompact(2_000_000), "$2M");
+  assert.equal(fmtCompact(1_500_000), "$1.5M");
+  assert.equal(fmtCompact(1_250_000), "$1.25M");
+  assert.equal(fmtCompact(-2_500_000), "−$2.5M");
+  assert.equal(fmtCompact(85_500), "$86K");
+  assert.equal(fmtCompact(500), "$500");
+});
+
+test("yearDelta: year plus years-from-now, singular/plural", () => {
+  assert.equal(yearDelta(2043, 2026), "2043 (17 yrs)");
+  assert.equal(yearDelta(2027, 2026), "2027 (1 yr)");
+});

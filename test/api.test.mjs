@@ -177,6 +177,30 @@ test("POST /api/import/v0 migrates a v0 export; bad payloads → 400", async () 
   assert.equal(state.endState.amounts.bequest, 500000);
 });
 
+test("POST /api/reset snapshots current, returns to unseeded placeholder; 409 on stale rev", async () => {
+  const rev = await currentRev();
+
+  const stale = await sendJson("POST", "/api/reset", { baseRev: rev - 1 });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.rev, rev);
+
+  const bad = await sendJson("POST", "/api/reset", {});
+  assert.equal(bad.status, 400);
+  assert.ok(bad.body.errors.some((e) => e.path === "baseRev"));
+
+  const snapsBefore = (await getJson("/api/snapshots")).body.snapshots.length;
+  const ok = await sendJson("POST", "/api/reset", { baseRev: rev });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.rev, rev + 1);
+  assert.ok(!existsSync(join(dir, "current.json")), "current.json deleted");
+  const snapsAfter = (await getJson("/api/snapshots")).body.snapshots.length;
+  assert.equal(snapsAfter, snapsBefore + 1, "pre-reset state preserved as a snapshot");
+
+  const after = await getJson("/api/state");
+  assert.equal(after.body.seeded, false, "unseeded semantics return");
+  assert.deepEqual(after.body.state, placeholderState(), "placeholder renders, nothing on disk");
+});
+
 function freePort() {
   return new Promise((resolve) => {
     const srv = createNetServer();

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Runway — do I still need to work?</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+<script type="module" src="/app.mjs"></script>
+</head>
+<body>
+
+<header>
+  <h1>Runway</h1>
+  <div class="sub">do I still need to work — and if so, how much per year, until when?</div>
+  <div class="spacer"></div>
+  <span id="saveBadge" class="badge hidden">
+    <span id="saveBadgeText"></span>
+    <button id="btnRetry" type="button" class="small hidden">Retry</button>
+  </span>
+  <button id="btnReset" type="button" class="small danger">Reset</button>
+</header>
+
+<div id="banners">
+  <div id="recoveryPanel" class="banner banner-warn hidden">
+    <div class="banner-row">
+      <strong>Your data file was corrupt — it was quarantined, not lost.</strong>
+      <span id="recoveryDetail" class="dim"></span>
+    </div>
+    <div class="banner-row dim">Restore a snapshot below, or start fresh. Example data renders underneath meanwhile.</div>
+    <div id="recoveryList" class="snapshot-list"></div>
+    <div class="banner-row">
+      <button id="btnStartFresh" type="button" class="small">Start fresh</button>
+      <span id="recoveryError" class="issue"></span>
+    </div>
+  </div>
+
+  <div id="placeholderBanner" class="banner hidden">
+    <span>Example data — nothing is saved yet. Edit any field to start your own plan.</span>
+    <label class="filebtn" for="importV0">Import v0 export (runway-data.local.json)</label>
+    <input type="file" id="importV0" accept=".json,application/json" class="visually-hidden">
+    <span id="importError" class="issue"></span>
+  </div>
+
+  <div id="conflictBanner" class="banner banner-bad hidden">
+    <span>This tab has stale data — reload to get the latest. Unsaved changes in this tab will be lost.</span>
+    <button id="btnReload" type="button" class="small">Reload</button>
+  </div>
+</div>
+
+<main>
+<div id="inputs">
+
+  <div id="globalIssues"></div>
+
+  <section class="card">
+    <div class="privacy">All data stays on this machine — served from 127.0.0.1, saved to your local data dir. Amounts are in <b>today's dollars</b>; returns are <b>real</b> (after inflation and tax).</div>
+  </section>
+
+  <section class="card">
+    <h2>Profile</h2>
+    <div class="grid3">
+      <div class="field"><label for="f-currentAge">Current age</label><input id="f-currentAge" type="number" data-path="profile.currentAge"><div class="issue"></div></div>
+      <div class="field"><label for="f-endAge">Plan to age</label><input id="f-endAge" type="number" data-path="profile.endAge"><div class="issue"></div></div>
+      <div class="field"><label for="f-currentYear">Current year</label><input id="f-currentYear" type="number" data-path="profile.currentYear"><div class="issue"></div></div>
+    </div>
+    <div class="preset-row">
+      <span class="dim preset-label">plan-to presets</span>
+      <span id="agePresets" class="segmented" role="group" aria-label="plan-to-age presets"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Portfolio <span class="hint">liquid / investable</span></h2>
+    <div class="field"><label for="f-balance">Balance ($)</label><input id="f-balance" type="number" data-path="portfolio.balance"><div class="issue"></div></div>
+    <div class="field">
+      <label for="f-return">Real return %/yr (after tax &amp; inflation)</label>
+      <div class="rangewrap">
+        <input type="range" min="0" max="8" step="0.1" data-path="portfolio.realReturnPct" aria-label="real return slider">
+        <input id="f-return" type="number" min="0" max="8" step="0.1" data-path="portfolio.realReturnPct" class="rangenum">
+      </div>
+      <div class="issue"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Properties <span class="hint">rentals — first-class, not an afterthought</span></h2>
+    <div class="itemlist" id="propList"></div>
+    <button id="addProp" type="button" class="small">+ property</button>
+    <div class="footnote">Sale proceeds = net cash after payoff, costs, taxes. Empty sale year = keep forever. P&amp;I stops after the payoff year even without a sale.</div>
+  </section>
+
+  <section class="card">
+    <h2>Income streams <span class="hint">net of tax, today's $</span></h2>
+    <div class="itemlist" id="incomeList"></div>
+    <button id="addIncome" type="button" class="small">+ income stream</button>
+  </section>
+
+  <section class="card">
+    <h2>Spending <span class="hint">$/mo — excl. property costs &amp; healthcare</span></h2>
+    <div class="itemlist" id="spendList"></div>
+    <button id="addSpend" type="button" class="small">+ category</button>
+  </section>
+
+  <section class="card">
+    <h2>Assumptions <span class="hint">all visible, all editable</span></h2>
+    <div class="field">
+      <label for="f-haircut">Social Security haircut %</label>
+      <div class="rangewrap">
+        <input type="range" min="0" max="50" step="1" data-path="social.haircutPct" aria-label="social security haircut slider">
+        <input id="f-haircut" type="number" min="0" max="50" step="1" data-path="social.haircutPct" class="rangenum">
+      </div>
+      <div class="issue"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label for="f-ssStart">SS start age</label><input id="f-ssStart" type="number" data-path="social.startAge"><div class="issue"></div></div>
+      <div class="field"><label for="f-ssMonthly">SS $/mo (today's)</label><input id="f-ssMonthly" type="number" data-path="social.monthly"><div class="issue"></div></div>
+    </div>
+    <div class="grid3">
+      <div class="field"><label for="f-hcPre">Healthcare $/yr pre-65</label><input id="f-hcPre" type="number" data-path="health.preMedicareAnnual"><div class="issue"></div></div>
+      <div class="field"><label for="f-hcPost">Healthcare $/yr 65+</label><input id="f-hcPost" type="number" data-path="health.postMedicareAnnual"><div class="issue"></div></div>
+      <div class="field"><label for="f-hcUntil">Employer coverage until age</label><input id="f-hcUntil" type="number" data-path="health.employerCoverageUntilAge"><div class="issue"></div></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>End state</h2>
+    <div class="grid2">
+      <div class="field">
+        <label for="endMode">Goal</label>
+        <select id="endMode">
+          <option value="zero">Die with zero</option>
+          <option value="bequest">Leave a bequest</option>
+          <option value="floor">Never drop below a floor</option>
+        </select>
+        <div class="issue"></div>
+      </div>
+      <div class="field hidden" id="endAmountField">
+        <label for="endAmount" id="endAmountLabel">Amount ($)</label>
+        <input id="endAmount" type="number">
+        <div class="issue"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Work</h2>
+    <div class="field"><label for="f-workUntil">Willing to work until age</label><input id="f-workUntil" type="number" data-path="work.untilAge"><div class="issue"></div></div>
+    <div class="footnote">The spending shock is scenario-fixed (+20% — see the table); the solver's only variable is income over this window.</div>
+  </section>
+
+</div>
+
+<div id="results">
+  <div id="verdict" class="verdict">
+    <div class="v-headline" id="verdictHeadline"></div>
+    <div class="v-detail" id="verdictDetail"></div>
+  </div>
+
+  <div class="kpi">
+    <div class="box"><div class="v" id="kpiRunway"></div><div class="l">base runway (no extra income)</div></div>
+    <div class="box"><div class="v" id="kpiRequired"></div><div class="l" id="kpiRequiredLabel">required income</div></div>
+    <div class="box"><div class="v" id="kpiEndBal"></div><div class="l" id="kpiEndBalLabel">end balance (no extra income)</div></div>
+    <div class="box"><div class="v" id="kpiSpend"></div><div class="l">annual spend (excl. health/property)</div></div>
+  </div>
+
+  <section class="card">
+    <h2>Required income by scenario</h2>
+    <table>
+      <thead><tr><th>Scenario</th><th>Runway</th><th id="thRequired">Required $/yr</th></tr></thead>
+      <tbody id="scenarioRows"></tbody>
+    </table>
+    <div class="footnote">Runway = first year the balance goes below $0. Required income = minimum net $/yr from now until your work-until age so the plan lands on the goal.</div>
+  </section>
+</div>
+</main>
+
+<template id="tpl-property">
+  <div class="item">
+    <div class="head">
+      <input type="text" data-key="name" placeholder="name" aria-label="property name">
+      <button type="button" class="small danger remove" aria-label="remove property">✕</button>
+    </div>
+    <div class="issue"></div>
+    <div class="grid3">
+      <div class="field"><label>rent $/mo</label><input type="number" data-key="rentMonthly"><div class="issue"></div></div>
+      <div class="field"><label>costs $/mo</label><input type="number" data-key="costsMonthly"><div class="issue"></div></div>
+      <div class="field"><label>P&amp;I $/mo</label><input type="number" data-key="mortgageMonthly"><div class="issue"></div></div>
+      <div class="field"><label>payoff yr</label><input type="number" data-key="payoffYear" placeholder="never"><div class="issue"></div></div>
+      <div class="field"><label>sale yr</label><input type="number" data-key="saleYear" placeholder="empty = keep forever"><div class="issue"></div></div>
+      <div class="field"><label>net proceeds $</label><input type="number" data-key="saleNetProceeds"><div class="issue"></div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-income">
+  <div class="item">
+    <div class="head">
+      <input type="text" data-key="name" placeholder="name" aria-label="income name">
+      <button type="button" class="small danger remove" aria-label="remove income stream">✕</button>
+    </div>
+    <div class="issue"></div>
+    <div class="grid3">
+      <div class="field"><label>net $/yr</label><input type="number" data-key="annual"><div class="issue"></div></div>
+      <div class="field"><label>from yr</label><input type="number" data-key="fromYear"><div class="issue"></div></div>
+      <div class="field"><label>to yr</label><input type="number" data-key="toYear"><div class="issue"></div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-spend">
+  <div class="item">
+    <div class="head">
+      <input type="text" data-key="name" placeholder="category" aria-label="spending category name">
+      <button type="button" class="small danger remove" aria-label="remove spending category">✕</button>
+    </div>
+    <div class="issue"></div>
+    <div class="field narrow"><label>$/mo</label><input type="number" data-key="monthly"><div class="issue"></div></div>
+  </div>
+</template>
+
+</body>
+</html>

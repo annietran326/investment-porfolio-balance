@@ -16,7 +16,7 @@ let dir;
 let publicDir;
 let store;
 let server; // with a public/ containing index.html
-let bareServer; // default public/ root (doesn't exist yet — U6 lands it)
+let bareServer; // nonexistent public/ root — a missing UI must 404, never crash
 let port;
 let barePort;
 
@@ -34,7 +34,7 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = server.address().port;
 
-  bareServer = createServer(createApi(store));
+  bareServer = createServer(createApi(store, { publicDir: join(publicDir, "does-not-exist") }));
   await new Promise((resolve) => bareServer.listen(0, "127.0.0.1", resolve));
   barePort = bareServer.address().port;
 });
@@ -209,7 +209,7 @@ test("HTML responses carry the CSP header; missing public/ 404s gracefully", asy
     "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'"
   );
 
-  // The bare server has no public/ yet (U6): / must 404, not crash —
+  // The bare server's public/ root doesn't exist: / must 404, not crash —
   // and the HTML-less check: engine module still serves fine.
   const bare = await raw({ path: "/", toPort: barePort });
   assert.equal(bare.status, 404);

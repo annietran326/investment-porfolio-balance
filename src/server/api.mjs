@@ -206,6 +206,7 @@ export function createApi(store, opts = {}) {
     }
     if (pathname === "/api/restore" && method === "POST") return apiRestore(req, res);
     if (pathname === "/api/import/v0" && method === "POST") return apiImportV0(req, res);
+    if (pathname === "/api/reset" && method === "POST") return apiReset(req, res);
     if (pathname === "/api/trends" && method === "GET") {
       return sendJson(res, 200, { rows: store.readTrends() });
     }
@@ -306,6 +307,27 @@ export function createApi(store, opts = {}) {
       if (e instanceof MissingVersionError || e instanceof FutureVersionError) {
         return sendJson(res, 400, { errors: [{ path: "data", message: e.message }] });
       }
+      throw e;
+    }
+  }
+
+  /** @param {Req} req @param {Res} res */
+  async function apiReset(req, res) {
+    const body = await readJsonBody(req, res, MB);
+    if (body === undefined) return;
+    const baseRev = body?.baseRev;
+    if (typeof baseRev !== "number") {
+      return sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
+    }
+    try {
+      const result = store.reset({ baseRev });
+      state = null;
+      seeded = false;
+      warnings = [];
+      recovery = null;
+      return sendJson(res, 200, { rev: result.rev });
+    } catch (e) {
+      if (e instanceof RevConflictError) return sendJson(res, 409, { rev: e.rev });
       throw e;
     }
   }

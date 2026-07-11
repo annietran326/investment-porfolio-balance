@@ -234,6 +234,26 @@ test("snapshot with missing schemaVersion refuses to restore", () => {
   assert.equal(store.rev(), 1);
 });
 
+test("reset: snapshots current, deletes it, bumps rev, returns to unseeded; rev-checked", () => {
+  const dir = makeDir();
+  const { store } = makeStore(dir);
+  store.init();
+  store.save(stateWithBalance(777_000));
+  const snapsBefore = snapFiles(dir).length;
+
+  assert.throws(() => store.reset({ baseRev: 99 }), RevConflictError);
+  assert.ok(existsSync(join(dir, "current.json")), "conflicted reset is a no-op");
+
+  const { rev } = store.reset({ baseRev: store.rev() });
+  assert.equal(rev, 2);
+  assert.ok(!existsSync(join(dir, "current.json")), "current.json deleted");
+  assert.equal(snapFiles(dir).length, snapsBefore + 1, "pre-reset state preserved as a snapshot");
+  const newest = store.listSnapshots()[0];
+  const preserved = JSON.parse(readFileSync(join(dir, "snapshots", newest.file), "utf8"));
+  assert.equal(preserved.portfolio.balance, 777_000, "snapshot carries the pre-reset state");
+  assert.deepEqual(store.load(), { seeded: false }, "store is unseeded again — placeholder stays in memory");
+});
+
 test("v0 import: provenance copy saved, migrated state validates, rev bumped", () => {
   const dir = makeDir();
   const { store } = makeStore(dir);

@@ -574,6 +574,22 @@ export function createStore(dataDir, opts = {}) {
     return { rev, state, warnings };
   }
 
+  /**
+   * Reset to unseeded (U6): preserve the current state as a snapshot, then
+   * delete current.json and bump the rev. The placeholder is never written —
+   * the next load sees an unseeded dir, exactly like first run.
+   * @param {{baseRev: number}} resetOpts
+   * @returns {{rev: number}}
+   */
+  function reset({ baseRev }) {
+    if (baseRev !== manifest.rev) throw new RevConflictError(manifest.rev);
+    if (existsSync(currentPath)) {
+      snapshotNow("edit");
+      unlinkSync(currentPath);
+    }
+    return { rev: bumpRev() };
+  }
+
   /** @returns {any[]} parsed rows; unparseable lines skipped, unknown fields tolerated */
   function readTrends() {
     const raw = readFileSafe(trendsPath);
@@ -617,6 +633,7 @@ export function createStore(dataDir, opts = {}) {
     listSnapshots,
     restore,
     importV0,
+    reset,
     readTrends,
     appendShutdownTrend,
     rev: () => manifest.rev,
