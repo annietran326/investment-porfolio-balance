@@ -365,6 +365,21 @@ button.linklike {
   text-decoration: underline;
 }
 
+/* transaction CSV import (U9) */
+.txn-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.txn-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+.txn-radio input[type="radio"] { width: auto; accent-color: var(--accent); }
+.txn-include input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+.txn-sample td, .txn-cats td { font-size: 12px; }
+.txn-flagged { color: var(--warn); border-color: #78500b; }
+
 /* spreadsheet import/export card (U8) */
 .import-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0; }
 .import-preview {

@@ -9,6 +9,16 @@
 // first save of the calendar date, (3) trend row. Snapshot/trend failures
 // never fail the save, and because current commits first a crash between
 // steps can only lose a trend row, never invent one.
+//
+// transactions.json and mappings.json (U9) are versioned envelopes
+// ({schemaVersion, transactions|mappings}) OUTSIDE the snapshot scope:
+// snapshots capture current.json only, so reset() and restore() never touch
+// transaction data — it persists across both. That is safe because derived
+// spending is always re-derivable from the stored rows. On a transaction
+// import the pinned write order is transactions.json THEN current.json: a
+// crash in between leaves stored rows without the derived spending, and
+// re-running the apply (or re-importing) repairs it — the reverse order
+// could show derived spending whose underlying rows were never stored.
 import {
   closeSync,
   existsSync,
@@ -179,11 +189,15 @@ function encodeRequired(r) {
   return r.kind === "value" ? { kind: r.kind, perYear: r.perYear } : { kind: r.kind };
 }
 
+// Aux-file (transactions.json / mappings.json) envelope version — independent
+// of the state SCHEMA_VERSION.
+export const AUX_SCHEMA_VERSION = 1;
+
 /**
  * @param {string} dataDir absolute path
- * @param {{now?: () => Date, _failAfter?: "current-write"|null}} [opts]
+ * @param {{now?: () => Date, _failAfter?: "current-write"|"transactions-write"|null}} [opts]
  *   `now` is the injectable clock; `_failAfter` is a test-only hook that is
- *   read live on every save, so tests can pin the commit-order invariant.
+ *   read live on every save/write, so tests can pin commit-order invariants.
  */
 export function createStore(dataDir, opts = {}) {
   const now = opts.now ?? (() => new Date());
@@ -422,29 +436,102 @@ export function createStore(dataDir, opts = {}) {
   }
 
   /**
+   * Versioned aux-file loader with current.json quarantine parity: not JSON,
+   * a missing/garbled schemaVersion, or a payload of the wrong shape is
+   * quarantined aside (never overwritten silently); a FUTURE schemaVersion
+   * throws and leaves the file untouched (update the app, never downgrade
+   * the data); a missing file is the empty default.
    * @template T
-   * @param {string} filePath @param {T} empty
+   * @param {string} filePath @param {string} key envelope payload key
+   * @param {T} empty @param {(v: unknown) => v is T} isValid
    * @returns {{data: T, corrupt?: boolean, quarantinedAs?: string}}
    */
-  function loadAux(filePath, empty) {
+  function loadVersioned(filePath, key, empty, isValid) {
     const raw = readFileSafe(filePath);
     if (raw === null) return { data: empty };
+    let parsed;
     try {
-      return { data: JSON.parse(raw) };
+      parsed = JSON.parse(raw);
     } catch {
-      const quarantinedAs = quarantineFile(filePath);
-      return { data: empty, corrupt: true, quarantinedAs };
+      return { data: empty, corrupt: true, quarantinedAs: quarantineFile(filePath) };
     }
+    const v = parsed === null || typeof parsed !== "object" ? undefined : parsed.schemaVersion;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+      return { data: empty, corrupt: true, quarantinedAs: quarantineFile(filePath) };
+    }
+    if (v > AUX_SCHEMA_VERSION) throw new FutureVersionError(v);
+    const payload = /** @type {Record<string, unknown>} */ (parsed)[key];
+    if (!isValid(payload)) {
+      return { data: empty, corrupt: true, quarantinedAs: quarantineFile(filePath) };
+    }
+    return { data: payload };
   }
 
-  /** Same quarantine-on-corrupt behavior as current.json, defaulting to []. */
+  /**
+   * Load transactions.json ({schemaVersion, transactions: [...]}) — the
+   * transactions array is returned, defaulting to [].
+   * @returns {{data: any[], corrupt?: boolean, quarantinedAs?: string}}
+   */
   function loadTransactions() {
-    return loadAux(join(dataDir, "transactions.json"), /** @type {unknown[]} */ ([]));
+    return loadVersioned(
+      join(dataDir, "transactions.json"),
+      "transactions",
+      /** @type {any[]} */ ([]),
+      /** @returns {v is any[]} */ (v) => Array.isArray(v)
+    );
   }
 
-  /** Same quarantine-on-corrupt behavior as current.json, defaulting to {}. */
+  /**
+   * Load mappings.json ({schemaVersion, mappings: {...}}) — the mappings
+   * object (keyed by header signature) is returned, defaulting to {}.
+   * @returns {{data: Record<string, any>, corrupt?: boolean, quarantinedAs?: string}}
+   */
   function loadMappings() {
-    return loadAux(join(dataDir, "mappings.json"), /** @type {Record<string, unknown>} */ ({}));
+    return loadVersioned(
+      join(dataDir, "mappings.json"),
+      "mappings",
+      /** @type {Record<string, any>} */ ({}),
+      /** @returns {v is Record<string, any>} */ (v) => v !== null && typeof v === "object" && !Array.isArray(v)
+    );
+  }
+
+  /**
+   * Replace transactions.json wholesale (the API layer merges stored + fresh
+   * rows first). Because this is a full replace, the previous file is first
+   * preserved as transactions.json.bak-{ts} via the atomic primitive — never
+   * silently destroyed. Callers must write transactions BEFORE current.json
+   * (see the module header for the crash-repair rationale).
+   * @param {any[]} transactions
+   * @returns {{bak: string|null}}
+   */
+  function writeTransactions(transactions) {
+    if (!Array.isArray(transactions)) throw new Error("transactions must be an array");
+    const filePath = join(dataDir, "transactions.json");
+    const existing = readFileSafe(filePath);
+    let bak = null;
+    if (existing !== null) {
+      bak = `${filePath}.bak-${tsSlug(now())}`;
+      atomicWriteSync(bak, existing);
+    }
+    atomicWriteSync(filePath, JSON.stringify({ schemaVersion: AUX_SCHEMA_VERSION, transactions }, null, 2) + "\n");
+    if (opts._failAfter === "transactions-write") {
+      throw new Error("injected failure: crashed after transactions.json commit");
+    }
+    return { bak: bak === null ? null : basename(bak) };
+  }
+
+  /**
+   * Persist the saved-mappings object (keyed by header signature), atomic.
+   * @param {Record<string, any>} mappings
+   */
+  function writeMappings(mappings) {
+    if (mappings === null || typeof mappings !== "object" || Array.isArray(mappings)) {
+      throw new Error("mappings must be an object");
+    }
+    atomicWriteSync(
+      join(dataDir, "mappings.json"),
+      JSON.stringify({ schemaVersion: AUX_SCHEMA_VERSION, mappings }, null, 2) + "\n"
+    );
   }
 
   /**
@@ -518,6 +605,8 @@ export function createStore(dataDir, opts = {}) {
    * Install a snapshot as current.json. The restored bytes equal the snapshot
    * bytes (rev lives in the manifest, never inside the data), except when the
    * snapshot carries an older schema and must be migrated on the way in.
+   * Snapshots cover current.json ONLY — restore never touches
+   * transactions.json / mappings.json (see module header).
    * @param {string} file snapshot filename (validated against the listing)
    * @param {{baseRev: number}} restoreOpts
    * @returns {{rev: number, state: RunwayState, warnings: Issue[]}}
@@ -578,6 +667,8 @@ export function createStore(dataDir, opts = {}) {
    * Reset to unseeded (U6): preserve the current state as a snapshot, then
    * delete current.json and bump the rev. The placeholder is never written —
    * the next load sees an unseeded dir, exactly like first run.
+   * transactions.json / mappings.json are NOT touched (see module header) —
+   * imported transactions persist across reset and restore.
    * @param {{baseRev: number}} resetOpts
    * @returns {{rev: number}}
    */
@@ -628,6 +719,8 @@ export function createStore(dataDir, opts = {}) {
     load,
     loadTransactions,
     loadMappings,
+    writeTransactions,
+    writeMappings,
     save,
     snapshotNow,
     listSnapshots,
@@ -639,5 +732,8 @@ export function createStore(dataDir, opts = {}) {
     rev: () => manifest.rev,
     identity: () => manifest.identity,
     appVersion: () => appVersion,
+    // The store owns the clock; the API layer reads "now" through here so the
+    // derivation window (current-month exclusion) stays test-controllable.
+    now: () => now(),
   };
 }

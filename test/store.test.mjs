@@ -175,6 +175,78 @@ test("corrupt transactions.json quarantined, empty default returned", () => {
   assert.ok(!existsSync(join(dir, "transactions.json")));
 });
 
+test("aux envelopes: payload extracted; missing schemaVersion or wrong payload shape quarantined; future version refuses, file untouched", () => {
+  const dir = makeDir();
+  const { store } = makeStore(dir);
+  store.init();
+
+  const row = { date: "2026-05-01", amount: 12.5, description: "COFFEE", category: "fun" };
+  writeFileSync(join(dir, "transactions.json"), JSON.stringify({ schemaVersion: 1, transactions: [row] }));
+  assert.deepEqual(store.loadTransactions(), { data: [row] });
+  writeFileSync(join(dir, "mappings.json"), JSON.stringify({ schemaVersion: 1, mappings: { abc: { mapping: {} } } }));
+  assert.deepEqual(store.loadMappings(), { data: { abc: { mapping: {} } } });
+
+  // Versionless (the pre-envelope raw-array shape) is corrupt on the load
+  // path — quarantined, exactly like a versionless current.json.
+  writeFileSync(join(dir, "transactions.json"), JSON.stringify([row]));
+  const versionless = store.loadTransactions();
+  assert.equal(versionless.corrupt, true);
+  assert.deepEqual(versionless.data, []);
+  assert.ok(!existsSync(join(dir, "transactions.json")));
+
+  // Right version, wrong payload shape → quarantined too.
+  writeFileSync(join(dir, "mappings.json"), JSON.stringify({ schemaVersion: 1, mappings: [] }));
+  const badShape = store.loadMappings();
+  assert.equal(badShape.corrupt, true);
+  assert.deepEqual(badShape.data, {});
+
+  // Future version → refuse and PRESERVE (never quarantine newer data).
+  writeFileSync(join(dir, "transactions.json"), JSON.stringify({ schemaVersion: 99, transactions: [] }));
+  assert.throws(() => store.loadTransactions(), FutureVersionError);
+  assert.ok(existsSync(join(dir, "transactions.json")), "future-versioned file left untouched");
+});
+
+test("writeTransactions: envelope written; overwrite preserves the prior file as .bak; writeMappings round-trips", () => {
+  const dir = makeDir();
+  const { store } = makeStore(dir);
+  store.init();
+
+  const a = { date: "2026-05-01", amount: 4.5, description: "COFFEE", category: "uncategorized" };
+  const first = store.writeTransactions([a]);
+  assert.equal(first.bak, null, "no .bak when there was nothing to preserve");
+  const onDisk = JSON.parse(readFileSync(join(dir, "transactions.json"), "utf8"));
+  assert.equal(onDisk.schemaVersion, 1);
+  assert.deepEqual(onDisk.transactions, [a]);
+
+  const b = { date: "2026-05-02", amount: 9, description: "LUNCH", category: "uncategorized" };
+  const second = store.writeTransactions([a, b]);
+  assert.match(second.bak, /^transactions\.json\.bak-/);
+  const bak = JSON.parse(readFileSync(join(dir, second.bak), "utf8"));
+  assert.deepEqual(bak.transactions, [a], ".bak carries the pre-overwrite contents");
+  assert.deepEqual(store.loadTransactions(), { data: [a, b] });
+
+  store.writeMappings({ sig1: { mapping: { date: "Date" } } });
+  assert.deepEqual(store.loadMappings(), { data: { sig1: { mapping: { date: "Date" } } } });
+});
+
+test("reset and restore never touch transactions.json/mappings.json (outside snapshot scope)", () => {
+  const dir = makeDir();
+  const { store } = makeStore(dir);
+  store.init();
+  store.save(stateWithBalance(500));
+  const rows = [{ date: "2026-05-01", amount: 4.5, description: "COFFEE", category: "uncategorized" }];
+  store.writeTransactions(rows);
+  store.writeMappings({ sig: { mapping: {} } });
+  const snap = store.listSnapshots()[0];
+
+  store.reset({ baseRev: store.rev() });
+  assert.deepEqual(store.loadTransactions().data, rows, "reset leaves transactions alone");
+  assert.deepEqual(store.loadMappings().data, { sig: { mapping: {} } }, "reset leaves mappings alone");
+
+  store.restore(snap.file, { baseRev: store.rev() });
+  assert.deepEqual(store.loadTransactions().data, rows, "restore leaves transactions alone");
+});
+
 test("restore round-trip: bytes equal snapshot, pre-restore snapshot tagged, rev bumped", () => {
   const dir = makeDir();
   const { store, clockRef } = makeStore(dir);

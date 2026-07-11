@@ -7,8 +7,9 @@
 //   (2) Origin check on mutating methods — cross-origin browser writes
 //   (3) never emit any Access-Control-Allow-* header (an invariant, tested)
 //   (4) mutating requests must declare Content-Type: application/json —
-//       except the template-preview upload, which must declare
-//       application/octet-stream (raw .xlsx bytes; route-scoped exception)
+//       except the template-preview upload (application/octet-stream, raw
+//       .xlsx bytes) and the transactions-preview upload (text/csv or
+//       application/octet-stream); both exceptions are route-scoped
 //   (5) per-route body-size caps, enforced without buffering past the cap
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -26,6 +27,18 @@ import {
   previewTemplate,
   TemplateFileError,
 } from "../import/template.mjs";
+import {
+  APPLY_MODES,
+  applyDerived,
+  CsvFileError,
+  dedupeRows,
+  deriveCategories,
+  normalizeRows,
+  parseCsv,
+  suggestMapping,
+  suggestSignConvention,
+} from "../import/transactions.mjs";
+import { validate } from "../model/schema.mjs";
 import {
   RevConflictError,
   SnapshotCorruptError,
@@ -219,6 +232,34 @@ export function createApi(store, opts = {}) {
   /** @type {Map<string, {parsed: import("../import/template.mjs").ParsedTemplate}>} */
   const templatePreviews = new Map();
 
+  /**
+   * Transaction-import preview cache (U9), same token discipline. Holds the
+   * fresh (deduped) rows, the stored rows they were deduped against, the
+   * derived categories, and the mapping to persist on apply. The rev gate
+   * guarantees stored transactions can't change between preview and apply
+   * (every transaction write is followed by a rev-bumping save).
+   * @typedef {Object} TxnPreviewEntry
+   * @property {import("../import/transactions.mjs").TxnRow[]} fresh
+   * @property {import("../import/transactions.mjs").TxnRow[]} stored
+   * @property {import("../import/transactions.mjs").Derived} derived
+   * @property {import("../import/transactions.mjs").Mapping} mapping
+   * @property {import("../import/transactions.mjs").SignConvention} signConvention
+   * @property {string[]} headers
+   * @property {string} signature
+   */
+  const MAX_TXN_PREVIEWS = 4;
+  /** @type {Map<string, TxnPreviewEntry>} */
+  const txnPreviews = new Map();
+
+  /** @template K,V @param {Map<K,V>} map @param {number} max */
+  function evictOldest(map, max) {
+    while (map.size > max) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+
   return (req, res) => {
     handle(req, res).catch((e) => {
       process.stderr.write(`runway: request failed: ${e instanceof Error ? e.stack : e}\n`);
@@ -256,12 +297,19 @@ export function createApi(store, opts = {}) {
       if (origin !== undefined && !allowedOrigin(origin, req.socket.localPort)) {
         return sendJson(res, 403, { errors: [{ path: "", message: "forbidden origin" }] });
       }
-      // (4) JSON only for mutations — except the template preview upload,
-      // which is raw .xlsx bytes and must declare application/octet-stream.
+      // (4) JSON only for mutations — except the template preview upload
+      // (raw .xlsx bytes, application/octet-stream) and the transactions
+      // preview upload (raw CSV, text/csv or application/octet-stream).
       const ct = (req.headers["content-type"] ?? "").toLowerCase();
       const wantsOctet = method === "POST" && pathname === "/api/import/template/preview";
-      if (wantsOctet ? !ct.startsWith("application/octet-stream") : !ct.startsWith("application/json")) {
-        const wanted = wantsOctet ? "application/octet-stream" : "application/json";
+      const wantsCsv = method === "POST" && pathname === "/api/import/transactions/preview";
+      const ctOk = wantsCsv
+        ? ct.startsWith("text/csv") || ct.startsWith("application/octet-stream")
+        : wantsOctet
+          ? ct.startsWith("application/octet-stream")
+          : ct.startsWith("application/json");
+      if (!ctOk) {
+        const wanted = wantsCsv ? "text/csv (or application/octet-stream)" : wantsOctet ? "application/octet-stream" : "application/json";
         return sendJson(res, 415, { errors: [{ path: "", message: `Content-Type must be ${wanted}` }] });
       }
     }
@@ -276,6 +324,8 @@ export function createApi(store, opts = {}) {
     if (pathname === "/api/import/v0" && method === "POST") return apiImportV0(req, res);
     if (pathname === "/api/import/template/preview" && method === "POST") return apiTemplatePreview(req, res);
     if (pathname === "/api/import/template/apply" && method === "POST") return apiTemplateApply(req, res);
+    if (pathname === "/api/import/transactions/preview" && method === "POST") return apiTxnPreview(req, res);
+    if (pathname === "/api/import/transactions/apply" && method === "POST") return apiTxnApply(req, res);
     if (pathname === "/api/export/template" && method === "GET") return apiTemplateExport(res);
     if (pathname === "/api/reset" && method === "POST") return apiReset(req, res);
     if (pathname === "/api/trends" && method === "GET") {
@@ -411,11 +461,7 @@ export function createApi(store, opts = {}) {
     }
     const token = randomUUID();
     templatePreviews.set(token, { parsed });
-    while (templatePreviews.size > MAX_TEMPLATE_PREVIEWS) {
-      const oldest = templatePreviews.keys().next().value;
-      if (oldest === undefined) break;
-      templatePreviews.delete(oldest);
-    }
+    evictOldest(templatePreviews, MAX_TEMPLATE_PREVIEWS);
     // Unseeded dirs import onto the schema defaults, never the placeholder —
     // example rentals must not silently become real data.
     const base = state ?? defaultState();
@@ -467,6 +513,235 @@ export function createApi(store, opts = {}) {
       if (e instanceof ValidationError) return sendJson(res, 400, { errors: e.issues });
       throw e;
     }
+  }
+
+  /**
+   * POST /api/import/transactions/preview — raw CSV bytes (50MB cap), plus
+   * optional query params: date/amount/description/category (explicit column
+   * mapping) and sign (explicit sign convention). Without params the mapping
+   * comes from the saved mappings (by header signature) or fuzzy suggestion,
+   * and the sign from the majority heuristic. Parses + normalizes, dedupes
+   * against stored transactions.json, derives categories from the would-be
+   * stored set, and caches everything under a token for the apply step.
+   * An incomplete mapping returns the suggestion WITHOUT a token — the UI
+   * shows the mapping step and re-previews.
+   * @param {Req} req @param {Res} res
+   */
+  async function apiTxnPreview(req, res) {
+    const body = await readRawBody(req, res, 50 * MB);
+    if (body === undefined) return;
+    /** @type {import("../import/transactions.mjs").ParsedCsv} */
+    let csv;
+    try {
+      csv = parseCsv(body.toString("utf8"));
+    } catch (e) {
+      if (e instanceof CsvFileError) return sendJson(res, 400, { errors: [{ path: "", message: e.message }] });
+      throw e;
+    }
+    const { headers, rows } = csv;
+    /** @type {string[]} */
+    const notes = [];
+
+    // Saved mappings are a convenience cache: corrupt → quarantined by the
+    // store; future-versioned → left untouched, fall back to suggestion.
+    /** @type {Record<string, any>} */
+    let savedMappings = {};
+    try {
+      const ml = store.loadMappings();
+      savedMappings = ml.data;
+      if (ml.corrupt) notes.push(`saved column mappings were corrupt and quarantined as ${ml.quarantinedAs}`);
+    } catch (e) {
+      if (!(e instanceof FutureVersionError)) throw e;
+      notes.push("mappings.json was written by a newer app version — using suggested mappings instead");
+    }
+
+    const params = urlSearchParams(req.url ?? "");
+    const suggestion = suggestMapping(headers, savedMappings);
+    /** @type {import("../import/transactions.mjs").Mapping} */
+    let mapping = suggestion.mapping;
+    /** @type {string} */
+    let mappingSource = suggestion.source;
+    const explicit = ["date", "amount", "description"].some((r) => (params.get(r) ?? "") !== "");
+    if (explicit) {
+      /** @type {Record<string, string|null>} */
+      const qm = { date: null, amount: null, description: null, category: null };
+      for (const role of ["date", "amount", "description", "category"]) {
+        const v = params.get(role) ?? "";
+        if (v === "") continue;
+        if (!headers.includes(v)) {
+          return sendJson(res, 400, { errors: [{ path: role, message: `column "${v}" does not exist in this file` }] });
+        }
+        qm[role] = v;
+      }
+      for (const role of ["date", "amount", "description"]) {
+        if (qm[role] === null) {
+          return sendJson(res, 400, { errors: [{ path: role, message: `an explicit mapping must name the ${role} column` }] });
+        }
+      }
+      mapping = { date: qm.date, amount: qm.amount, description: qm.description, category: qm.category };
+      mappingSource = "explicit";
+    }
+
+    const missing = /** @type {const} */ (["date", "amount", "description"]).filter((r) => mapping[r] === null);
+    if (missing.length) {
+      // Degenerate mapping state (e.g. no date column mappable) — explicit,
+      // and no token: nothing is applicable until the user picks columns.
+      return sendJson(res, 200, {
+        preview: { headers, mapping, mappingSource, missing, notes },
+        rev: store.rev(),
+      });
+    }
+
+    const signSuggestion = suggestSignConvention(rows, mapping);
+    const signParam = params.get("sign");
+    const signConvention =
+      signParam === "negative-is-spend" || signParam === "positive-is-charge" ? signParam : signSuggestion.convention;
+
+    const norm = normalizeRows(rows, mapping, { signConvention });
+
+    // Stored transactions are load-bearing for dedupe + derivation — a
+    // future-versioned file must refuse, not silently dedupe against nothing.
+    /** @type {import("../import/transactions.mjs").TxnRow[]} */
+    let stored;
+    try {
+      const tl = store.loadTransactions();
+      stored = tl.data;
+      if (tl.corrupt) notes.push(`stored transactions were corrupt and quarantined as ${tl.quarantinedAs} — dedupe ran against an empty store`);
+    } catch (e) {
+      if (!(e instanceof FutureVersionError)) throw e;
+      return sendJson(res, 400, { errors: [{ path: "", message: e.message }] });
+    }
+
+    const { fresh, dupes } = dedupeRows(norm.rows, stored);
+    const derived = deriveCategories(stored.concat(fresh), { now: store.now() });
+
+    const dupeSet = new Set(dupes.rowNumbers);
+    const sampleRows = norm.all.slice(0, 8).map((r) => ({
+      row: r.rowNumber,
+      date: r.date,
+      amount: r.amount,
+      description: r.description,
+      excluded: r.excluded ?? (dupeSet.has(r.rowNumber) ? "duplicate" : undefined),
+    }));
+
+    /** @type {Record<string, unknown>} */
+    const counts = {
+      parsed: rows.length,
+      storedNew: fresh.length,
+      dupes: dupes.count,
+      refunds: norm.excluded.refunds.count,
+      badDates: norm.excluded.badDates,
+      badAmounts: norm.excluded.badAmounts,
+    };
+    if (norm.ambiguity) counts.ambiguity = norm.ambiguity;
+
+    const token = randomUUID();
+    txnPreviews.set(token, {
+      fresh,
+      stored,
+      derived,
+      mapping,
+      signConvention,
+      headers,
+      signature: suggestion.signature,
+    });
+    evictOldest(txnPreviews, MAX_TXN_PREVIEWS);
+
+    return sendJson(res, 200, {
+      preview: {
+        headers,
+        mapping,
+        mappingSource,
+        signConvention: { value: signConvention, suggestion: signSuggestion },
+        sampleRows,
+        counts,
+        derived,
+        notes,
+      },
+      token,
+      rev: store.rev(),
+    });
+  }
+
+  /**
+   * POST /api/import/transactions/apply — { token, mode, includeCategories,
+   * baseRev }. 409 stale rev | 410 expired token | 400 bad mode/categories.
+   * Pinned write order: pre-import snapshot (source "txn-import") →
+   * transactions.json (with .bak of the previous file) → current.json via
+   * save(source "txn-import") → mappings.json. A crash between transactions
+   * and current is repairable by re-running the apply (derivation is
+   * re-runnable from stored rows); the token survives failures and is only
+   * burned on success.
+   * @param {Req} req @param {Res} res
+   */
+  async function apiTxnApply(req, res) {
+    const body = await readJsonBody(req, res, MB);
+    if (body === undefined) return;
+    const baseRev = body?.baseRev;
+    if (typeof baseRev !== "number") {
+      return sendJson(res, 400, { errors: [{ path: "baseRev", message: "baseRev (number) is required" }] });
+    }
+    if (baseRev !== store.rev()) return sendJson(res, 409, { rev: store.rev() });
+    const token = body?.token;
+    const entry = typeof token === "string" ? txnPreviews.get(token) : undefined;
+    if (!entry) {
+      return sendJson(res, 410, { errors: [{ path: "token", message: "preview expired — choose the file again" }] });
+    }
+    const mode = body?.mode;
+    if (typeof mode !== "string" || !(/** @type {readonly string[]} */ (APPLY_MODES)).includes(mode)) {
+      return sendJson(res, 400, { errors: [{ path: "mode", message: `mode must be one of ${APPLY_MODES.join(", ")}` }] });
+    }
+    const include = body?.includeCategories;
+    const names = new Set(entry.derived.categories.map((c) => c.name));
+    if (!Array.isArray(include) || !include.every((n) => typeof n === "string" && names.has(n))) {
+      return sendJson(res, 400, {
+        errors: [{ path: "includeCategories", message: "includeCategories must be an array of derived category names" }],
+      });
+    }
+    const includeSet = new Set(include);
+    const selected = entry.derived.categories.filter((c) => includeSet.has(c.name));
+    const next = applyDerived(state ?? defaultState(), selected, mode);
+
+    // Validate BEFORE any write so a rejected state never leaves half an
+    // import on disk (save re-validates; this keeps the write order clean).
+    const { errors } = validate(next);
+    if (errors.length) return sendJson(res, 400, { errors });
+
+    if (seeded) store.snapshotNow("txn-import"); // preserve what the import replaces
+    store.writeTransactions(entry.stored.concat(entry.fresh)); // (1) rows first — see store header
+    const result = store.save(next, { source: "txn-import" }); // (2) then the derived state
+
+    // Persist the column mapping under the header signature so the next
+    // import of this export format skips the mapping step. Convenience-only:
+    // failure must not fail an already-committed import.
+    try {
+      /** @type {Record<string, any>|null} */
+      let mappings = null;
+      try {
+        mappings = store.loadMappings().data;
+      } catch (e) {
+        if (!(e instanceof FutureVersionError)) throw e;
+        // future-versioned mappings file: leave it alone, skip persisting
+      }
+      if (mappings !== null) {
+        mappings[entry.signature] = {
+          mapping: entry.mapping,
+          signConvention: entry.signConvention,
+          headers: entry.headers,
+          savedAt: store.now().toISOString(),
+        };
+        store.writeMappings(mappings);
+      }
+    } catch (e) {
+      process.stderr.write(`runway: mapping persist failed (import already committed): ${e instanceof Error ? e.message : e}\n`);
+    }
+
+    txnPreviews.delete(token);
+    state = next;
+    seeded = true;
+    warnings = result.warnings;
+    recovery = null;
+    return sendJson(res, 200, { rev: result.rev, warnings: result.warnings });
   }
 
   /**

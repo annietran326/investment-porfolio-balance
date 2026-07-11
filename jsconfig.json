@@ -20,7 +20,8 @@
     "maxNodeModuleJsDepth": 0
   },
   "include": [
-    "src/**/*.mjs"
+    "src/**/*.mjs",
+    "src/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",
