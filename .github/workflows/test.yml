@@ -10,6 +10,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # Google Chrome is preinstalled on ubuntu-latest and is required by the
+      # render smoke test (test/smoke-render.test.mjs). Fail loudly here if a
+      # future runner image drops it, rather than letting the smoke test skip.
+      - run: google-chrome --version
       - run: npm install
-      - run: npm test
+      - run: npm test # includes node --test suites + the headless-Chrome render smoke test
       - run: npm run typecheck

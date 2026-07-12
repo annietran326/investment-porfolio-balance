@@ -41,8 +41,10 @@ Open the printed `http://localhost:4207`. The app starts with obviously fake exa
 ## Development
 
 ```bash
-npm test          # node:test suites, includes the egress guard
-npm run typecheck # tsc --noEmit over JSDoc types in src/ (public/ DOM layer is manual-verification; see plan risks)
+npm test          # node:test suites — engine/solver/store/API, the egress guard, and a headless-Chrome render smoke test
+npm run typecheck # tsc --noEmit over JSDoc types in src/
 ```
+
+The render smoke test (`test/smoke-render.test.mjs`) boots the server and loads the app in real headless Chrome, asserting it actually paints and that no resource fails to load — it catches browser-only breakage (e.g. a UI module importing a path the server doesn't serve) that Node-only tests miss. It needs Chrome/Chromium; set `RUNWAY_CHROME` to override discovery. Locally it skips if Chrome isn't found; in CI a missing Chrome is a hard failure so the smoke test can't silently skip.
 
 Vanilla ESM JavaScript, Node core `http`, `node:test`, hand-rolled SVG charts. Runtime dependencies are limited to two import parsers (spreadsheet + CSV); the pinned spreadsheet-parser version is a deliberate supply-chain decision — see comments in `package.json` before bumping.
