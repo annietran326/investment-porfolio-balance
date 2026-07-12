@@ -77,7 +77,7 @@ test("mortgage is paid through the payoff year and stops after it", () => {
 });
 
 test("vacancy overlay knocks months off rent only inside the window", () => {
-  const keep = state().properties[1];
+  const keep = { ...state().properties[1], rentRealGrowthPct: 0 }; // isolate from growth
   const startYear = 2026;
   const inWindow = propertyCashflowYear(keep, 2026, { startYear, vacancyMonths: 4, vacancyYears: 2 });
   const outWindow = propertyCashflowYear(keep, 2028, { startYear, vacancyMonths: 4, vacancyYears: 2 });
@@ -86,6 +86,7 @@ test("vacancy overlay knocks months off rent only inside the window", () => {
 
 test("healthcare: pre-65 bridge starts when employer coverage ends, Medicare at 65", () => {
   const s = state();
+  s.household = { people: [] }; // self only
   s.health = { preMedicareAnnual: 18000, postMedicareAnnual: 7000, employerCoverageUntilAge: 45 };
   const sim = simulate(s);
   const at = (age) => sim.rows.find((r) => r.age === age);
@@ -124,9 +125,10 @@ test("floor mode: firstBreachYear marks the first dip below the floor while firs
   s.portfolio = { balance: 600_000, realReturnPct: 0 };
   s.properties = [];
   s.incomes = [];
-  s.spending = [{ name: "living", monthly: 2000 }];
+  s.spending = [{ name: "living", monthly: 2000, fromYear: null, toYear: null, realGrowthPct: 0 }];
   s.social.monthly = 0;
   s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 40 };
+  s.household = { people: [] };
   s.endState = { mode: "floor", amounts: { bequest: 0, floor: 500_000 } };
   const sim = simulate(s);
   assert.equal(sim.firstNegYear, null, "never below $0");
@@ -147,6 +149,144 @@ test("zero assets and no income runs out immediately", () => {
   s.properties = [];
   const sim = simulate(s);
   assert.notEqual(sim.firstNegYear, null);
+});
+
+// ---- v2: growth, spending windows, household ----
+
+test("zero growth + open windows + no spouse reproduces v1 numbers exactly", () => {
+  // The migration guarantee: a state with all-default new fields simulates
+  // identically to how it would have without them.
+  const s = state();
+  s.properties.forEach((p) => {
+    p.rentRealGrowthPct = 0;
+    p.costsRealGrowthPct = 0;
+  });
+  s.incomes.forEach((inc) => (inc.realGrowthPct = 0));
+  s.spending = [
+    { name: "housing", monthly: 3500, fromYear: null, toYear: null, realGrowthPct: 0 },
+    { name: "living", monthly: 2500, fromYear: null, toYear: null, realGrowthPct: 0 },
+  ];
+  s.household = { people: [] };
+  const withDefaults = simulate(s);
+  // Hand-derived year-0 spend = (3500+2500)*12 + self healthcare(age40, employer until 40 → 16000)
+  assert.equal(withDefaults.rows[0].spend, 6000 * 12 + 16000);
+});
+
+test("real growth compounds from the current year on income, rent, and spending", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [{ name: "grows", annual: 100000, fromYear: 2026, toYear: 9999, realGrowthPct: 2 }];
+  s.spending = [{ name: "grows", monthly: 1000, fromYear: null, toYear: null, realGrowthPct: 3 }];
+  s.social.monthly = 0;
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
+  s.household = { people: [] };
+  const sim = simulate(s);
+  // year offset 0 = base; offset 5 = base*(1+g)^5
+  assert.equal(sim.rows[0].income, 100000);
+  assert.ok(Math.abs(sim.rows[5].income - 100000 * 1.02 ** 5) < 1e-6);
+  assert.equal(sim.rows[0].spend, 12000);
+  assert.ok(Math.abs(sim.rows[5].spend - 12000 * 1.03 ** 5) < 1e-6);
+});
+
+test("property rent grows but mortgage stays fixed (nominal) — cash flow rises over time", () => {
+  const p = { name: "g", rentMonthly: 2000, costsMonthly: 0, mortgageMonthly: 1000, payoffYear: null, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 2, costsRealGrowthPct: 0 };
+  const y0 = propertyCashflowYear(p, 2026, { startYear: 2026 });
+  const y10 = propertyCashflowYear(p, 2036, { startYear: 2026 });
+  assert.equal(y0.cf, (2000 - 1000) * 12);
+  // rent grew 2%^10, mortgage flat → cash flow strictly higher
+  const expected = (2000 * 1.02 ** 10 - 1000) * 12;
+  assert.ok(Math.abs(y10.cf - expected) < 1e-6);
+  assert.ok(y10.cf > y0.cf);
+});
+
+test("spending window: a time-boxed cost applies only within [fromYear, toYear]", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [];
+  s.social.monthly = 0;
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
+  s.household = { people: [] };
+  s.spending = [
+    { name: "perpetual", monthly: 1000, fromYear: null, toYear: null, realGrowthPct: 0 },
+    { name: "dependent", monthly: 500, fromYear: null, toYear: 2030, realGrowthPct: 0 },
+  ];
+  const sim = simulate(s);
+  const spendIn = (yr) => sim.rows.find((r) => r.year === yr)?.spend;
+  assert.equal(spendIn(2030), (1000 + 500) * 12); // dependent still active
+  assert.equal(spendIn(2031), 1000 * 12); // dependent ended
+});
+
+test("spouse contributes their own Social Security on their own age trajectory", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [];
+  s.social = { startAge: 67, monthly: 0, haircutPct: 0 }; // self: no SS
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
+  s.household = {
+    people: [{ name: "Spouse", role: "spouse", currentAge: 62, social: { startAge: 67, monthly: 2000, haircutPct: 25 }, health: { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 } }],
+  };
+  const sim = simulate(s);
+  // spouse is 62 now; hits 67 in 5 years (2031). SS = 2000*12*0.75 = 18000
+  assert.equal(sim.rows.find((r) => r.year === 2030)?.ss, 0);
+  assert.equal(sim.rows.find((r) => r.year === 2031)?.ss, 18000);
+});
+
+test("spouse healthcare adds a second pre-65 bridge and a second Medicare load", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [];
+  s.social.monthly = 0;
+  s.health = { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 40 };
+  s.profile = { currentAge: 60, endAge: 95, currentYear: 2026 };
+  s.household = {
+    people: [{ name: "Spouse", role: "spouse", currentAge: 60, social: { startAge: 67, monthly: 0, haircutPct: 25 }, health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 40 } }],
+  };
+  const sim = simulate(s);
+  const at = (age) => sim.rows.find((r) => r.age === age)?.health;
+  assert.equal(at(60), 16000 + 16000); // both on the pre-65 bridge
+  assert.equal(at(65), 7500 + 7500); // both on Medicare
+});
+
+test("spouse older than self is already past SS/Medicare at year 0", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [];
+  s.social = { startAge: 67, monthly: 0, haircutPct: 0 };
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
+  s.profile = { currentAge: 40, endAge: 95, currentYear: 2026 };
+  s.household = {
+    people: [{ name: "Older spouse", role: "spouse", currentAge: 68, social: { startAge: 67, monthly: 2000, haircutPct: 25 }, health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 40 } }],
+  };
+  const sim = simulate(s);
+  // spouse is 68 at year 0 → already collecting SS (18000) and on Medicare (7500) immediately
+  assert.equal(sim.rows[0].ss, 18000);
+  assert.equal(sim.rows[0].health, 7500);
+});
+
+test("a future-starting spending line with growth compounds from the current year (consistent with income)", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [];
+  s.social.monthly = 0;
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
+  s.household = { people: [] };
+  s.spending = [{ name: "tuition (starts 2031)", monthly: 1000, fromYear: 2031, toYear: null, realGrowthPct: 3 }];
+  const sim = simulate(s);
+  assert.equal(sim.rows.find((r) => r.year === 2030)?.spend, 0); // inactive before its window
+  // active from 2031 (offset i=5); grows from currentYear 2026, not from 2031
+  const y2031 = sim.rows.find((r) => r.year === 2031)?.spend;
+  assert.ok(Math.abs(/** @type {number} */ (y2031) - 12000 * 1.03 ** 5) < 1e-6);
+});
+
+test("dependents (no age/SS/health) have no direct engine effect", () => {
+  const a = state();
+  a.household = { people: [] };
+  const b = structuredClone(a);
+  b.household = { people: [{ name: "Kid", role: "dependent", currentAge: 8 }] };
+  assert.deepEqual(simulate(a).rows, simulate(b).rows);
 });
 
 test("engine purity: no node imports, no Date, no clock anywhere in src/engine", () => {

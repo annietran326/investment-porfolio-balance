@@ -23,9 +23,12 @@ import {
   setEndStateAmount,
   endStateAmountValue,
   parseNumField,
+  addPerson,
+  removePerson,
+  setPersonField,
 } from "../public/ui/forms.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
-import { validate } from "../src/model/schema.mjs";
+import { validate, defaultState, newPerson } from "../src/model/schema.mjs";
 
 // ---------------------------------------------------------------------------
 // harness: fake timers + a fake /api/state server honoring the rev contract
@@ -398,11 +401,13 @@ test("addRow: appends a valid blank row for each kind without mutating input", (
     payoffYear: null,
     saleYear: null,
     saleNetProceeds: null,
+    rentRealGrowthPct: 0,
+    costsRealGrowthPct: 0,
   });
   const withIncome = addRow(s, "incomes");
-  assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030 });
+  assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030, realGrowthPct: 0 });
   const withSpend = addRow(s, "spending");
-  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0 });
+  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0, fromYear: null, toYear: null, realGrowthPct: 0 });
   for (const next of [withProp, withIncome, withSpend]) {
     assert.deepEqual(validate(next).errors, [], "blank rows validate cleanly");
   }
@@ -435,6 +440,98 @@ test("parseNumField: empty is null (meaningful), never coerced to 0", () => {
   assert.equal(parseNumField("3.5"), 3.5);
   assert.equal(parseNumField("2027"), 2027);
   assert.ok(Number.isNaN(parseNumField("abc")), "garbage becomes NaN for validate() to reject");
+});
+
+// ---------------------------------------------------------------------------
+// household people transforms — immutable, valid blanks, nested paths
+// ---------------------------------------------------------------------------
+
+test("addPerson: appends a valid spouse (seeds SS + healthcare) without mutating input", () => {
+  const s = defaultState();
+  const before = structuredClone(s);
+  const next = addPerson(s, "spouse");
+  assert.equal(next.household.people.length, s.household.people.length + 1);
+  const spouse = next.household.people.at(-1);
+  assert.equal(spouse.role, "spouse");
+  assert.equal(spouse.currentAge, null);
+  assert.ok(spouse.social && typeof spouse.social.startAge === "number", "spouse seeds Social Security");
+  assert.ok(spouse.health && typeof spouse.health.preMedicareAnnual === "number", "spouse seeds healthcare");
+  assert.deepEqual(validate(next).errors, [], "blank spouse validates cleanly");
+  assert.deepEqual(s, before, "input state never mutated");
+});
+
+test("addPerson: appends a valid dependent (no SS/health) without mutating input", () => {
+  const s = defaultState();
+  const before = structuredClone(s);
+  const next = addPerson(s, "dependent");
+  const dep = next.household.people.at(-1);
+  assert.equal(dep.role, "dependent");
+  assert.equal(dep.currentAge, null);
+  assert.equal(dep.social, undefined, "dependent carries no Social Security");
+  assert.equal(dep.health, undefined, "dependent carries no healthcare");
+  assert.deepEqual(validate(next).errors, [], "blank dependent validates cleanly");
+  assert.deepEqual(s, before, "input state never mutated");
+});
+
+test("blank spouse/dependent from newPerson validate cleanly when added to a state", () => {
+  const s = defaultState();
+  s.household.people.push(newPerson("spouse"), newPerson("dependent"));
+  assert.deepEqual(validate(s).errors, [], "both blanks are error-free");
+});
+
+test("removePerson: removes exactly the indexed person without mutating input", () => {
+  const s = defaultState();
+  s.household.people = [newPerson("spouse", { name: "A" }), newPerson("dependent", { name: "B" })];
+  const before = structuredClone(s);
+  const next = removePerson(s, 0);
+  assert.equal(next.household.people.length, 1);
+  assert.equal(next.household.people[0].name, "B", "the right person was removed");
+  assert.deepEqual(s, before, "input state never mutated");
+});
+
+test("setPersonField: top-level and nested social/health paths, immutable", () => {
+  const s = addPerson(defaultState(), "spouse");
+  const before = structuredClone(s);
+  // top-level
+  const named = setPersonField(s, 0, "name", "Alex");
+  assert.equal(named.household.people[0].name, "Alex");
+  const aged = setPersonField(s, 0, "currentAge", 42);
+  assert.equal(aged.household.people[0].currentAge, 42);
+  // nested social + health
+  const ss = setPersonField(s, 0, "social.startAge", 70);
+  assert.equal(ss.household.people[0].social.startAge, 70);
+  assert.equal(ss.household.people[0].social.monthly, s.household.people[0].social.monthly, "sibling field untouched");
+  const hc = setPersonField(s, 0, "health.preMedicareAnnual", 20000);
+  assert.equal(hc.household.people[0].health.preMedicareAnnual, 20000);
+  // nested writes validate
+  assert.deepEqual(validate(ss).errors, []);
+  assert.deepEqual(validate(hc).errors, []);
+  assert.deepEqual(s, before, "input state never mutated by any setter");
+});
+
+test("setPersonField: currentAge empty→null is a clean spouse-age warning, not an error", () => {
+  const s = addPerson(defaultState(), "spouse");
+  const cleared = setPersonField(s, 0, "currentAge", null);
+  const { errors, warnings } = validate(cleared);
+  assert.deepEqual(errors, [], "null spouse age is not an error");
+  assert.ok(
+    warnings.some((w) => w.path === "household.people[0].currentAge"),
+    "null spouse age surfaces a warning"
+  );
+});
+
+test("spending row: fromYear ''→null and growth ''→0 round-trip and validate", () => {
+  const s = defaultState();
+  let next = addRow(s, "spending");
+  const i = next.spending.length - 1;
+  next = setRowValue(next, "spending", i, "name", "loan");
+  next = setRowValue(next, "spending", i, "monthly", 500);
+  next = setRowValue(next, "spending", i, "fromYear", parseNumField("")); // "" → null
+  next = setRowValue(next, "spending", i, "realGrowthPct", 0); // growth "" → 0 upstream
+  const row = next.spending[i];
+  assert.equal(row.fromYear, null, "empty from-year stays null (not 0)");
+  assert.equal(row.realGrowthPct, 0, "growth is 0, not null");
+  assert.deepEqual(validate(next).errors, [], "row validates");
 });
 
 // ---------------------------------------------------------------------------

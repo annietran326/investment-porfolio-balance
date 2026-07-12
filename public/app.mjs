@@ -28,6 +28,10 @@ import {
   endStateAmountValue,
   parseNumField,
   renderRows,
+  addPerson,
+  removePerson,
+  setPersonField,
+  renderPeople,
 } from "./ui/forms.mjs";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -48,6 +52,11 @@ const LISTS = {
   properties: { container: qs("#propList"), template: qs("#tpl-property"), addBtn: qs("#addProp") },
   incomes: { container: qs("#incomeList"), template: qs("#tpl-income"), addBtn: qs("#addIncome") },
   spending: { container: qs("#spendList"), template: qs("#tpl-spend"), addBtn: qs("#addSpend") },
+};
+
+const PEOPLE = {
+  container: qs("#peopleList"),
+  templates: { spouse: qs("#tpl-person-spouse"), dependent: qs("#tpl-person-dependent") },
 };
 
 // U7 chart controllers — built once; renderResults() feeds them on every
@@ -97,6 +106,24 @@ function renderList(kind) {
   });
 }
 
+// Household field parse: name (text) passes through; every numeric field —
+// nullable currentAge and the required SS/health numbers alike — goes through
+// parseNumField, so empty → null (meaningful for age, a validate() error for
+// the required ones) and is never silently coerced to 0.
+function renderPeopleList() {
+  renderPeople(
+    PEOPLE.container,
+    /** @type {any} */ (PEOPLE.templates),
+    state.household.people,
+    {
+      onField: (index, field, raw, isText) => {
+        commit(setPersonField(state, index, field, isText ? raw : parseNumField(raw)));
+      },
+      onRemove: (index) => commit(removePerson(state, index), "people"),
+    }
+  );
+}
+
 // ---------------------------------------------------------------------------
 // validation issues → field slots
 // ---------------------------------------------------------------------------
@@ -117,6 +144,14 @@ function issueSlotFor(path) {
   if (m) {
     const row = LISTS[m[1]].container.children[Number(m[2])];
     const input = row?.querySelector(`[data-key="${m[3]}"]`);
+    return input ? issueSlotNear(input) : null;
+  }
+  // household.people[i].name | .currentAge | .social.startAge | .health.postMedicareAnnual
+  const hp = /^household\.people\[(\d+)\]\.(.+)$/.exec(path);
+  if (hp) {
+    const row = PEOPLE.container.children[Number(hp[1])];
+    if (!row) return null;
+    const input = row.querySelector(`[data-field="${CSS.escape(hp[2])}"]`);
     return input ? issueSlotNear(input) : null;
   }
   if (path === "endState.mode") return issueSlotNear(qs("#endMode"));
@@ -219,7 +254,8 @@ function commit(next, rebuildKind) {
     show(qs("#placeholderBanner"), false); // example-data banner dismisses on first edit
     placeholderBannerLive = false;
   }
-  if (rebuildKind) renderList(rebuildKind);
+  if (rebuildKind === "people") renderPeopleList();
+  else if (rebuildKind) renderList(rebuildKind);
   syncScalars();
   const { errors, warnings } = validate(state);
   renderIssues(errors, warnings);
@@ -325,6 +361,10 @@ function buildStaticBindings() {
     LISTS[kind].addBtn.addEventListener("click", () => commit(addRow(state, kind), kind));
   }
 
+  // household people — spouse (seeds SS + healthcare) and dependent
+  qs("#addSpouse").addEventListener("click", () => commit(addPerson(state, "spouse"), "people"));
+  qs("#addDependent").addEventListener("click", () => commit(addPerson(state, "dependent"), "people"));
+
   qs("#btnRetry").addEventListener("click", () => pipeline.retry());
   qs("#btnReload").addEventListener("click", () => location.reload());
 
@@ -407,6 +447,7 @@ function buildStaticBindings() {
 
 buildStaticBindings();
 for (const kind of Object.keys(LISTS)) renderList(kind);
+renderPeopleList();
 syncScalars();
 {
   const { errors, warnings } = validate(state);

@@ -14,7 +14,7 @@ import * as XLSX from "xlsx";
 import { createStore } from "../src/server/store.mjs";
 import { createApi } from "../src/server/api.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
-import { defaultState } from "../src/model/schema.mjs";
+import { defaultState, validate } from "../src/model/schema.mjs";
 import {
   applicableTabs,
   applyTabs,
@@ -131,6 +131,110 @@ test("the committed template artifact parses clean (parser and template can't dr
   for (const k of parsed.tabsFound) assert.deepEqual(parsed.perTab[k].errors, []);
 });
 
+// ---------------------------------------------------------------------------
+// v2 round-trip: growth columns, expense windows, Household tab
+// ---------------------------------------------------------------------------
+
+test("v2 round-trip: spouse + dependent + growing rent + time-boxed spending survive export→reimport", () => {
+  // A state that touches every new v2 field: a property whose rent outpaces
+  // inflation, a time-boxed spending line, and a household with a spouse (SS +
+  // healthcare) and a dependent.
+  const state = defaultState();
+  state.properties = [
+    { name: "Rental (rent +1.5%, costs -0.5% real)", rentMonthly: 3000, costsMonthly: 850, mortgageMonthly: 2100, payoffYear: 2048, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 1.5, costsRealGrowthPct: -0.5 },
+  ];
+  state.incomes = [{ name: "Consulting (grows 2% real)", annual: 60_000, fromYear: 2026, toYear: 2035, realGrowthPct: 2 }];
+  state.spending = [
+    { name: "living", monthly: 3000, fromYear: null, toYear: null, realGrowthPct: 0 }, // perpetual
+    { name: "childcare (ends 2032)", monthly: 1800, fromYear: 2026, toYear: 2032, realGrowthPct: 0 }, // time-boxed
+    { name: "hobby (starts 2030, +1% real)", monthly: 400, fromYear: 2030, toYear: null, realGrowthPct: 1 }, // open-ended from a future year
+  ];
+  state.household = {
+    people: [
+      {
+        name: "Partner",
+        role: "spouse",
+        currentAge: 42,
+        social: { startAge: 68, monthly: 2600, haircutPct: 20 },
+        health: { preMedicareAnnual: 15_000, postMedicareAnnual: 8_000, employerCoverageUntilAge: 63 },
+      },
+      { name: "Kid", role: "dependent", currentAge: 10 },
+    ],
+  };
+  assert.deepEqual(validate(state).errors, [], "fixture is itself a valid v2 state");
+
+  const parsed = parseTemplate(buildTemplateWorkbook(state));
+  assert.deepEqual(parsed.tabsFound, ALL_TABS);
+  for (const k of parsed.tabsFound) assert.deepEqual(parsed.perTab[k].errors, [], `tab ${k} parses clean`);
+
+  const applied = applyTabs(defaultState(), parsed, parsed.tabsFound);
+  assert.deepEqual(applied, state, "every new v2 field round-trips exactly (no-op)");
+  assert.deepEqual(validate(applied).errors, [], "the reimported state is valid v2");
+
+  // Spot-check the load-bearing new fields specifically.
+  assert.equal(applied.properties[0].rentRealGrowthPct, 1.5);
+  assert.equal(applied.properties[0].costsRealGrowthPct, -0.5);
+  assert.equal(applied.incomes[0].realGrowthPct, 2);
+  assert.equal(applied.spending[0].toYear, null, "perpetual line keeps toYear null (not 0)");
+  assert.deepEqual([applied.spending[1].fromYear, applied.spending[1].toYear], [2026, 2032], "time-boxed window survives");
+  assert.deepEqual([applied.spending[2].fromYear, applied.spending[2].toYear], [2030, null], "open-ended-from-future survives");
+  const [spouse, dep] = applied.household.people;
+  assert.deepEqual(spouse.social, { startAge: 68, monthly: 2600, haircutPct: 20 });
+  assert.deepEqual(spouse.health, { preMedicareAnnual: 15_000, postMedicareAnnual: 8_000, employerCoverageUntilAge: 63 });
+  assert.equal(dep.role, "dependent");
+  assert.equal(dep.social, undefined, "a dependent carries no social section");
+  assert.equal(dep.health, undefined, "a dependent carries no health section");
+});
+
+test("Household tab: absent → people untouched; present → replaces; bad role → cell error", () => {
+  const state = placeholderState(); // ships with a spouse + a dependent
+
+  // (1) Absent Household tab: importing other tabs leaves people untouched.
+  const noHousehold = parseTemplate(wbBuffer({ Accounts: [HEADERS.Accounts, [500000, 3]] }));
+  assert.ok(noHousehold.tabsMissing.includes("household"));
+  const afterNoTab = applyTabs(state, noHousehold, ["accounts"]);
+  assert.deepEqual(afterNoTab.household, state.household, "no Household tab does NOT wipe existing people");
+
+  // (2) Present Household tab replaces people wholesale: a fresh spouse (with
+  // SS/health cells) and a dependent (spouse-only cells blank).
+  const H = HEADERS.Household;
+  const withHousehold = parseTemplate(
+    wbBuffer({
+      Household: [
+        H,
+        ["New Spouse", "spouse", 45, 67, 3000, 25, 16000, 7500, 65],
+        ["New Kid", "dependent", 5, null, null, null, null, null, null],
+      ],
+    })
+  );
+  assert.deepEqual(withHousehold.perTab.household.errors, []);
+  const applied = applyTabs(state, withHousehold, ["household"]);
+  assert.equal(applied.household.people.length, 2);
+  assert.deepEqual(applied.household.people[0], {
+    name: "New Spouse",
+    role: "spouse",
+    currentAge: 45,
+    social: { startAge: 67, monthly: 3000, haircutPct: 25 },
+    health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 },
+  });
+  assert.deepEqual(applied.household.people[1], { name: "New Kid", role: "dependent", currentAge: 5 });
+  assert.deepEqual(validate(applied).errors, [], "replaced household is valid v2");
+
+  // A spouse row with blank SS/health cells keeps the schema defaults.
+  const blankSpouse = parseTemplate(wbBuffer({ Household: [H, ["Bare", "spouse", 40, null, null, null, null, null, null]] }));
+  assert.deepEqual(blankSpouse.perTab.household.errors, []);
+  const bare = applyTabs(state, blankSpouse, ["household"]).household.people[0];
+  assert.deepEqual(bare.social, { startAge: 67, monthly: 0, haircutPct: 25 }, "blank SS cells → newSocial() defaults");
+  assert.deepEqual(bare.health, { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 }, "blank health cells → newHealth() defaults");
+
+  // (3) Bad role value → cell-addressed error; the tab is blocked.
+  const badRole = parseTemplate(wbBuffer({ Household: [H, ["Confused", "cousin", 30, null, null, null, null, null, null]] }));
+  assert.equal(badRole.perTab.household.errors.length, 1);
+  assert.equal(badRole.perTab.household.errors[0].cell, "Household!B2");
+  assert.match(badRole.perTab.household.errors[0].message, /role must be one of spouse, dependent/);
+  assert.deepEqual(applicableTabs(badRole), [], "a bad role blocks the whole Household tab");
+});
+
 test("missing Income tab → section unchanged; present tabs replace theirs", () => {
   const buf = wbBuffer({
     Accounts: [HEADERS.Accounts, [500000, 3]],
@@ -138,10 +242,11 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   });
   const parsed = parseTemplate(buf);
   assert.deepEqual(parsed.tabsFound, ["accounts", "spending"]);
-  assert.deepEqual(parsed.tabsMissing, ["properties", "income", "assumptions"]);
+  assert.deepEqual(parsed.tabsMissing, ["properties", "income", "household", "assumptions"]);
 
   const pv = previewTemplate(placeholderState(), parsed);
   assert.equal(pv.tabs.find((t) => t.key === "income").status, "missing");
+  assert.equal(pv.tabs.find((t) => t.key === "household").status, "missing");
   assert.equal(pv.headline.totalBalance.after, 500000);
   assert.equal(pv.headline.monthlySpend.after, 900);
 
@@ -149,7 +254,9 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   const applied = applyTabs(state, parsed, ["accounts", "spending"]);
   assert.deepEqual(applied.incomes, state.incomes, "absent tab leaves incomes untouched");
   assert.deepEqual(applied.properties, state.properties, "absent tab leaves properties untouched");
-  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900 }]);
+  assert.deepEqual(applied.household, state.household, "absent Household tab leaves people untouched");
+  // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
+  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, realGrowthPct: 0 }]);
   assert.deepEqual(applied.portfolio, { balance: 500000, realReturnPct: 3 });
 });
 
@@ -175,7 +282,7 @@ test("text in a rent cell → cell-addressed error; tab blocked; other tabs stil
   assert.equal(pv.tabs.find((t) => t.key === "income").status, "ready");
 
   const applied = applyTabs(placeholderState(), parsed, ["income"]);
-  assert.deepEqual(applied.incomes, [{ name: "W2", annual: 90000, fromYear: 2026, toYear: 2030 }]);
+  assert.deepEqual(applied.incomes, [{ name: "W2", annual: 90000, fromYear: 2026, toYear: 2030, realGrowthPct: 0 }]);
   assert.throws(() => applyTabs(placeholderState(), parsed, ["properties"]), /not applicable/);
 });
 
@@ -206,7 +313,8 @@ test('coercion: "$1,200" → 1200, "25%" → 25, "1,200" → 1200, Excel percent
   );
   assert.deepEqual(parsed.perTab.accounts.errors, []);
   assert.deepEqual(parsed.perTab.accounts.rows[0], { balance: 1200, realReturnPct: 25 });
-  assert.deepEqual(parsed.perTab.spending.rows[0], { name: "food", monthly: 1200 });
+  // Blank window cells → null; blank growth cell → 0.
+  assert.deepEqual(parsed.perTab.spending.rows[0], { name: "food", monthly: 1200, fromYear: null, toYear: null, realGrowthPct: 0 });
 
   // A percent-FORMATTED numeric cell stores 3.5% as 0.035 — the parser
   // surfaces the number the user saw in Excel.
@@ -272,7 +380,8 @@ test("tab and header matching is case/whitespace-insensitive", () => {
   );
   assert.deepEqual(parsed.tabsFound, ["income"]);
   assert.deepEqual(parsed.perTab.income.errors, []);
-  assert.deepEqual(parsed.perTab.income.rows[0], { name: "W2", annual: 1, fromYear: 2026, toYear: 2027 });
+  // The optional growth column is absent here → defaults to 0 (grows with inflation).
+  assert.deepEqual(parsed.perTab.income.rows[0], { name: "W2", annual: 1, fromYear: 2026, toYear: 2027, realGrowthPct: 0 });
 });
 
 test("a sheet with more rows than the 10k read cap is blocked, not silently truncated", () => {
@@ -450,7 +559,7 @@ test("preview → apply: threads rev, 409 stale, 410 expired token, 400 invalid 
 
   const next = placeholderState();
   next.portfolio.balance = 900_000;
-  next.spending.push({ name: "boats", monthly: 500 });
+  next.spending.push({ name: "boats", monthly: 500, fromYear: null, toYear: null, realGrowthPct: 0 });
   const buf = buildTemplateWorkbook(next);
 
   const pv = await sendOctet("/api/import/template/preview?filename=runway-export.local.xlsx", buf);
@@ -581,6 +690,6 @@ test("blocked tab via API: preview marks it, apply of the blocked tab 400s, vali
   });
   assert.equal(okApply.status, 200);
   const state = (await getJson("/api/state")).body.state;
-  assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650 }]);
+  assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650, fromYear: null, toYear: null, realGrowthPct: 0 }]);
   assert.ok(state.properties.length > 0, "properties section untouched by the blocked tab");
 });

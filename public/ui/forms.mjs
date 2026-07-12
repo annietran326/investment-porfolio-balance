@@ -5,31 +5,26 @@
 // at the bottom touch `document` only inside function bodies (never at module
 // top level), so importing this file under Node is safe.
 
+import { newProperty, newIncome, newSpendingCategory, newPerson } from "../../src/model/schema.mjs";
+
 /** @typedef {import("../../src/model/schema.mjs").RunwayState} RunwayState */
+/** @typedef {import("../../src/model/schema.mjs").PersonRole} PersonRole */
 /** @typedef {"properties"|"incomes"|"spending"} ListKind */
 
 /**
- * Blank row per list kind. Income defaults anchor on the plan's currentYear
- * (the engine never reads the clock; neither do we).
+ * Blank row per list kind, built from the schema factories so new rows always
+ * carry the current field set (growth, windows) and validate cleanly. Income
+ * defaults anchor on the plan's currentYear (the engine never reads the clock;
+ * neither do we).
  * @param {ListKind} kind @param {RunwayState} state
  */
 export function blankRow(kind, state) {
-  if (kind === "properties") {
-    return {
-      name: "new property",
-      rentMonthly: 0,
-      costsMonthly: 0,
-      mortgageMonthly: 0,
-      payoffYear: null,
-      saleYear: null,
-      saleNetProceeds: null,
-    };
-  }
+  if (kind === "properties") return newProperty({ name: "new property" });
   if (kind === "incomes") {
     const y = state.profile.currentYear;
-    return { name: "new income", annual: 0, fromYear: y, toYear: y + 4 };
+    return newIncome({ name: "new income", fromYear: y, toYear: y + 4 });
   }
-  if (kind === "spending") return { name: "new category", monthly: 0 };
+  if (kind === "spending") return newSpendingCategory({ name: "new category" });
   throw new Error(`unknown list kind: ${kind}`);
 }
 
@@ -63,6 +58,45 @@ export function setValueAtPath(state, path, value) {
   const keys = path.split(".");
   const last = /** @type {string} */ (keys.pop());
   let target = /** @type {any} */ (next);
+  for (const k of keys) target = target[k];
+  target[last] = value;
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// household people transforms — pure/immutable, mirror the row transforms above.
+// self stays in profile/social/health; household.people holds spouse+dependents.
+// ---------------------------------------------------------------------------
+
+/**
+ * Append a blank person for the given role, built from the schema factory so a
+ * spouse seeds its own social+health defaults and a dependent stays lean.
+ * @param {RunwayState} state @param {PersonRole} role @returns {RunwayState}
+ */
+export function addPerson(state, role) {
+  const next = structuredClone(state);
+  next.household.people.push(newPerson(role));
+  return next;
+}
+
+/** @param {RunwayState} state @param {number} index @returns {RunwayState} */
+export function removePerson(state, index) {
+  const next = structuredClone(state);
+  next.household.people.splice(index, 1);
+  return next;
+}
+
+/**
+ * Set a field on a person immutably. `field` is a dotted path RELATIVE to the
+ * person (e.g. "name", "currentAge", "social.startAge", "health.preMedicareAnnual"),
+ * so a spouse's nested SS/healthcare fields write through the same call.
+ * @param {RunwayState} state @param {number} index @param {string} field @param {unknown} value
+ */
+export function setPersonField(state, index, field, value) {
+  const next = structuredClone(state);
+  const keys = field.split(".");
+  const last = /** @type {string} */ (keys.pop());
+  let target = /** @type {any} */ (next.household.people[index]);
   for (const k of keys) target = target[k];
   target[last] = value;
   return next;
@@ -133,6 +167,38 @@ export function renderRows(container, template, items, handlers) {
       const v = item[key];
       field.value = v === null || v === undefined ? "" : String(v);
       field.addEventListener("input", () => handlers.onField(index, key, field.value, field.type === "text"));
+    }
+    const remove = row.querySelector("button.remove");
+    if (remove) remove.addEventListener("click", () => handlers.onRemove(index));
+    container.appendChild(row);
+  });
+}
+
+/**
+ * Rebuild the household people list. Each person picks its template by role
+ * (spouse carries nested SS + healthcare; dependent is name + age). Inputs
+ * carry data-field with a person-relative dotted path (e.g. "social.startAge");
+ * values land via .value, never innerHTML. Called only on build and add/remove,
+ * so typing never loses focus.
+ * @param {Element} container
+ * @param {{spouse: HTMLTemplateElement, dependent: HTMLTemplateElement}} templates
+ * @param {Record<string, any>[]} people
+ * @param {{onField: (index: number, field: string, raw: string, isText: boolean) => void,
+ *          onRemove: (index: number) => void}} handlers
+ */
+export function renderPeople(container, templates, people, handlers) {
+  container.textContent = "";
+  people.forEach((person, index) => {
+    const tpl = person.role === "spouse" ? templates.spouse : templates.dependent;
+    const row = /** @type {Element} */ (
+      /** @type {Element} */ (tpl.content.firstElementChild).cloneNode(true)
+    );
+    for (const input of row.querySelectorAll("input[data-field]")) {
+      const field = /** @type {HTMLInputElement} */ (input);
+      const path = /** @type {string} */ (field.dataset.field);
+      const v = path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), person);
+      field.value = v === null || v === undefined ? "" : String(v);
+      field.addEventListener("input", () => handlers.onField(index, path, field.value, field.type === "text"));
     }
     const remove = row.querySelector("button.remove");
     if (remove) remove.addEventListener("click", () => handlers.onRemove(index));

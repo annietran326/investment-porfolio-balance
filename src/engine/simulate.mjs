@@ -2,8 +2,25 @@
 // state), no filesystem, no globals. Everything in TODAY'S dollars with real
 // (after-inflation, after-tax) returns.
 import { propertyCashflowYear } from "./property.mjs";
+import { grownValue } from "./growth.mjs";
 
 const MEDICARE_AGE = 65;
+
+/**
+ * Annual healthcare cost for one person at a given age: $0 while employer
+ * coverage lasts, the pre-65 bridge after it, Medicare-age cost at 65+.
+ * @param {import("../model/schema.mjs").Health} health
+ * @param {number} age
+ */
+function healthCostAt(health, age) {
+  if (age >= MEDICARE_AGE) return health.postMedicareAnnual;
+  return age >= health.employerCoverageUntilAge ? health.preMedicareAnnual : 0;
+}
+
+/** Post-haircut annual Social Security for a person's SS config. @param {import("../model/schema.mjs").Social} social */
+function ssAnnualOf(social) {
+  return social.monthly * 12 * (1 - social.haircutPct / 100);
+}
 
 /**
  * A scenario overlay — the full set of stress knobs. All optional; `{}` is the base case.
@@ -59,8 +76,11 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
   const years = s.profile.endAge - s.profile.currentAge;
   const r = (s.portfolio.realReturnPct / 100) * (overlay.returnMult ?? 1);
   const spendMult = overlay.spendMult ?? 1;
-  const baseSpendAnnual = s.spending.reduce((sum, c) => sum + c.monthly, 0) * 12 * spendMult;
-  const ssAnnual = s.social.monthly * 12 * (1 - s.social.haircutPct / 100);
+  const ssAnnualSelf = ssAnnualOf(s.social);
+  // Spouses with their own age contribute Social Security and a healthcare load
+  // on their own age trajectory. Dependents have no direct engine effect — their
+  // costs are ordinary (time-boxed) spending lines.
+  const spouses = (s.household?.people ?? []).filter((p) => p.role === "spouse" && typeof p.currentAge === "number");
   // Clamped so an empty window still means "this year only" — validation warns upstream.
   const workUntilYear = startYear + Math.max(0, s.work.untilAge - s.profile.currentAge);
   const propOverlay = {
@@ -89,11 +109,16 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
 
     let income = 0;
     for (const inc of s.incomes) {
-      if (year >= inc.fromYear && year <= inc.toYear) income += inc.annual;
+      if (year >= inc.fromYear && year <= inc.toYear) income += grownValue(inc.annual, inc.realGrowthPct, i);
     }
-    if (extraIncomeAnnual && year <= workUntilYear) income += extraIncomeAnnual;
+    if (extraIncomeAnnual && year <= workUntilYear) income += extraIncomeAnnual; // solver income does not grow
 
-    const ss = age >= s.social.startAge ? ssAnnual : 0;
+    // Social Security: self plus any spouse, each on their own age + start age.
+    let ss = age >= s.social.startAge ? ssAnnualSelf : 0;
+    for (const sp of spouses) {
+      const spAge = /** @type {number} */ (sp.currentAge) + i;
+      if (sp.social && spAge >= sp.social.startAge) ss += ssAnnualOf(sp.social);
+    }
 
     let propCF = 0;
     let proceeds = 0;
@@ -103,14 +128,23 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
       proceeds += res.proceeds;
     }
 
-    let health = 0;
-    if (age < MEDICARE_AGE) {
-      if (age >= s.health.employerCoverageUntilAge) health = s.health.preMedicareAnnual;
-    } else {
-      health = s.health.postMedicareAnnual;
+    // Healthcare: self plus any spouse, each on their own age.
+    let health = healthCostAt(s.health, age);
+    for (const sp of spouses) {
+      if (sp.health) health += healthCostAt(sp.health, /** @type {number} */ (sp.currentAge) + i);
     }
 
-    let spend = baseSpendAnnual + health;
+    // Category spending: only lines active this year (null window bound = open),
+    // each grown per its real-growth rate; the scenario spend shock scales
+    // categories but not healthcare.
+    let categorySpend = 0;
+    for (const c of s.spending) {
+      // `== null` treats both null and a missing bound as "open".
+      if ((c.fromYear == null || year >= c.fromYear) && (c.toYear == null || year <= c.toYear)) {
+        categorySpend += grownValue(c.monthly * 12, c.realGrowthPct, i);
+      }
+    }
+    let spend = categorySpend * spendMult + health;
     if (overlay.oneTimeCost && i === (overlay.oneTimeCostYearIdx ?? 0)) spend += overlay.oneTimeCost;
 
     const net = income + ss + propCF + proceeds - spend;

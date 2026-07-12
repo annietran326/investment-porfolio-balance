@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validate, defaultState, SCHEMA_VERSION } from "../src/model/schema.mjs";
+import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth } from "../src/model/schema.mjs";
 import { migrate, MissingVersionError, FutureVersionError } from "../src/model/migrate.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 
@@ -121,4 +121,100 @@ test("ladder purity: migrate.mjs performs no I/O (no node:fs, no Date, no clock)
   const src = readFileSync(fileURLToPath(new URL("../src/model/migrate.mjs", import.meta.url)), "utf8");
   assert.ok(!/node:fs/.test(src), "migrate.mjs must not import node:fs");
   assert.ok(!/\bDate\b/.test(src), "migrate.mjs must not read the clock");
+});
+
+// ---- v2 (household + growth + expense windows) ----
+
+const V1_FIXTURE = {
+  schemaVersion: 1,
+  profile: { currentAge: 45, endAge: 90, currentYear: 2026 },
+  portfolio: { balance: 900000, realReturnPct: 3 },
+  properties: [{ name: "Rental", rentMonthly: 3000, costsMonthly: 700, mortgageMonthly: 1500, payoffYear: 2040, saleYear: null, saleNetProceeds: null }],
+  incomes: [{ name: "W2", annual: 150000, fromYear: 2026, toYear: 2028 }],
+  spending: [{ name: "living", monthly: 4000 }],
+  social: { startAge: 67, monthly: 2600, haircutPct: 25 },
+  health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 45 },
+  endState: { mode: "bequest", amounts: { bequest: 100000, floor: 0 } },
+  work: { untilAge: 55 },
+};
+
+test("v1 → v2 migration is additive: preserves values, adds safe defaults, validates", () => {
+  const { state, fromVersion, migrated } = migrate(V1_FIXTURE);
+  assert.equal(fromVersion, 1);
+  assert.equal(migrated, true);
+  assert.equal(state.schemaVersion, 2);
+  assert.deepEqual(validate(state).errors, []);
+  // every v1 value preserved
+  assert.equal(state.portfolio.balance, 900000);
+  assert.equal(state.incomes[0].annual, 150000);
+  assert.equal(state.incomes[0].toYear, 2028);
+  assert.equal(state.spending[0].monthly, 4000);
+  assert.equal(state.endState.amounts.bequest, 100000);
+  assert.equal(state.properties[0].payoffYear, 2040);
+  assert.equal(state.properties[0].saleYear, null);
+  // new fields default to "no change"
+  assert.equal(state.spending[0].fromYear, null);
+  assert.equal(state.spending[0].toYear, null);
+  assert.equal(state.spending[0].realGrowthPct, 0);
+  assert.equal(state.incomes[0].realGrowthPct, 0);
+  assert.equal(state.properties[0].rentRealGrowthPct, 0);
+  assert.equal(state.properties[0].costsRealGrowthPct, 0);
+  assert.deepEqual(state.household, { people: [] });
+});
+
+test("migrating an already-v2 state is a no-op", () => {
+  const v2 = migrate(V1_FIXTURE).state;
+  const again = migrate(v2);
+  assert.equal(again.migrated, false);
+  assert.deepEqual(again.state, v2);
+});
+
+test("v0 → v1 → v2 chains through both rungs to the current schema", () => {
+  const { state } = migrate(V0_EXPORT, { declaredVersion: 0 });
+  assert.equal(state.schemaVersion, 2);
+  assert.deepEqual(validate(state).errors, []);
+  assert.deepEqual(state.household, { people: [] });
+  assert.equal(state.spending[0].realGrowthPct, 0);
+});
+
+test("v2 validation: spending window ordering, growth type, and extreme-growth warning", () => {
+  const s = placeholderState();
+  s.spending[1].fromYear = 2030;
+  s.spending[1].toYear = 2025;
+  assert.ok(validate(s).errors.some((e) => e.path === "spending[1].toYear"));
+
+  const s2 = placeholderState();
+  // @ts-expect-error deliberate wrong type
+  s2.spending[0].realGrowthPct = "3%";
+  assert.ok(validate(s2).errors.some((e) => e.path === "spending[0].realGrowthPct"));
+
+  const s3 = placeholderState();
+  s3.spending[0].realGrowthPct = 25; // extreme real growth → warn (likely nominal)
+  assert.ok(validate(s3).warnings.some((w) => w.path === "spending[0].realGrowthPct"));
+
+  const s4 = placeholderState();
+  s4.spending[0].toYear = 2000; // ended in the past
+  assert.ok(validate(s4).warnings.some((w) => w.path === "spending[0].toYear"));
+});
+
+test("v2 validation: household people and spouse sub-objects", () => {
+  assert.deepEqual(validate(placeholderState()).errors, []); // placeholder spouse+dependent are valid
+
+  const bad = placeholderState();
+  // @ts-expect-error deliberate wrong type on the spouse's SS
+  bad.household.people[0].social.startAge = "67";
+  assert.ok(validate(bad).errors.some((e) => e.path === "household.people[0].social.startAge"));
+
+  const twoSpouses = placeholderState();
+  twoSpouses.household.people.push({ name: "Second spouse", role: "spouse", currentAge: 40, social: newSocial(), health: newHealth() });
+  assert.ok(validate(twoSpouses).warnings.some((w) => w.path === "household.people"));
+
+  const spouseNoAge = placeholderState();
+  spouseNoAge.household.people[0].currentAge = null;
+  assert.ok(validate(spouseNoAge).warnings.some((w) => w.path === "household.people[0].currentAge"));
+
+  const badRole = placeholderState();
+  // @ts-expect-error deliberate bad role
+  badRole.household.people[1].role = "pet";
+  assert.ok(validate(badRole).errors.some((e) => e.path === "household.people[1].role"));
 });

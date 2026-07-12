@@ -171,6 +171,7 @@ input::placeholder { color: #566070; font-size: 12px; }
 
 .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.grid2x2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .field.narrow { max-width: 50%; }
 
 .issue { color: var(--bad); font-size: 11px; line-height: 1.35; margin-top: 2px; min-height: 0; }
@@ -217,6 +218,26 @@ input::placeholder { color: #566070; font-size: 12px; }
 .itemlist .item .head input { flex: 1; font-family: inherit; }
 .itemlist .item input { background: var(--panel); }
 .itemlist .item .issue:empty { display: none; }
+
+/* household people rows — spouse carries nested SS/healthcare groups */
+.people-add { display: flex; gap: 8px; margin-top: 2px; }
+.item.person .role-tag {
+  font: 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.item.person-dependent .role-tag { color: var(--dim); }
+.item.person .subhead {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  color: var(--dim);
+  margin: 6px 0 -2px;
+}
 
 /* buttons */
 button {

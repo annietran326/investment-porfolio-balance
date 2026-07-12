@@ -1,5 +1,6 @@
 // Per-property yearly cash flow. Pure — no clock, no I/O; the simulation year
 // and all overlay knobs arrive as arguments.
+import { grownValue } from "./growth.mjs";
 
 // Sale-year convention: the property is owned for half the sale year (sell
 // mid-year), so 6 months of rent/costs/mortgage book alongside the proceeds.
@@ -49,8 +50,15 @@ export function propertyCashflowYear(p, year, overlay = {}) {
     vacancyMonths = vm;
   }
 
-  const rent = p.rentMonthly * Math.max(0, ownedMonths - vacancyMonths);
-  const costs = p.costsMonthly * ownedMonths;
+  // Rent and costs grow (or lag) inflation per their real-growth rates, compounding
+  // from the current year. Mortgage P&I is fixed nominal, so it does NOT grow here
+  // (in real terms it declines — the model holds it flat, the documented conservative bias).
+  const yfs = typeof startYear === "number" ? year - startYear : 0;
+  const rentM = grownValue(p.rentMonthly, p.rentRealGrowthPct ?? 0, yfs);
+  const costM = grownValue(p.costsMonthly, p.costsRealGrowthPct ?? 0, yfs);
+
+  const rent = rentM * Math.max(0, ownedMonths - vacancyMonths);
+  const costs = costM * ownedMonths;
   const mortgage = p.payoffYear !== null && year > p.payoffYear ? 0 : p.mortgageMonthly * ownedMonths;
 
   return { cf: rent - costs - mortgage, proceeds };

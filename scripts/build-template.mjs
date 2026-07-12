@@ -12,10 +12,15 @@ import { fileURLToPath } from "node:url";
 /**
  * @typedef {Object} ColumnDef
  * @property {string} header   carries the unit — this exact text is matched on import
- * @property {string} field    state field the column maps to
+ * @property {string} field    state field the column maps to; may be dotted for
+ *   nested household fields (e.g. "social.startAge")
  * @property {"text"|"number"} type
  * @property {boolean} [nullable] empty cell → null (meaningful), NEVER 0
+ * @property {boolean} [emptyZero] empty cell → 0 (a growth rate; the default is
+ *   "grows with inflation"). Distinct from nullable, where empty means "open".
  * @property {boolean} [optional] column may be absent from an imported sheet
+ * @property {"spouse"} [role] household column that applies only to this role;
+ *   a dependent row leaves it blank
  * @property {string} [zeroError] error message when the cell holds 0 (sale year)
  *
  * @typedef {Object} SettingDef
@@ -24,9 +29,9 @@ import { fileURLToPath } from "node:url";
  * @property {string} doc   unit / notes column text
  *
  * @typedef {Object} TabDef
- * @property {"accounts"|"properties"|"income"|"spending"|"assumptions"} key
+ * @property {"accounts"|"properties"|"income"|"spending"|"household"|"assumptions"} key
  * @property {string} name  sheet name (matched case-insensitively on import)
- * @property {"single"|"list"|"settings"} kind
+ * @property {"single"|"list"|"household"|"settings"} kind
  * @property {"properties"|"incomes"|"spending"} [section] state array for list tabs
  * @property {ColumnDef[]} columns
  * @property {SettingDef[]} [settings]
@@ -64,6 +69,8 @@ export const TEMPLATE_DEF = {
           zeroError: "0 is not a year — leave the cell empty to keep forever",
         },
         { header: "Net sale proceeds $", field: "saleNetProceeds", type: "number", nullable: true },
+        { header: "Rent real growth %/yr", field: "rentRealGrowthPct", type: "number", emptyZero: true, optional: true },
+        { header: "Costs real growth %/yr", field: "costsRealGrowthPct", type: "number", emptyZero: true, optional: true },
       ],
     },
     {
@@ -76,6 +83,7 @@ export const TEMPLATE_DEF = {
         { header: "Net $/yr", field: "annual", type: "number" },
         { header: "From year", field: "fromYear", type: "number" },
         { header: "To year", field: "toYear", type: "number" },
+        { header: "Real growth %/yr", field: "realGrowthPct", type: "number", emptyZero: true, optional: true },
       ],
     },
     {
@@ -86,6 +94,27 @@ export const TEMPLATE_DEF = {
       columns: [
         { header: "Name", field: "name", type: "text" },
         { header: "$/mo (excl. property costs & healthcare)", field: "monthly", type: "number" },
+        { header: "From year (blank = from start)", field: "fromYear", type: "number", nullable: true, optional: true },
+        { header: "To year (blank = perpetual)", field: "toYear", type: "number", nullable: true, optional: true },
+        { header: "Real growth %/yr", field: "realGrowthPct", type: "number", emptyZero: true, optional: true },
+      ],
+    },
+    {
+      key: "household",
+      name: "Household",
+      kind: "household",
+      columns: [
+        { header: "Name", field: "name", type: "text" },
+        { header: "Role (spouse or dependent)", field: "role", type: "text" },
+        { header: "Current age", field: "currentAge", type: "number", nullable: true },
+        // spouse-only: a dependent row leaves these blank. Optional so a minimal
+        // Household sheet (Name/Role/Age only) still imports dependents.
+        { header: "SS start age", field: "social.startAge", type: "number", nullable: true, optional: true, role: "spouse" },
+        { header: "SS $/mo (pre-haircut)", field: "social.monthly", type: "number", nullable: true, optional: true, role: "spouse" },
+        { header: "SS haircut %", field: "social.haircutPct", type: "number", nullable: true, optional: true, role: "spouse" },
+        { header: "Health pre-65 $/yr", field: "health.preMedicareAnnual", type: "number", nullable: true, optional: true, role: "spouse" },
+        { header: "Health 65+ $/yr", field: "health.postMedicareAnnual", type: "number", nullable: true, optional: true, role: "spouse" },
+        { header: "Employer coverage until age", field: "health.employerCoverageUntilAge", type: "number", nullable: true, optional: true, role: "spouse" },
       ],
     },
     {

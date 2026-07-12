@@ -23,7 +23,7 @@
 import { inflateRawSync } from "node:zlib";
 import * as XLSX from "xlsx";
 import { TEMPLATE_DEF } from "../../scripts/build-template.mjs";
-import { END_STATE_MODES } from "../model/schema.mjs";
+import { END_STATE_MODES, PERSON_ROLES, newProperty, newIncome, newSpendingCategory, newPerson } from "../model/schema.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
 /** @typedef {import("../../scripts/build-template.mjs").TabDef} TabDef */
@@ -340,6 +340,12 @@ function parseListTab(def, sheet) {
         else row[col.field] = value;
         return;
       }
+      // A blank growth cell means "grows with inflation" → 0 (distinct from a
+      // blank nullable window cell, which stays null = open).
+      if (col.emptyZero && isEmptyCell(cell)) {
+        row[col.field] = 0;
+        return;
+      }
       const { value, error } = readNumber(cell, col.nullable === true);
       if (error !== undefined) {
         errors.push({ cell: cellAddr(def.name, r, c), message: error });
@@ -444,6 +450,87 @@ function parseSettingsTab(def, sheet) {
 }
 
 /**
+ * Parse the Household tab into Person rows. Name + Role are required; role must
+ * be one of PERSON_ROLES (else a cell-addressed error). A spouse row builds
+ * newPerson("spouse") — carrying default social/health — then overrides any
+ * sub-field a cell supplies; a blank spouse cell keeps the factory default. A
+ * dependent builds newPerson("dependent") and ignores the spouse-only columns.
+ * @param {TabDef} def
+ * @param {import("xlsx").WorkSheet} sheet
+ * @returns {ParsedTab} rows are Person objects
+ */
+function parseHouseholdTab(def, sheet) {
+  /** @type {CellIssue[]} */
+  const errors = [];
+  /** @type {import("../model/schema.mjs").Person[]} */
+  const rows = [];
+  const data = denseRows(sheet);
+  const cols = matchColumns(def, data[0] ?? [], errors);
+  if (errors.length) return { rows, errors };
+
+  const idx = Object.fromEntries(def.columns.map((c, i) => [c.field, cols[i]]));
+
+  for (let r = 1; r < data.length; r++) {
+    const rowCells = data[r] ?? [];
+    if (rowIsEmpty(rowCells, cols)) continue;
+
+    const nameCol = idx.name;
+    const { value: name, error: nameErr } = readText(rowCells[nameCol]);
+    if (nameErr !== undefined) {
+      errors.push({ cell: cellAddr(def.name, r, nameCol), message: nameErr });
+      continue;
+    }
+    if (!name) {
+      errors.push({ cell: cellAddr(def.name, r, nameCol), message: "name required" });
+      continue;
+    }
+
+    const roleCol = idx.role;
+    const roleRaw = (readText(rowCells[roleCol]).value ?? "").toLowerCase();
+    if (!(/** @type {string[]} */ (PERSON_ROLES).includes(roleRaw))) {
+      errors.push({ cell: cellAddr(def.name, r, roleCol), message: `role must be one of ${PERSON_ROLES.join(", ")}` });
+      continue;
+    }
+    const role = /** @type {import("../model/schema.mjs").PersonRole} */ (roleRaw);
+
+    // currentAge: nullable numeric.
+    const ageCol = idx.currentAge;
+    const { value: currentAge, error: ageErr } = readNumber(rowCells[ageCol], true);
+    if (ageErr !== undefined) {
+      errors.push({ cell: cellAddr(def.name, r, ageCol), message: ageErr });
+      continue;
+    }
+
+    const person = newPerson(role, { name, currentAge: currentAge ?? null });
+
+    if (role === "spouse") {
+      // Fill social/health from the spouse-only cells; a blank cell keeps the
+      // factory default. Any non-empty non-numeric spouse cell is an error.
+      let bad = false;
+      for (const col of def.columns) {
+        if (col.role !== "spouse") continue;
+        const c = idx[col.field];
+        if (c < 0) continue; // optional column absent from the sheet
+        const cell = rowCells[c];
+        if (isEmptyCell(cell)) continue; // blank → keep factory default
+        const { value, error } = readNumber(cell, false);
+        if (error !== undefined || typeof value !== "number") {
+          errors.push({ cell: cellAddr(def.name, r, c), message: error ?? "expected a number" });
+          bad = true;
+          continue;
+        }
+        const [section, key] = col.field.split(".");
+        /** @type {any} */ (person)[section][key] = value;
+      }
+      if (bad) continue;
+    }
+
+    rows.push(person);
+  }
+  return { rows, errors };
+}
+
+/**
  * Bounds-check, then parse the workbook against TEMPLATE_DEF. Throws
  * TemplateFileError for anything pre-tab-level (bad zip, bounds, macro,
  * unreadable workbook); tab/cell problems come back as per-tab errors.
@@ -483,6 +570,7 @@ export function parseTemplate(buffer) {
     let parsed;
     if (def.kind === "single") parsed = parseSingleTab(def, sheet);
     else if (def.kind === "settings") parsed = parseSettingsTab(def, sheet);
+    else if (def.kind === "household") parsed = parseHouseholdTab(def, sheet);
     else parsed = parseListTab(def, sheet);
 
     // sheetRows truncation guard: refuse to silently ignore rows we never read.
@@ -554,6 +642,28 @@ function diffList(oldRows, newRows, fields) {
   return { adds, removes: pool.filter((p) => !p.used).length, changes };
 }
 
+/**
+ * Name-keyed people diff. Nested social/health make field-wise Object.is
+ * awkward, so a matched person counts as changed when its whole shape differs.
+ * @param {import("../model/schema.mjs").Person[]} oldPeople
+ * @param {import("../model/schema.mjs").Person[]} newPeople
+ */
+function diffPeople(oldPeople, newPeople) {
+  const pool = oldPeople.map((row) => ({ used: false, row }));
+  let adds = 0;
+  let changes = 0;
+  for (const n of newPeople) {
+    const match = pool.find((p) => !p.used && p.row.name === n.name);
+    if (!match) {
+      adds += 1;
+      continue;
+    }
+    match.used = true;
+    if (JSON.stringify(match.row) !== JSON.stringify(n)) changes += 1;
+  }
+  return { adds, removes: pool.filter((p) => !p.used).length, changes };
+}
+
 /** @param {RunwayState} state */
 function monthlySpend(state) {
   return state.spending.reduce((sum, c) => sum + (typeof c.monthly === "number" ? c.monthly : 0), 0);
@@ -590,6 +700,9 @@ export function previewTemplate(state, parsed) {
         ({ key, value }) => !Object.is(getAssumption(state, key), value)
       ).length;
       tabs.push({ ...base, status: "ready", changes, errors: [] });
+    } else if (def.kind === "household") {
+      const counts = diffPeople(state.household.people, t.rows);
+      tabs.push({ ...base, status: "ready", ...counts, errors: [] });
     } else {
       const section = /** @type {"properties"|"incomes"|"spending"} */ (def.section);
       const counts = diffList(state[section], t.rows, def.columns.map((c) => c.field));
@@ -632,12 +745,29 @@ export function applyTabs(state, parsed, tabKeys) {
       for (const { key: path, value } of /** @type {{key: string, value: number|string}[]} */ (t.rows)) {
         setAssumption(next, path, value);
       }
+    } else if (def.kind === "household") {
+      // Rows are already Person objects (the household parser used newPerson).
+      next.household.people = structuredClone(t.rows);
     } else {
+      // Normalize each row through its factory so any field an optional column
+      // omitted lands with its correct v2 default (never a partial v1 shape).
       const section = /** @type {"properties"|"incomes"|"spending"} */ (def.section);
-      /** @type {any} */ (next)[section] = structuredClone(t.rows);
+      /** @type {any} */ (next)[section] = t.rows.map((row) => makeRow(section, row));
     }
   }
   return next;
+}
+
+/**
+ * Wrap a parsed list row in its section's factory so the result is a complete,
+ * valid v2 item — optional-column omissions fall back to schema defaults.
+ * @param {"properties"|"incomes"|"spending"} section
+ * @param {any} row
+ */
+function makeRow(section, row) {
+  if (section === "properties") return newProperty(row);
+  if (section === "incomes") return newIncome(row);
+  return newSpendingCategory(row);
 }
 
 // ---------------------------------------------------------------------------
@@ -667,6 +797,20 @@ function sheetFromAoa(aoa) {
 }
 
 /**
+ * One Household cell for a person. Spouse-only columns are blank (null) for a
+ * dependent; dotted fields read the nested social/health value. Text cells
+ * (the name) are guarded downstream by sheetFromAoa.
+ * @param {import("../model/schema.mjs").Person} person
+ * @param {ColumnDef} col
+ * @returns {string|number|null}
+ */
+function personCell(person, col) {
+  if (col.role === "spouse" && person.role !== "spouse") return null;
+  const v = col.field.split(".").reduce((o, k) => /** @type {any} */ (o)?.[k], /** @type {any} */ (person));
+  return v ?? null;
+}
+
+/**
  * Fill the template shape with a state. Used by GET /api/export/template and
  * by scripts/build-template.mjs (with defaultState) to write the blank template.
  * @param {RunwayState} state
@@ -685,6 +829,10 @@ export function buildTemplateWorkbook(state) {
         aoa.push([s.key, v, s.doc]);
       }
       if (def.note) aoa.push([def.note]);
+    } else if (def.kind === "household") {
+      for (const person of state.household.people) {
+        aoa.push(def.columns.map((c) => personCell(person, c)));
+      }
     } else {
       const section = /** @type {"properties"|"incomes"|"spending"} */ (def.section);
       for (const row of /** @type {any[]} */ (state[section])) {

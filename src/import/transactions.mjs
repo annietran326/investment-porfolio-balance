@@ -28,6 +28,7 @@
 //     user can untick the flag in the UI.
 import { createHash } from "node:crypto";
 import Papa from "papaparse";
+import { newSpendingCategory } from "../model/schema.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
 
@@ -545,9 +546,14 @@ export function deriveCategories(storedRows, { now }) {
  * @param {string} mode
  * @returns {RunwayState}
  */
+// Only name + monthly are read; a DerivedCategory carries extra fields that the
+// factory ignores. The result is always a valid v2 SpendingCategory array.
 export function applyDerived(state, categories, mode) {
   const next = structuredClone(state);
-  const cats = categories.map((c) => ({ name: c.name, monthly: c.monthly }));
+  // Derived categories are v2 spending lines: perpetual (fromYear/toYear null)
+  // and inflation-tracking (realGrowthPct 0) by default. The factory fills the
+  // new fields so nothing is missed and the result validates as v2.
+  const cats = categories.map((c) => newSpendingCategory({ name: c.name, monthly: c.monthly }));
   if (mode === "replace-all") {
     next.spending = cats;
     return next;

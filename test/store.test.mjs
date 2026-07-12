@@ -127,7 +127,7 @@ test("first save of a date: current + one snapshot + one trend row; 20 same-day 
   assert.equal(row.source, "edit");
   assert.equal(row.rev, 1);
   assert.equal(row.totalBalance, 1_000_000);
-  assert.equal(row.monthlySpend, 3500 + 2500 + 1200);
+  assert.equal(row.monthlySpend, 3500 + 2500 + 1200 + 1500); // placeholder incl. active dependent line
   assert.ok(["met", "value", "unreachable"].includes(row.requiredBase.kind));
   assert.ok(["met", "value", "unreachable"].includes(row.requiredWorst.kind));
   assert.ok(!("rev" in current), "rev is server-owned, never inside current.json");

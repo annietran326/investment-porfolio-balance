@@ -352,7 +352,12 @@ export function createStore(dataDir, opts = {}) {
       source,
       rev,
       totalBalance: state.portfolio.balance,
-      monthlySpend: state.spending.reduce((sum, c) => sum + c.monthly, 0),
+      // Current-year monthly spend: only categories active now (respects windows).
+      monthlySpend: state.spending.reduce((sum, c) => {
+        const cy = state.profile.currentYear;
+        const active = (c.fromYear === null || c.fromYear === undefined || cy >= c.fromYear) && (c.toYear === null || c.toYear === undefined || cy <= c.toYear);
+        return active ? sum + c.monthly : sum;
+      }, 0),
       requiredBase: encodeRequired(requiredIncome(state, base?.overlay ?? {})),
       requiredWorst: encodeRequired(requiredIncome(state, worst?.overlay ?? {})),
     };

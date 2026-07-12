@@ -3,10 +3,18 @@
 //   - All amounts are in TODAY'S dollars. Returns are real (after inflation and tax).
 //   - `saleYear: null` means "keep this property forever". Empty is meaningful;
 //     0 is an error, never coerced. Import parsers must preserve this distinction.
+//   - `realGrowthPct` on a line is REAL growth vs inflation: 0 = grows with
+//     inflation (holds constant in today's dollars, the default), +1.5 = outpaces
+//     inflation by 1.5%/yr, −2 = lags it. Compounds from `profile.currentYear`.
+//   - Spending lines carry an optional [fromYear, toYear] window (null = open):
+//     perpetual costs leave both blank; time-boxed costs (a dependent, a loan) end.
+//   - The household is self (profile/social/health) plus `household.people` for a
+//     spouse and dependents. A spouse can carry their own Social Security and
+//     healthcare; dependents mainly drive time-boxed spending. No death modeling.
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites — code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * @typedef {Object} Profile
@@ -26,16 +34,22 @@ export const SCHEMA_VERSION = 1;
  * @property {number|null} payoffYear mortgage ends after this year; null = never (interest-only/none)
  * @property {number|null} saleYear   null = keep forever
  * @property {number|null} saleNetProceeds net cash after payoff, costs, taxes
+ * @property {number} rentRealGrowthPct  real growth vs inflation on rent (default 0)
+ * @property {number} costsRealGrowthPct real growth vs inflation on costs (default 0)
  *
  * @typedef {Object} Income
  * @property {string} name
  * @property {number} annual   net of tax, today's $
  * @property {number} fromYear
  * @property {number} toYear   inclusive
+ * @property {number} realGrowthPct real growth vs inflation (default 0)
  *
  * @typedef {Object} SpendingCategory
  * @property {string} name
  * @property {number} monthly  excl. property costs and healthcare (modeled separately)
+ * @property {number|null} fromYear first year this cost applies; null = from the start
+ * @property {number|null} toYear   last year this cost applies; null = perpetual
+ * @property {number} realGrowthPct real growth vs inflation (default 0)
  *
  * @typedef {Object} Social
  * @property {number} startAge
@@ -46,6 +60,17 @@ export const SCHEMA_VERSION = 1;
  * @property {number} preMedicareAnnual  pre-65 bridge, applies after employer coverage ends
  * @property {number} postMedicareAnnual 65+
  * @property {number} employerCoverageUntilAge
+ *
+ * @typedef {"spouse"|"dependent"} PersonRole
+ * @typedef {Object} Person
+ * @property {string} name
+ * @property {PersonRole} role
+ * @property {number|null} currentAge  needed for a spouse's SS/healthcare timing
+ * @property {Social} [social]  a spouse's own Social Security (absent = none)
+ * @property {Health} [health]  a spouse's own healthcare load (absent = none)
+ *
+ * @typedef {Object} Household
+ * @property {Person[]} people  spouse + dependents (self lives in profile/social/health)
  *
  * @typedef {"zero"|"bequest"|"floor"} EndStateMode
  * @typedef {Object} EndState
@@ -64,9 +89,51 @@ export const SCHEMA_VERSION = 1;
  * @property {SpendingCategory[]} spending
  * @property {Social} social
  * @property {Health} health
+ * @property {Household} household
  * @property {EndState} endState
  * @property {Work} work
  */
+
+// A real growth rate this far from 0 is almost certainly a nominal figure typed
+// by mistake (e.g. 25 instead of ~2 real) — warn, don't reject.
+const GROWTH_SANITY_ABS = 15;
+
+// ---- Factories: the single source of per-item defaults (UI + migration share) ----
+
+/** @param {Partial<SpendingCategory>} [o] @returns {SpendingCategory} */
+export function newSpendingCategory(o = {}) {
+  return { name: o.name ?? "", monthly: o.monthly ?? 0, fromYear: o.fromYear ?? null, toYear: o.toYear ?? null, realGrowthPct: o.realGrowthPct ?? 0 };
+}
+/** @param {Partial<Income>} [o] @returns {Income} */
+export function newIncome(o = {}) {
+  return { name: o.name ?? "", annual: o.annual ?? 0, fromYear: o.fromYear ?? 0, toYear: o.toYear ?? 0, realGrowthPct: o.realGrowthPct ?? 0 };
+}
+/** @param {Partial<Property>} [o] @returns {Property} */
+export function newProperty(o = {}) {
+  return {
+    name: o.name ?? "", rentMonthly: o.rentMonthly ?? 0, costsMonthly: o.costsMonthly ?? 0, mortgageMonthly: o.mortgageMonthly ?? 0,
+    payoffYear: o.payoffYear ?? null, saleYear: o.saleYear ?? null, saleNetProceeds: o.saleNetProceeds ?? null,
+    rentRealGrowthPct: o.rentRealGrowthPct ?? 0, costsRealGrowthPct: o.costsRealGrowthPct ?? 0,
+  };
+}
+/** @returns {Social} */
+export function newSocial() {
+  return { startAge: 67, monthly: 0, haircutPct: 25 };
+}
+/** @returns {Health} */
+export function newHealth() {
+  return { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 };
+}
+/** @param {PersonRole} role @param {Partial<Person>} [o] @returns {Person} */
+export function newPerson(role, o = {}) {
+  /** @type {Person} */
+  const p = { name: o.name ?? (role === "spouse" ? "Spouse" : "Dependent"), role, currentAge: o.currentAge ?? null };
+  if (role === "spouse") {
+    p.social = o.social ?? newSocial();
+    p.health = o.health ?? newHealth();
+  }
+  return p;
+}
 
 // Research-grounded 2026 defaults (all user-editable; vintage documented in README):
 // SS haircut 25% (Trustees Report: 22–28% cut at 2032), pre-65 healthcare $16K/yr
@@ -82,12 +149,14 @@ export function defaultState() {
     spending: [],
     social: { startAge: 67, monthly: 0, haircutPct: 25 },
     health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 40 },
+    household: { people: [] },
     endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },
     work: { untilAge: 50 },
   };
 }
 
 export const END_STATE_MODES = /** @type {EndStateMode[]} */ (["zero", "bequest", "floor"]);
+export const PERSON_ROLES = /** @type {PersonRole[]} */ (["spouse", "dependent"]);
 export const PLAN_TO_AGE_PRESETS = [90, 95, 100];
 
 /**
@@ -121,6 +190,35 @@ function requireNumberOrNull(errors, v, path) {
   return requireNumber(errors, v, path);
 }
 
+/** @param {Issue[]} errors @param {Issue[]} warnings @param {any} social @param {string} path */
+function validateSocial(errors, warnings, social, path) {
+  if (!social || typeof social !== "object") {
+    add(errors, path, "missing section");
+    return;
+  }
+  requireNumber(errors, social.startAge, `${path}.startAge`);
+  requireNumber(errors, social.monthly, `${path}.monthly`);
+  requireNumber(errors, social.haircutPct, `${path}.haircutPct`);
+}
+
+/** @param {Issue[]} errors @param {any} health @param {string} path */
+function validateHealth(errors, health, path) {
+  if (!health || typeof health !== "object") {
+    add(errors, path, "missing section");
+    return;
+  }
+  requireNumber(errors, health.preMedicareAnnual, `${path}.preMedicareAnnual`);
+  requireNumber(errors, health.postMedicareAnnual, `${path}.postMedicareAnnual`);
+  requireNumber(errors, health.employerCoverageUntilAge, `${path}.employerCoverageUntilAge`);
+}
+
+/** @param {Issue[]} warnings @param {unknown} g @param {string} path */
+function warnIfNominalGrowth(warnings, g, path) {
+  if (typeof g === "number" && Math.abs(g) > GROWTH_SANITY_ABS) {
+    add(warnings, path, `real growth of ${g}% is extreme — did you mean a nominal rate? this is growth ABOVE inflation`);
+  }
+}
+
 /**
  * Validate a candidate state. Errors reject the state; warnings surface in the
  * UI but the state still simulates.
@@ -139,13 +237,17 @@ export function validate(s) {
     add(errors, "schemaVersion", `expected ${SCHEMA_VERSION}, got ${s.schemaVersion}`);
   }
 
-  for (const key of /** @type {const} */ (["profile", "portfolio", "social", "health", "endState", "work"])) {
+  for (const key of /** @type {const} */ (["profile", "portfolio", "social", "health", "household", "endState", "work"])) {
     if (!s[key] || typeof s[key] !== "object") add(errors, key, "missing section");
   }
   for (const key of /** @type {const} */ (["properties", "incomes", "spending"])) {
     if (!Array.isArray(s[key])) add(errors, key, "must be an array");
   }
   if (errors.length) return { errors, warnings };
+  if (!Array.isArray(s.household.people)) {
+    add(errors, "household.people", "must be an array");
+    return { errors, warnings };
+  }
 
   const { currentYear } = s.profile;
   requireNumber(errors, s.profile.currentAge, "profile.currentAge");
@@ -167,6 +269,10 @@ export function validate(s) {
     requireNumberOrNull(errors, p.payoffYear, `${at}.payoffYear`);
     requireNumberOrNull(errors, p.saleYear, `${at}.saleYear`);
     requireNumberOrNull(errors, p.saleNetProceeds, `${at}.saleNetProceeds`);
+    requireNumber(errors, p.rentRealGrowthPct, `${at}.rentRealGrowthPct`);
+    requireNumber(errors, p.costsRealGrowthPct, `${at}.costsRealGrowthPct`);
+    warnIfNominalGrowth(warnings, p.rentRealGrowthPct, `${at}.rentRealGrowthPct`);
+    warnIfNominalGrowth(warnings, p.costsRealGrowthPct, `${at}.costsRealGrowthPct`);
     if (p.saleYear === 0) add(errors, `${at}.saleYear`, "0 is not a year — leave empty (null) to keep forever");
     if (typeof p.saleYear === "number" && p.saleYear !== 0) {
       if (p.saleYear < currentYear) {
@@ -187,6 +293,8 @@ export function validate(s) {
     requireNumber(errors, inc.annual, `${at}.annual`);
     requireNumber(errors, inc.fromYear, `${at}.fromYear`);
     requireNumber(errors, inc.toYear, `${at}.toYear`);
+    requireNumber(errors, inc.realGrowthPct, `${at}.realGrowthPct`);
+    warnIfNominalGrowth(warnings, inc.realGrowthPct, `${at}.realGrowthPct`);
     if (typeof inc.fromYear === "number" && typeof inc.toYear === "number" && inc.toYear < inc.fromYear) {
       add(errors, `${at}.toYear`, `to-year ${inc.toYear} is before from-year ${inc.fromYear}`);
     }
@@ -196,15 +304,35 @@ export function validate(s) {
     const at = `spending[${i}]`;
     if (typeof c.name !== "string" || !c.name.trim()) add(errors, `${at}.name`, "name required");
     requireNumber(errors, c.monthly, `${at}.monthly`);
+    requireNumberOrNull(errors, c.fromYear, `${at}.fromYear`);
+    requireNumberOrNull(errors, c.toYear, `${at}.toYear`);
+    requireNumber(errors, c.realGrowthPct, `${at}.realGrowthPct`);
+    warnIfNominalGrowth(warnings, c.realGrowthPct, `${at}.realGrowthPct`);
+    if (typeof c.fromYear === "number" && typeof c.toYear === "number" && c.toYear < c.fromYear) {
+      add(errors, `${at}.toYear`, `to-year ${c.toYear} is before from-year ${c.fromYear}`);
+    }
+    if (typeof c.toYear === "number" && c.toYear < currentYear) {
+      add(warnings, `${at}.toYear`, `end year ${c.toYear} is in the past — this cost will never apply`);
+    }
   });
 
-  requireNumber(errors, s.social.startAge, "social.startAge");
-  requireNumber(errors, s.social.monthly, "social.monthly");
-  requireNumber(errors, s.social.haircutPct, "social.haircutPct");
+  validateSocial(errors, warnings, s.social, "social");
+  validateHealth(errors, s.health, "health");
 
-  requireNumber(errors, s.health.preMedicareAnnual, "health.preMedicareAnnual");
-  requireNumber(errors, s.health.postMedicareAnnual, "health.postMedicareAnnual");
-  requireNumber(errors, s.health.employerCoverageUntilAge, "health.employerCoverageUntilAge");
+  let spouseCount = 0;
+  s.household.people.forEach((person, i) => {
+    const at = `household.people[${i}]`;
+    if (typeof person.name !== "string" || !person.name.trim()) add(errors, `${at}.name`, "name required");
+    if (!PERSON_ROLES.includes(person.role)) add(errors, `${at}.role`, `must be one of ${PERSON_ROLES.join(", ")}`);
+    requireNumberOrNull(errors, person.currentAge, `${at}.currentAge`);
+    if (person.role === "spouse") {
+      spouseCount++;
+      if (person.currentAge === null) add(warnings, `${at}.currentAge`, "spouse age is needed to time their Social Security and healthcare");
+      if (person.social !== undefined) validateSocial(errors, warnings, person.social, `${at}.social`);
+      if (person.health !== undefined) validateHealth(errors, person.health, `${at}.health`);
+    }
+  });
+  if (spouseCount > 1) add(warnings, "household.people", "more than one spouse is unusual — all are modeled");
 
   if (!END_STATE_MODES.includes(s.endState.mode)) {
     add(errors, "endState.mode", `must be one of ${END_STATE_MODES.join(", ")}`);

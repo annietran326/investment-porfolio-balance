@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState } from "./schema.mjs";
+import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty } from "./schema.mjs";
 
 export class MissingVersionError extends Error {
   constructor() {
@@ -33,8 +33,9 @@ export class FutureVersionError extends Error {
  *   - schemaVersion stamp
  *   - endState {mode, amount} → {mode, amounts: {bequest, floor}}
  *   - explicit defaults for anything v0 left undefined (v0 had silent `||` fallbacks)
+ * Returns an intermediate v1-shaped state; the ladder then runs migrateV1 on it.
  * @param {any} v0
- * @returns {import("./schema.mjs").RunwayState}
+ * @returns {any}
  */
 function migrateV0(v0) {
   const d = defaultState();
@@ -94,9 +95,29 @@ function migrateV0(v0) {
   };
 }
 
+/**
+ * v1 → v2. Purely additive — every v1 field is preserved; the new fields default
+ * to "no change" (growth 0 = grows with inflation, open spending windows, empty
+ * household), so a migrated v1 state produces IDENTICAL results until the user
+ * touches the new fields. Factories are the single source of the defaults.
+ * @param {any} v1
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV1(v1) {
+  return {
+    ...v1,
+    schemaVersion: 2,
+    properties: arr(v1.properties).map((p) => newProperty(p)),
+    incomes: arr(v1.incomes).map((inc) => newIncome(inc)),
+    spending: arr(v1.spending).map((c) => newSpendingCategory(c)),
+    household: { people: [] },
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
+  1: migrateV1,
 };
 
 /**

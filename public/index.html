@@ -71,6 +71,16 @@
   </section>
 
   <section class="card">
+    <h2>Household <span class="hint">spouse &amp; dependents — self is in Profile</span></h2>
+    <div class="itemlist" id="peopleList"></div>
+    <div class="people-add">
+      <button id="addSpouse" type="button" class="small">+ spouse</button>
+      <button id="addDependent" type="button" class="small">+ dependent</button>
+    </div>
+    <div class="footnote">Self is above (Profile / Social Security / Healthcare). Add a spouse to fold in their income (add income lines), their Social Security, and their healthcare. Dependents mainly drive time-boxed expenses — set an end year on the relevant spending lines.</div>
+  </section>
+
+  <section class="card">
     <h2>Portfolio <span class="hint">liquid / investable</span></h2>
     <div class="field"><label for="f-balance">Balance ($)</label><input id="f-balance" type="number" data-path="portfolio.balance"><div class="issue"></div></div>
     <div class="field">
@@ -100,6 +110,7 @@
     <h2>Spending <span class="hint">$/mo — excl. property costs &amp; healthcare</span></h2>
     <div class="itemlist" id="spendList"></div>
     <button id="addSpend" type="button" class="small">+ category</button>
+    <div class="footnote">Leave growth blank to grow with inflation; set start/end years for time-boxed costs (a dependent, a loan).</div>
   </section>
 
   <section class="card">
@@ -216,6 +227,8 @@
       <div class="field"><label>payoff yr</label><input type="number" data-key="payoffYear" placeholder="never"><div class="issue"></div></div>
       <div class="field"><label>sale yr</label><input type="number" data-key="saleYear" placeholder="empty = keep forever"><div class="issue"></div></div>
       <div class="field"><label>net proceeds $</label><input type="number" data-key="saleNetProceeds"><div class="issue"></div></div>
+      <div class="field"><label>rent real growth %/yr</label><input type="number" step="0.1" data-key="rentRealGrowthPct" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>costs real growth %/yr</label><input type="number" step="0.1" data-key="costsRealGrowthPct" placeholder="0"><div class="issue"></div></div>
     </div>
   </div>
 </template>
@@ -227,11 +240,13 @@
       <button type="button" class="small danger remove" aria-label="remove income stream">✕</button>
     </div>
     <div class="issue"></div>
-    <div class="grid3">
+    <div class="grid2x2">
       <div class="field"><label>net $/yr</label><input type="number" data-key="annual"><div class="issue"></div></div>
       <div class="field"><label>from yr</label><input type="number" data-key="fromYear"><div class="issue"></div></div>
       <div class="field"><label>to yr</label><input type="number" data-key="toYear"><div class="issue"></div></div>
+      <div class="field"><label>real growth %/yr</label><input type="number" step="0.1" data-key="realGrowthPct" placeholder="0"><div class="issue"></div></div>
     </div>
+    <div class="footnote">Real growth %/yr is vs inflation — blank/0 = grows with inflation (holds constant in today's $).</div>
   </div>
 </template>
 
@@ -242,7 +257,49 @@
       <button type="button" class="small danger remove" aria-label="remove spending category">✕</button>
     </div>
     <div class="issue"></div>
-    <div class="field narrow"><label>$/mo</label><input type="number" data-key="monthly"><div class="issue"></div></div>
+    <div class="grid2x2">
+      <div class="field"><label>$/mo</label><input type="number" data-key="monthly"><div class="issue"></div></div>
+      <div class="field"><label>from yr</label><input type="number" data-key="fromYear" placeholder="from the start"><div class="issue"></div></div>
+      <div class="field"><label>to yr</label><input type="number" data-key="toYear" placeholder="perpetual"><div class="issue"></div></div>
+      <div class="field"><label>real growth %/yr</label><input type="number" step="0.1" data-key="realGrowthPct" placeholder="0"><div class="issue"></div></div>
+    </div>
+    <div class="footnote">Real growth %/yr is vs inflation — blank/0 = grows with inflation.</div>
+  </div>
+</template>
+
+<template id="tpl-person-spouse">
+  <div class="item person person-spouse">
+    <div class="head">
+      <span class="role-tag">spouse</span>
+      <input type="text" data-field="name" placeholder="name" aria-label="spouse name">
+      <button type="button" class="small danger remove" aria-label="remove spouse">✕</button>
+    </div>
+    <div class="issue"></div>
+    <div class="field narrow"><label>current age</label><input type="number" data-field="currentAge" placeholder="age"><div class="issue"></div></div>
+    <div class="subhead">Social Security</div>
+    <div class="grid3">
+      <div class="field"><label>SS start age</label><input type="number" data-field="social.startAge"><div class="issue"></div></div>
+      <div class="field"><label>SS $/mo (today's)</label><input type="number" data-field="social.monthly"><div class="issue"></div></div>
+      <div class="field"><label>SS haircut %</label><input type="number" data-field="social.haircutPct"><div class="issue"></div></div>
+    </div>
+    <div class="subhead">Healthcare</div>
+    <div class="grid3">
+      <div class="field"><label>$/yr pre-65</label><input type="number" data-field="health.preMedicareAnnual"><div class="issue"></div></div>
+      <div class="field"><label>$/yr 65+</label><input type="number" data-field="health.postMedicareAnnual"><div class="issue"></div></div>
+      <div class="field"><label>employer coverage until age</label><input type="number" data-field="health.employerCoverageUntilAge"><div class="issue"></div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-person-dependent">
+  <div class="item person person-dependent">
+    <div class="head">
+      <span class="role-tag">dependent</span>
+      <input type="text" data-field="name" placeholder="name" aria-label="dependent name">
+      <button type="button" class="small danger remove" aria-label="remove dependent">✕</button>
+    </div>
+    <div class="issue"></div>
+    <div class="field narrow"><label>current age <span class="dim">(optional)</span></label><input type="number" data-field="currentAge" placeholder="age"><div class="issue"></div></div>
   </div>
 </template>
 
