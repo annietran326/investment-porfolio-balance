@@ -434,3 +434,10 @@ button.linklike {
 .import-blocked { color: var(--bad); border-color: #7f1d1d; }
 .import-errors { flex-basis: 100%; }
 .import-headline { font-size: 12px; color: var(--dim); }
+
+/* "How the math works" explainer */
+.math-doc { max-width: 60ch; font-size: 14px; line-height: 1.55; }
+.math-doc p { margin: 0 0 10px; }
+.math-doc ul { margin: 0 0 10px; padding-left: 18px; }
+.math-doc li { margin: 0 0 6px; }
+.math-doc strong { color: var(--text, #e8eef2); }

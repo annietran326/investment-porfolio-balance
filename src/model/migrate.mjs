@@ -114,10 +114,28 @@ function migrateV1(v1) {
   };
 }
 
+/**
+ * v2 → v3. Additive: each household person gains a one-time lump-sum cost
+ * (a dependent's big future expense) defaulting to none, so a migrated v2 state
+ * produces identical results until the user sets one.
+ * @param {any} v2
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV2(v2) {
+  return {
+    ...v2,
+    schemaVersion: 3,
+    household: {
+      people: arr(v2.household?.people).map((p) => ({ ...p, lumpSum: p.lumpSum ?? 0, lumpSumYear: p.lumpSumYear ?? null })),
+    },
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
   1: migrateV1,
+  2: migrateV2,
 };
 
 /**

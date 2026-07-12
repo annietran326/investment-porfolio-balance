@@ -281,12 +281,28 @@ test("a future-starting spending line with growth compounds from the current yea
   assert.ok(Math.abs(/** @type {number} */ (y2031) - 12000 * 1.03 ** 5) < 1e-6);
 });
 
-test("dependents (no age/SS/health) have no direct engine effect", () => {
+test("a dependent with no lump sum has no direct engine effect", () => {
   const a = state();
   a.household = { people: [] };
   const b = structuredClone(a);
-  b.household = { people: [{ name: "Kid", role: "dependent", currentAge: 8 }] };
+  b.household = { people: [{ name: "Kid", role: "dependent", currentAge: 8, lumpSum: 0, lumpSumYear: null }] };
   assert.deepEqual(simulate(a).rows, simulate(b).rows);
+});
+
+test("a dependent lump sum lands once, in its year only", () => {
+  const s = state();
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [];
+  s.social.monthly = 0;
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
+  s.household = { people: [{ name: "Kid", role: "dependent", currentAge: null, lumpSum: 150_000, lumpSumYear: 2044 }] };
+  const sim = simulate(s);
+  assert.equal(sim.rows.find((r) => r.year === 2043)?.spend, 0);
+  assert.equal(sim.rows.find((r) => r.year === 2044)?.spend, 150_000);
+  assert.equal(sim.rows.find((r) => r.year === 2045)?.spend, 0);
+  // the spending shock scenario does NOT scale a lump sum (it's a discrete event)
+  assert.equal(simulate(s, { spendMult: 1.2 }).rows.find((r) => r.year === 2044)?.spend, 150_000);
 });
 
 test("engine purity: no node imports, no Date, no clock anywhere in src/engine", () => {

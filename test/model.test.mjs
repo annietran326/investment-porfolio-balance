@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth } from "../src/model/schema.mjs";
+import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, reanchorYears } from "../src/model/schema.mjs";
 import { migrate, MissingVersionError, FutureVersionError } from "../src/model/migrate.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 
@@ -138,11 +138,11 @@ const V1_FIXTURE = {
   work: { untilAge: 55 },
 };
 
-test("v1 → v2 migration is additive: preserves values, adds safe defaults, validates", () => {
+test("v1 → current migration is additive: preserves values, adds safe defaults, validates", () => {
   const { state, fromVersion, migrated } = migrate(V1_FIXTURE);
   assert.equal(fromVersion, 1);
   assert.equal(migrated, true);
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.deepEqual(validate(state).errors, []);
   // every v1 value preserved
   assert.equal(state.portfolio.balance, 900000);
@@ -162,19 +162,56 @@ test("v1 → v2 migration is additive: preserves values, adds safe defaults, val
   assert.deepEqual(state.household, { people: [] });
 });
 
-test("migrating an already-v2 state is a no-op", () => {
-  const v2 = migrate(V1_FIXTURE).state;
-  const again = migrate(v2);
+test("migrating an already-current state is a no-op", () => {
+  const cur = migrate(V1_FIXTURE).state;
+  const again = migrate(cur);
   assert.equal(again.migrated, false);
-  assert.deepEqual(again.state, v2);
+  assert.deepEqual(again.state, cur);
 });
 
-test("v0 → v1 → v2 chains through both rungs to the current schema", () => {
+test("v0 → … → current chains through every rung", () => {
   const { state } = migrate(V0_EXPORT, { declaredVersion: 0 });
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.deepEqual(validate(state).errors, []);
   assert.deepEqual(state.household, { people: [] });
   assert.equal(state.spending[0].realGrowthPct, 0);
+});
+
+test("v2 → v3 migration adds dependent lump-sum fields, preserving any that exist", () => {
+  const v2 = {
+    ...migrate(V1_FIXTURE).state,
+    schemaVersion: 2,
+    household: {
+      people: [
+        { name: "Spouse", role: "spouse", currentAge: 40, social: { startAge: 67, monthly: 2000, haircutPct: 25 }, health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 } },
+        { name: "Kid", role: "dependent", currentAge: 8 },
+      ],
+    },
+  };
+  const { state, migrated } = migrate(v2);
+  assert.equal(migrated, true);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(validate(state).errors, []);
+  for (const person of state.household.people) {
+    assert.equal(person.lumpSum, 0);
+    assert.equal(person.lumpSumYear, null);
+  }
+});
+
+test("reanchorYears shifts every year field by the delta and preserves nulls", () => {
+  const s = placeholderState(); // BASE_YEAR 2026
+  const moved = reanchorYears(s, 2030); // +4
+  assert.equal(moved.profile.currentYear, 2030);
+  assert.equal(moved.properties[0].saleYear, s.properties[0].saleYear + 4);
+  assert.equal(moved.properties[1].saleYear, null); // keep-forever stays null
+  assert.equal(moved.incomes[0].fromYear, s.incomes[0].fromYear + 4);
+  assert.equal(moved.incomes[0].toYear, s.incomes[0].toYear + 4);
+  assert.equal(moved.spending.find((c) => c.toYear !== null)?.toYear, 2038 + 4);
+  assert.equal(moved.household.people[1].lumpSumYear, 2044 + 4);
+  // delta 0 is identity
+  assert.equal(reanchorYears(s, s.profile.currentYear), s);
+  // original untouched (pure)
+  assert.equal(s.profile.currentYear, 2026);
 });
 
 test("v2 validation: spending window ordering, growth type, and extreme-growth warning", () => {
@@ -206,7 +243,7 @@ test("v2 validation: household people and spouse sub-objects", () => {
   assert.ok(validate(bad).errors.some((e) => e.path === "household.people[0].social.startAge"));
 
   const twoSpouses = placeholderState();
-  twoSpouses.household.people.push({ name: "Second spouse", role: "spouse", currentAge: 40, social: newSocial(), health: newHealth() });
+  twoSpouses.household.people.push({ name: "Second spouse", role: "spouse", currentAge: 40, lumpSum: 0, lumpSumYear: null, social: newSocial(), health: newHealth() });
   assert.ok(validate(twoSpouses).warnings.some((w) => w.path === "household.people"));
 
   const spouseNoAge = placeholderState();

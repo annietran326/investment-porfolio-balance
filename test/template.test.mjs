@@ -135,10 +135,10 @@ test("the committed template artifact parses clean (parser and template can't dr
 // v2 round-trip: growth columns, expense windows, Household tab
 // ---------------------------------------------------------------------------
 
-test("v2 round-trip: spouse + dependent + growing rent + time-boxed spending survive export→reimport", () => {
-  // A state that touches every new v2 field: a property whose rent outpaces
+test("v3 round-trip: spouse + dependent (w/ lump sum) + growing rent + time-boxed spending survive export→reimport", () => {
+  // A state that touches every new v2/v3 field: a property whose rent outpaces
   // inflation, a time-boxed spending line, and a household with a spouse (SS +
-  // healthcare) and a dependent.
+  // healthcare) and a dependent carrying a one-time future lump-sum cost.
   const state = defaultState();
   state.properties = [
     { name: "Rental (rent +1.5%, costs -0.5% real)", rentMonthly: 3000, costsMonthly: 850, mortgageMonthly: 2100, payoffYear: 2048, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 1.5, costsRealGrowthPct: -0.5 },
@@ -151,25 +151,29 @@ test("v2 round-trip: spouse + dependent + growing rent + time-boxed spending sur
   ];
   state.household = {
     people: [
+      // Spouse: SS + healthcare, and (per the UI) no lump sum → 0/null.
       {
         name: "Partner",
         role: "spouse",
         currentAge: 42,
+        lumpSum: 0,
+        lumpSumYear: null,
         social: { startAge: 68, monthly: 2600, haircutPct: 20 },
         health: { preMedicareAnnual: 15_000, postMedicareAnnual: 8_000, employerCoverageUntilAge: 63 },
       },
-      { name: "Kid", role: "dependent", currentAge: 10 },
+      // Dependent: a $200K college cost landing in 2040 — the v3 lump-sum fields.
+      { name: "Kid", role: "dependent", currentAge: 10, lumpSum: 200_000, lumpSumYear: 2040 },
     ],
   };
-  assert.deepEqual(validate(state).errors, [], "fixture is itself a valid v2 state");
+  assert.deepEqual(validate(state).errors, [], "fixture is itself a valid v3 state");
 
   const parsed = parseTemplate(buildTemplateWorkbook(state));
   assert.deepEqual(parsed.tabsFound, ALL_TABS);
   for (const k of parsed.tabsFound) assert.deepEqual(parsed.perTab[k].errors, [], `tab ${k} parses clean`);
 
   const applied = applyTabs(defaultState(), parsed, parsed.tabsFound);
-  assert.deepEqual(applied, state, "every new v2 field round-trips exactly (no-op)");
-  assert.deepEqual(validate(applied).errors, [], "the reimported state is valid v2");
+  assert.deepEqual(applied, state, "every new v2/v3 field round-trips exactly (no-op)");
+  assert.deepEqual(validate(applied).errors, [], "the reimported state is valid v3");
 
   // Spot-check the load-bearing new fields specifically.
   assert.equal(applied.properties[0].rentRealGrowthPct, 1.5);
@@ -181,7 +185,9 @@ test("v2 round-trip: spouse + dependent + growing rent + time-boxed spending sur
   const [spouse, dep] = applied.household.people;
   assert.deepEqual(spouse.social, { startAge: 68, monthly: 2600, haircutPct: 20 });
   assert.deepEqual(spouse.health, { preMedicareAnnual: 15_000, postMedicareAnnual: 8_000, employerCoverageUntilAge: 63 });
+  assert.deepEqual([spouse.lumpSum, spouse.lumpSumYear], [0, null], "spouse's blank lump-sum round-trips as 0/null");
   assert.equal(dep.role, "dependent");
+  assert.deepEqual([dep.lumpSum, dep.lumpSumYear], [200_000, 2040], "dependent's lump-sum cost + year survive the round-trip");
   assert.equal(dep.social, undefined, "a dependent carries no social section");
   assert.equal(dep.health, undefined, "a dependent carries no health section");
 });
@@ -196,14 +202,17 @@ test("Household tab: absent → people untouched; present → replaces; bad role
   assert.deepEqual(afterNoTab.household, state.household, "no Household tab does NOT wipe existing people");
 
   // (2) Present Household tab replaces people wholesale: a fresh spouse (with
-  // SS/health cells) and a dependent (spouse-only cells blank).
+  // SS/health cells, blank lump-sum) and a dependent (spouse-only cells blank)
+  // carrying a lump-sum college cost + year. Column order:
+  // Name, Role, Age, Lump-sum $, Lump-sum year, SS start, SS $/mo, SS haircut,
+  // Health pre-65, Health 65+, Employer coverage.
   const H = HEADERS.Household;
   const withHousehold = parseTemplate(
     wbBuffer({
       Household: [
         H,
-        ["New Spouse", "spouse", 45, 67, 3000, 25, 16000, 7500, 65],
-        ["New Kid", "dependent", 5, null, null, null, null, null, null],
+        ["New Spouse", "spouse", 45, null, null, 67, 3000, 25, 16000, 7500, 65],
+        ["New Kid", "dependent", 5, 120000, 2039, null, null, null, null, null, null],
       ],
     })
   );
@@ -214,21 +223,36 @@ test("Household tab: absent → people untouched; present → replaces; bad role
     name: "New Spouse",
     role: "spouse",
     currentAge: 45,
+    lumpSum: 0,
+    lumpSumYear: null,
     social: { startAge: 67, monthly: 3000, haircutPct: 25 },
     health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 },
   });
-  assert.deepEqual(applied.household.people[1], { name: "New Kid", role: "dependent", currentAge: 5 });
-  assert.deepEqual(validate(applied).errors, [], "replaced household is valid v2");
+  assert.deepEqual(
+    applied.household.people[1],
+    { name: "New Kid", role: "dependent", currentAge: 5, lumpSum: 120000, lumpSumYear: 2039 },
+    "a dependent's lump-sum cost + year apply from the Household tab"
+  );
+  assert.deepEqual(validate(applied).errors, [], "replaced household is valid v3");
 
-  // A spouse row with blank SS/health cells keeps the schema defaults.
-  const blankSpouse = parseTemplate(wbBuffer({ Household: [H, ["Bare", "spouse", 40, null, null, null, null, null, null]] }));
+  // A spouse row with blank SS/health/lump-sum cells keeps the schema defaults.
+  const blankSpouse = parseTemplate(wbBuffer({ Household: [H, ["Bare", "spouse", 40, null, null, null, null, null, null, null, null]] }));
   assert.deepEqual(blankSpouse.perTab.household.errors, []);
   const bare = applyTabs(state, blankSpouse, ["household"]).household.people[0];
+  assert.deepEqual([bare.lumpSum, bare.lumpSumYear], [0, null], "blank lump-sum cells → 0 / null");
   assert.deepEqual(bare.social, { startAge: 67, monthly: 0, haircutPct: 25 }, "blank SS cells → newSocial() defaults");
   assert.deepEqual(bare.health, { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 }, "blank health cells → newHealth() defaults");
 
+  // A dependent with a lump-sum cost but no year is accepted (year → null),
+  // mirroring how a sale year and its proceeds are read independently.
+  const lumpNoYear = parseTemplate(wbBuffer({ Household: [H, ["Kid2", "dependent", 8, 90000, null, null, null, null, null, null, null]] }));
+  assert.deepEqual(lumpNoYear.perTab.household.errors, []);
+  const kid2 = applyTabs(state, lumpNoYear, ["household"]).household.people[0];
+  assert.deepEqual([kid2.lumpSum, kid2.lumpSumYear], [90000, null], "cost without a year → cost kept, year null (no error)");
+  assert.deepEqual(validate(applyTabs(state, lumpNoYear, ["household"])).errors, [], "lump-sum-without-year state is valid v3");
+
   // (3) Bad role value → cell-addressed error; the tab is blocked.
-  const badRole = parseTemplate(wbBuffer({ Household: [H, ["Confused", "cousin", 30, null, null, null, null, null, null]] }));
+  const badRole = parseTemplate(wbBuffer({ Household: [H, ["Confused", "cousin", 30, null, null, null, null, null, null, null, null]] }));
   assert.equal(badRole.perTab.household.errors.length, 1);
   assert.equal(badRole.perTab.household.errors[0].cell, "Household!B2");
   assert.match(badRole.perTab.household.errors[0].message, /role must be one of spouse, dependent/);

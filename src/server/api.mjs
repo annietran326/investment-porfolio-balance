@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { placeholderState } from "../model/placeholder.mjs";
-import { defaultState } from "../model/schema.mjs";
+import { defaultState, reanchorYears } from "../model/schema.mjs";
 import { MissingVersionError, FutureVersionError } from "../model/migrate.mjs";
 import {
   applicableTabs,
@@ -329,10 +329,21 @@ export function createApi(store, opts = {}) {
     return notFound(res);
   }
 
+  // A fresh placeholder anchored to the REAL current year, so a brand-new plan
+  // starts at "this year" and the app stays correct in future years. Never
+  // applied to a user's saved state — only to the unseeded placeholder.
+  function freshPlaceholder() {
+    return reanchorYears(placeholderState(), store.now().getFullYear());
+  }
+  // Fresh empty-plan base for imports onto an unseeded dir, anchored to the real year.
+  function freshDefault() {
+    return reanchorYears(defaultState(), store.now().getFullYear());
+  }
+
   /** @param {Res} res */
   function apiGetState(res) {
     /** @type {Record<string, unknown>} */
-    const body = { state: state ?? placeholderState(), rev: store.rev(), seeded, warnings };
+    const body = { state: state ?? freshPlaceholder(), rev: store.rev(), seeded, warnings };
     if (recovery) body.recovery = recovery;
     sendJson(res, 200, body);
   }
@@ -467,7 +478,7 @@ export function createApi(store, opts = {}) {
     evictOldest(templatePreviews, MAX_TEMPLATE_PREVIEWS);
     // Unseeded dirs import onto the schema defaults, never the placeholder —
     // example rentals must not silently become real data.
-    const base = state ?? defaultState();
+    const base = state ?? freshDefault();
     return sendJson(res, 200, { preview: previewTemplate(base, parsed), token, rev: store.rev() });
   }
 
@@ -499,7 +510,7 @@ export function createApi(store, opts = {}) {
       });
     }
     if (seeded) store.snapshotNow("template-import"); // preserve what the import replaces
-    const next = applyTabs(state ?? defaultState(), entry.parsed, tabs);
+    const next = applyTabs(state ?? freshDefault(), entry.parsed, tabs);
     try {
       const result = store.save(next, { source: "template-import" });
       templatePreviews.delete(token);
@@ -695,7 +706,7 @@ export function createApi(store, opts = {}) {
     }
     const includeSet = new Set(include);
     const selected = entry.derived.categories.filter((c) => includeSet.has(c.name));
-    const next = applyDerived(state ?? defaultState(), selected, mode);
+    const next = applyDerived(state ?? freshDefault(), selected, mode);
 
     // Validate BEFORE any write so a rejected state never leaves half an
     // import on disk (save re-validates; this keeps the write order clean).
@@ -746,7 +757,7 @@ export function createApi(store, opts = {}) {
    * @param {Res} res
    */
   function apiTemplateExport(res) {
-    const buf = buildTemplateWorkbook(state ?? placeholderState());
+    const buf = buildTemplateWorkbook(state ?? freshPlaceholder());
     res.writeHead(200, {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": 'attachment; filename="runway-export.local.xlsx"',

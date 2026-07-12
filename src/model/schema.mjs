@@ -14,7 +14,12 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites — code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+// The year the pure defaults are authored against. The engine and model never
+// read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
+// state to the real current year at serve time via reanchorYears().
+export const BASE_YEAR = 2026;
 
 /**
  * @typedef {Object} Profile
@@ -66,6 +71,8 @@ export const SCHEMA_VERSION = 2;
  * @property {string} name
  * @property {PersonRole} role
  * @property {number|null} currentAge  needed for a spouse's SS/healthcare timing
+ * @property {number} lumpSum   a one-time cost (today's $) — a dependent's big future expense (college, a wedding). 0 = none
+ * @property {number|null} lumpSumYear  the year the lump sum lands; null = none
  * @property {Social} [social]  a spouse's own Social Security (absent = none)
  * @property {Health} [health]  a spouse's own healthcare load (absent = none)
  *
@@ -127,7 +134,13 @@ export function newHealth() {
 /** @param {PersonRole} role @param {Partial<Person>} [o] @returns {Person} */
 export function newPerson(role, o = {}) {
   /** @type {Person} */
-  const p = { name: o.name ?? (role === "spouse" ? "Spouse" : "Dependent"), role, currentAge: o.currentAge ?? null };
+  const p = {
+    name: o.name ?? (role === "spouse" ? "Spouse" : "Dependent"),
+    role,
+    currentAge: o.currentAge ?? null,
+    lumpSum: o.lumpSum ?? 0,
+    lumpSumYear: o.lumpSumYear ?? null,
+  };
   if (role === "spouse") {
     p.social = o.social ?? newSocial();
     p.health = o.health ?? newHealth();
@@ -153,6 +166,41 @@ export function defaultState() {
     endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },
     work: { untilAge: 50 },
   };
+}
+
+/**
+ * Re-anchor a state to a target current year, shifting every year-bearing field
+ * by the delta so relative timing (a sale next year, a lump sum in 18 years) is
+ * preserved. PURE — the caller supplies the target year (the server reads the
+ * clock; the model never does). Used to stamp fresh/placeholder state with the
+ * real current year so the app stays correct in future years, without touching
+ * a user's already-saved plan.
+ * @param {RunwayState} state
+ * @param {number} targetYear
+ * @returns {RunwayState}
+ */
+export function reanchorYears(state, targetYear) {
+  const delta = targetYear - state.profile.currentYear;
+  if (delta === 0) return state;
+  const shift = (/** @type {number|null} */ y) => (typeof y === "number" ? y + delta : y);
+  const next = structuredClone(state);
+  next.profile.currentYear = targetYear;
+  for (const p of next.properties) {
+    p.payoffYear = shift(p.payoffYear);
+    p.saleYear = shift(p.saleYear);
+  }
+  for (const inc of next.incomes) {
+    inc.fromYear += delta;
+    inc.toYear += delta;
+  }
+  for (const c of next.spending) {
+    c.fromYear = shift(c.fromYear);
+    c.toYear = shift(c.toYear);
+  }
+  for (const person of next.household.people) {
+    person.lumpSumYear = shift(person.lumpSumYear);
+  }
+  return next;
 }
 
 export const END_STATE_MODES = /** @type {EndStateMode[]} */ (["zero", "bequest", "floor"]);
@@ -325,6 +373,11 @@ export function validate(s) {
     if (typeof person.name !== "string" || !person.name.trim()) add(errors, `${at}.name`, "name required");
     if (!PERSON_ROLES.includes(person.role)) add(errors, `${at}.role`, `must be one of ${PERSON_ROLES.join(", ")}`);
     requireNumberOrNull(errors, person.currentAge, `${at}.currentAge`);
+    requireNumber(errors, person.lumpSum, `${at}.lumpSum`);
+    requireNumberOrNull(errors, person.lumpSumYear, `${at}.lumpSumYear`);
+    if (typeof person.lumpSumYear === "number" && person.lumpSumYear < currentYear) {
+      add(warnings, `${at}.lumpSumYear`, `lump-sum year ${person.lumpSumYear} is in the past — this cost will never apply`);
+    }
     if (person.role === "spouse") {
       spouseCount++;
       if (person.currentAge === null) add(warnings, `${at}.currentAge`, "spouse age is needed to time their Social Security and healthcare");

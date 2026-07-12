@@ -146,6 +146,11 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
     }
     let spend = categorySpend * spendMult + health;
     if (overlay.oneTimeCost && i === (overlay.oneTimeCostYearIdx ?? 0)) spend += overlay.oneTimeCost;
+    // Household one-time lump-sum costs (a dependent's college, etc.) — discrete
+    // events, not scaled by the spending-shock scenario.
+    for (const person of s.household?.people ?? []) {
+      if (person.lumpSum && person.lumpSumYear === year) spend += person.lumpSum;
+    }
 
     const net = income + ss + propCF + proceeds - spend;
     bal = bal * (1 + r) + net;

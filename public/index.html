@@ -77,7 +77,7 @@
       <button id="addSpouse" type="button" class="small">+ spouse</button>
       <button id="addDependent" type="button" class="small">+ dependent</button>
     </div>
-    <div class="footnote">Self is above (Profile / Social Security / Healthcare). Add a spouse to fold in their income (add income lines), their Social Security, and their healthcare. Dependents mainly drive time-boxed expenses — set an end year on the relevant spending lines.</div>
+    <div class="footnote">Self is above (Profile / Social Security / Healthcare). Add a spouse to fold in their Social Security and healthcare (their income goes in Income streams). A dependent carries one big one-time cost (e.g. college); recurring dependent costs go in Spending with a start/end year.</div>
   </section>
 
   <section class="card">
@@ -185,6 +185,26 @@
   </section>
 
   <section class="card">
+    <details class="drill">
+      <summary>How the math works <span class="hint">exactly what goes into the number — click to expand</span></summary>
+      <div class="math-doc">
+        <p>Everything is in <strong>today's dollars</strong>. Returns and growth are <strong>real</strong> — already adjusted for inflation — so a number you enter keeps its buying power over time unless you say it grows faster or slower.</p>
+        <p><strong>The core loop.</strong> Starting from your portfolio balance, the app steps forward one year at a time until your plan-to age. Each year it (1) grows the balance by your real return, then (2) adds that year's net cash flow. Money that arrives during a year doesn't earn a return until the next year.</p>
+        <p><strong>Net cash flow each year</strong> = income + Social Security + property cash flow + any sale proceeds − spending − healthcare.</p>
+        <ul>
+          <li><strong>Income</strong> — each stream (entered net of tax), counted only between its from/to years, growing at its real growth rate. A spouse's income is just more income lines.</li>
+          <li><strong>Social Security</strong> — starts at your start age, reduced by the haircut % (your hedge against the trust-fund shortfall). A spouse has their own, on their own age.</li>
+          <li><strong>Property</strong> — per rental: rent − costs − mortgage P&amp;I. Rent and costs can grow vs inflation; the mortgage payment is fixed in dollars, so it's held flat (slightly conservative). A sale books its net proceeds once, in the sale year; the mortgage stops after its payoff year.</li>
+          <li><strong>Spending</strong> — monthly categories × 12, each only within its start/end years and growing at its real rate; plus healthcare (your pre-65 bridge once employer coverage ends, then Medicare at 65 — and your spouse's); plus any one-time dependent costs in the year they land.</li>
+        </ul>
+        <p><strong>The verdict.</strong> First it runs the whole plan with no extra income. If the balance reaches your goal — die with zero, leave a bequest, or never dip below a floor — you're done. If not, it binary-searches the smallest net income you'd need each year, from now until your work-until age, to just reach the goal. That's your <strong>required income</strong>.</p>
+        <p><strong>Stress scenarios</strong> rerun the same plan under bad cases — a rental vacant plus a big repair plus a delayed sale, a 30% market drop now, spending 20% higher forever, and all at once — so you see how fragile or robust the answer is.</p>
+        <p class="dim"><strong>What it deliberately doesn't do:</strong> no tax engine (you enter net figures), no random market simulation (it's deterministic — one path per scenario), and no separate inflation input (inflation is baked into "real," and growth rates are relative to it). Every input is visible and every number here follows from them.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
     <h2>Balance over time <span class="hint">hover or tap for a year; click a chip to toggle a scenario</span></h2>
     <div id="balanceChart" class="chart-wrap"></div>
     <details class="drill">
@@ -194,9 +214,11 @@
   </section>
 
   <section class="card">
-    <h2>Trends <span class="hint">one point per day you save</span></h2>
-    <div id="trendsBody"></div>
-    <div class="footnote">Loaded once per page load — a trend row lands on the first save of each day.</div>
+    <details class="drill">
+      <summary>Trends <span class="hint">one point per day you save — click to expand</span></summary>
+      <div id="trendsBody"></div>
+      <div class="footnote">Loaded once per page load — a trend row lands on the first save of each day.</div>
+    </details>
   </section>
 
   <section class="card">
@@ -299,7 +321,11 @@
       <button type="button" class="small danger remove" aria-label="remove dependent">✕</button>
     </div>
     <div class="issue"></div>
-    <div class="field narrow"><label>current age <span class="dim">(optional)</span></label><input type="number" data-field="currentAge" placeholder="age"><div class="issue"></div></div>
+    <div class="grid2">
+      <div class="field"><label>one-time cost $</label><input type="number" data-field="lumpSum" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>in year</label><input type="number" data-field="lumpSumYear" placeholder="e.g. 2044"><div class="issue"></div></div>
+    </div>
+    <div class="footnote">One big future cost — college, a wedding — as a lump sum in today's dollars, landing in that year. Ongoing costs (childcare, activities) go in Spending with a start/end year.</div>
   </div>
 </template>
 
