@@ -4,28 +4,58 @@
 // mutates its input — so node:test covers them headlessly. The DOM builders
 // at the bottom touch `document` only inside function bodies (never at module
 // top level), so importing this file under Node is safe.
-
-import { newProperty, newIncome, newSpendingCategory, newPerson } from "../../src/model/schema.mjs";
+//
+// IMPORTANT: this module loads in BOTH the browser (via app.mjs, served from
+// /ui/) and Node (via node:test). public/ and src/ are not colocated, so NO
+// import path to src/model reaches the same file in both contexts — a
+// `../../src/...` import works in Node but 404s in the browser (served at
+// /model/, not /src/model/), silently killing the whole module graph. So the
+// blank builders below are inlined literals rather than schema-factory calls.
+// test/factory-parity.test.mjs pins them equal to the schema factories in Node
+// so they can never drift, and test/browser-imports.test.mjs forbids any
+// public/ module from importing across the public->src boundary.
 
 /** @typedef {import("../../src/model/schema.mjs").RunwayState} RunwayState */
 /** @typedef {import("../../src/model/schema.mjs").PersonRole} PersonRole */
 /** @typedef {"properties"|"incomes"|"spending"} ListKind */
 
 /**
- * Blank row per list kind, built from the schema factories so new rows always
- * carry the current field set (growth, windows) and validate cleanly. Income
- * defaults anchor on the plan's currentYear (the engine never reads the clock;
- * neither do we).
+ * Blank row per list kind — must mirror the schema factories (pinned by
+ * test/factory-parity.test.mjs). Income defaults anchor on the plan's
+ * currentYear (the engine never reads the clock; neither do we).
  * @param {ListKind} kind @param {RunwayState} state
  */
 export function blankRow(kind, state) {
-  if (kind === "properties") return newProperty({ name: "new property" });
+  if (kind === "properties") {
+    return { name: "new property", rentMonthly: 0, costsMonthly: 0, mortgageMonthly: 0, payoffYear: null, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 0, costsRealGrowthPct: 0 };
+  }
   if (kind === "incomes") {
     const y = state.profile.currentYear;
-    return newIncome({ name: "new income", fromYear: y, toYear: y + 4 });
+    return { name: "new income", annual: 0, fromYear: y, toYear: y + 4, realGrowthPct: 0 };
   }
-  if (kind === "spending") return newSpendingCategory({ name: "new category" });
+  if (kind === "spending") {
+    return { name: "new category", monthly: 0, fromYear: null, toYear: null, realGrowthPct: 0 };
+  }
   throw new Error(`unknown list kind: ${kind}`);
+}
+
+/**
+ * Blank person for a role — mirrors schema's newPerson (pinned by
+ * test/factory-parity.test.mjs). A spouse seeds their own SS + healthcare; a
+ * dependent stays lean.
+ * @param {PersonRole} role
+ */
+function blankPerson(role) {
+  if (role === "spouse") {
+    return {
+      name: "Spouse",
+      role,
+      currentAge: null,
+      social: { startAge: 67, monthly: 0, haircutPct: 25 },
+      health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 },
+    };
+  }
+  return { name: "Dependent", role, currentAge: null };
 }
 
 /** @param {RunwayState} state @param {ListKind} kind @returns {RunwayState} */
@@ -75,7 +105,7 @@ export function setValueAtPath(state, path, value) {
  */
 export function addPerson(state, role) {
   const next = structuredClone(state);
-  next.household.people.push(newPerson(role));
+  next.household.people.push(blankPerson(role));
   return next;
 }
 
