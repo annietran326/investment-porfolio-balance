@@ -357,11 +357,11 @@ path.scen-line.scen-base { stroke-width: 2.6; }
 .drill th.num, .drill td.num { text-align: right; }
 .drill .showall { margin-top: 8px; }
 
-/* trends — small multiples */
+/* trends — compact small multiples: sit side by side, capped so they stay small */
 .trend-empty { color: var(--dim); font-size: 13px; }
-.trend-multiple { margin-bottom: 12px; }
-.trend-multiple:last-child { margin-bottom: 0; }
-.trend-multiple svg { display: block; width: 100%; height: auto; }
+#trendsBody { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 18px; }
+.trend-multiple { margin-bottom: 0; }
+.trend-multiple svg { display: block; width: 100%; height: auto; max-width: 300px; max-height: 72px; }
 .trend-head { display: flex; justify-content: space-between; align-items: baseline; }
 .trend-head .l { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .8px; }
 .trend-head .v { font: 600 13px var(--mono); }
@@ -435,9 +435,14 @@ button.linklike {
 .import-errors { flex-basis: 100%; }
 .import-headline { font-size: 12px; color: var(--dim); }
 
-/* "How the math works" explainer */
-.math-doc { max-width: 60ch; font-size: 14px; line-height: 1.55; }
+/* "How the math works" explainer — fills the card and flows into two columns
+   on a wide screen so it reads short instead of a tall narrow strip */
+.math-doc { font-size: 14px; line-height: 1.55; }
 .math-doc p { margin: 0 0 10px; }
 .math-doc ul { margin: 0 0 10px; padding-left: 18px; }
 .math-doc li { margin: 0 0 6px; }
 .math-doc strong { color: var(--text, #e8eef2); }
+@media (min-width: 900px) {
+  .math-doc { column-count: 2; column-gap: 32px; }
+  .math-doc p, .math-doc ul { break-inside: avoid; }
+}

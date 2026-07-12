@@ -9,13 +9,21 @@ import { placeholderState } from "../src/model/placeholder.mjs";
 
 const state = () => placeholderState();
 
-test("simulates the full horizon", () => {
+test("simulates from the current year to plan-to age; the current year shows the starting balance", () => {
   const s = state();
   const years = s.profile.endAge - s.profile.currentAge;
   const sim = simulate(s);
-  assert.equal(sim.path.length, years + 2); // starting point + one per simulated year
-  assert.equal(sim.rows.length, years + 1);
-  assert.equal(sim.rows.at(-1)?.age, s.profile.endAge);
+  // path: the current-year anchor (no growth) + one point per lived year
+  assert.equal(sim.path.length, years + 1);
+  assert.equal(sim.path[0].year, s.profile.currentYear);
+  assert.equal(sim.path[0].age, s.profile.currentAge);
+  assert.equal(sim.path[0].bal, s.portfolio.balance); // starts EXACTLY at what you entered
+  assert.equal(sim.path.at(-1)?.year, s.profile.currentYear + years);
+  assert.equal(sim.path.at(-1)?.age, s.profile.endAge);
+  // rows: one per lived year (currentYear .. endAge-1)
+  assert.equal(sim.rows.length, years);
+  assert.equal(sim.rows[0].year, s.profile.currentYear);
+  assert.equal(sim.rows.at(-1)?.age, s.profile.endAge - 1);
 });
 
 test("balance-update ordering: growth on prior balance, then net cash lands", () => {
@@ -119,8 +127,9 @@ test("scenario knobs: drawdown haircuts the starting balance; one-time cost land
 });
 
 test("floor mode: firstBreachYear marks the first dip below the floor while firstNegYear stays null", () => {
-  // 600k, flat return, 24k/yr spend: 576, 552, 528, 504, 480 (< 500k floor in
-  // 2030), … never below $0 over the 11-year horizon.
+  // 600k at 2026, flat return, 24k/yr spend. Balance by year: 2026=600,
+  // 2027=576, 2028=552, 2029=528, 2030=504, 2031=480 (< 500k floor); never
+  // below $0 over the horizon.
   const s = state();
   s.profile = { currentAge: 40, endAge: 50, currentYear: 2026 };
   s.portfolio = { balance: 600_000, realReturnPct: 0 };
@@ -133,7 +142,7 @@ test("floor mode: firstBreachYear marks the first dip below the floor while firs
   s.endState = { mode: "floor", amounts: { bequest: 0, floor: 500_000 } };
   const sim = simulate(s);
   assert.equal(sim.firstNegYear, null, "never below $0");
-  assert.equal(sim.firstBreachYear, 2030, "the floor breach IS the runway end");
+  assert.equal(sim.firstBreachYear, 2031, "the floor breach IS the runway end");
   assert.ok(sim.minBal >= 0);
 
   // zero/bequest modes: the breach threshold is $0 — firstBreachYear tracks firstNegYear.

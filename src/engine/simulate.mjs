@@ -97,13 +97,17 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
   let bal = s.portfolio.balance;
   if (overlay.drawdownPct) bal *= 1 - overlay.drawdownPct / 100;
 
-  const path = [{ year: startYear - 1, age: s.profile.currentAge - 1, bal }];
+  // "Now": the starting balance sits at the current year with no growth yet.
+  // Each step lives through one year (its income, spending, growth) and produces
+  // the balance at the START of the next year — so the value plotted at year Y
+  // is the portfolio at year Y, and currentYear shows exactly what you entered.
+  const path = [{ year: startYear, age: s.profile.currentAge, bal }];
   /** @type {YearRow[]} */ const rows = [];
   /** @type {number|null} */ let firstNegYear = null;
   /** @type {number|null} */ let firstBreachYear = null;
   let minBal = bal;
 
-  for (let i = 0; i <= years; i++) {
+  for (let i = 0; i < years; i++) {
     const year = startYear + i;
     const age = s.profile.currentAge + i;
 
@@ -158,11 +162,15 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
     const net = income + ss + propCF + proceeds - spend;
     bal = bal * (1 + r) + net;
 
+    // The balance after living through `year` is the portfolio at the next year.
+    const balYear = year + 1;
+    const balAge = age + 1;
     if (bal < minBal) minBal = bal;
-    if (firstNegYear === null && bal < 0) firstNegYear = year;
-    if (firstBreachYear === null && bal < breachThreshold) firstBreachYear = year;
+    if (firstNegYear === null && bal < 0) firstNegYear = balYear;
+    if (firstBreachYear === null && bal < breachThreshold) firstBreachYear = balYear;
 
-    path.push({ year, age, bal });
+    path.push({ year: balYear, age: balAge, bal });
+    // The row is the lived year's cash flows and its resulting end-of-year balance.
     rows.push({ year, age, income, ss, propCF, proceeds, health, spend, bal });
   }
 

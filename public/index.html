@@ -185,26 +185,6 @@
   </section>
 
   <section class="card">
-    <details class="drill">
-      <summary>How the math works <span class="hint">exactly what goes into the number — click to expand</span></summary>
-      <div class="math-doc">
-        <p>Everything is in <strong>today's dollars</strong>. Returns and growth are <strong>real</strong> — already adjusted for inflation — so a number you enter keeps its buying power over time unless you say it grows faster or slower.</p>
-        <p><strong>The core loop.</strong> Starting from your portfolio balance, the app steps forward one year at a time until your plan-to age. Each year it (1) grows the balance by your real return, then (2) adds that year's net cash flow. Money that arrives during a year doesn't earn a return until the next year.</p>
-        <p><strong>Net cash flow each year</strong> = income + Social Security + property cash flow + any sale proceeds − spending − healthcare.</p>
-        <ul>
-          <li><strong>Income</strong> — each stream (entered net of tax), counted only between its from/to years, growing at its real growth rate. A spouse's income is just more income lines.</li>
-          <li><strong>Social Security</strong> — starts at your start age, reduced by the haircut % (your hedge against the trust-fund shortfall). A spouse has their own, on their own age.</li>
-          <li><strong>Property</strong> — per rental: rent − costs − mortgage P&amp;I. Rent and costs can grow vs inflation; the mortgage payment is fixed in dollars, so it's held flat (slightly conservative). A sale books its net proceeds once, in the sale year; the mortgage stops after its payoff year.</li>
-          <li><strong>Spending</strong> — monthly categories × 12, each only within its start/end years and growing at its real rate; plus any dependent support costs over their window; plus healthcare (your pre-65 bridge once employer coverage ends, then Medicare at 65 — and your spouse's).</li>
-        </ul>
-        <p><strong>The verdict.</strong> First it runs the whole plan with no extra income. If the balance reaches your goal — die with zero, leave a bequest, or never dip below a floor — you're done. If not, it binary-searches the smallest net income you'd need each year, from now until your work-until age, to just reach the goal. That's your <strong>required income</strong>.</p>
-        <p><strong>Stress scenarios</strong> rerun the same plan under bad cases — a rental vacant plus a big repair plus a delayed sale, a 30% market drop now, spending 20% higher forever, and all at once — so you see how fragile or robust the answer is.</p>
-        <p class="dim"><strong>What it deliberately doesn't do:</strong> no tax engine (you enter net figures), no random market simulation (it's deterministic — one path per scenario), and no separate inflation input (inflation is baked into "real," and growth rates are relative to it). Every input is visible and every number here follows from them.</p>
-      </div>
-    </details>
-  </section>
-
-  <section class="card">
     <h2>Balance over time <span class="hint">hover or tap for a year; click a chip to toggle a scenario</span></h2>
     <div id="balanceChart" class="chart-wrap"></div>
     <details class="drill">
@@ -231,6 +211,26 @@
     <h2>Import &amp; export <span class="hint">.xlsx template · transactions .csv</span></h2>
     <div id="importsBody"></div>
     <div class="footnote">Spreadsheet import replaces only the tabs present in the file — a missing tab leaves that section unchanged. An empty sale-year cell means keep forever; it is never read as 0. Transaction CSV import stores normalized rows locally and derives monthly spending from complete months only; healthcare/property-like categories are excluded by default because the model carries those costs separately. Applying either import preserves the current state as a snapshot first.</div>
+  </section>
+
+  <section class="card">
+    <details class="drill">
+      <summary>How the math works <span class="hint">exactly what goes into the number — click to expand</span></summary>
+      <div class="math-doc">
+        <p>Everything is in <strong>today's dollars</strong>. Returns and growth are <strong>real</strong> — already adjusted for inflation — so a number you enter keeps its buying power over time unless you say it grows faster or slower.</p>
+        <p><strong>The core loop.</strong> Your portfolio starts at the current year with exactly the balance you entered. Each year the app (1) grows the balance by your real return, then (2) adds that year's net cash flow — so the value shown at a year is the portfolio at the start of that year, and it steps forward to your plan-to age.</p>
+        <p><strong>Net cash flow each year</strong> = income + Social Security + property cash flow + any sale proceeds − spending − healthcare.</p>
+        <ul>
+          <li><strong>Income</strong> — each stream (entered net of tax), counted only between its from/to years, growing at its real growth rate. A spouse's income is just more income lines.</li>
+          <li><strong>Social Security</strong> — starts at your start age, reduced by the haircut % (your hedge against the trust-fund shortfall). A spouse has their own, on their own age.</li>
+          <li><strong>Property</strong> — per rental: rent − costs − mortgage P&amp;I. Rent and costs can grow vs inflation; the mortgage payment is fixed in dollars, so it's held flat (slightly conservative). A sale books its net proceeds once, in the sale year; the mortgage stops after its payoff year.</li>
+          <li><strong>Spending</strong> — monthly categories × 12, each only within its start/end years and growing at its real rate; plus any dependent support costs over their window; plus healthcare (your pre-65 bridge once employer coverage ends, then Medicare at 65 — and your spouse's).</li>
+        </ul>
+        <p><strong>The verdict.</strong> First it runs the whole plan with no extra income. If the balance reaches your goal — die with zero, leave a bequest, or never dip below a floor — you're done. If not, it binary-searches the smallest net income you'd need each year, from now until your work-until age, to just reach the goal. That's your <strong>required income</strong>.</p>
+        <p><strong>Stress scenarios</strong> rerun the same plan under bad cases — a rental vacant plus a big repair plus a delayed sale, a 30% market drop now, spending 20% higher forever, and all at once — so you see how fragile or robust the answer is.</p>
+        <p class="dim"><strong>What it deliberately doesn't do:</strong> no tax engine (you enter net figures), no random market simulation (it's deterministic — one path per scenario), and no separate inflation input (inflation is baked into "real," and growth rates are relative to it). Every input is visible and every number here follows from them.</p>
+      </div>
+    </details>
   </section>
 </div>
 </main>
