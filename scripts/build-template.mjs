@@ -107,11 +107,14 @@ export const TEMPLATE_DEF = {
         { header: "Name", field: "name", type: "text" },
         { header: "Role (spouse or dependent)", field: "role", type: "text" },
         { header: "Current age", field: "currentAge", type: "number", nullable: true },
-        // Lump-sum: a dependent's one-time future cost (college, wedding). Cost
-        // defaults to 0 (like a growth rate) when blank; the year is nullable
-        // (blank = none, never 0 — same as sale year). Spouses leave both blank.
-        { header: "Lump-sum cost $", field: "lumpSum", type: "number", emptyZero: true, optional: true },
-        { header: "Lump-sum year", field: "lumpSumYear", type: "number", nullable: true, optional: true },
+        // Support cost: a dependent's ONGOING cost over a window (raising a kid,
+        // supporting a parent), in today's $/yr. The cost defaults to 0 (like a
+        // growth rate) when blank; the window years are nullable (blank = open —
+        // from-start / whole-plan, never 0, same as sale year). Spouses leave the
+        // cost 0 and both years blank.
+        { header: "Support cost $/yr", field: "annualCost", type: "number", emptyZero: true, optional: true },
+        { header: "From year", field: "fromYear", type: "number", nullable: true, optional: true },
+        { header: "Through year", field: "toYear", type: "number", nullable: true, optional: true },
         // spouse-only: a dependent row leaves these blank. Optional so a minimal
         // Household sheet (Name/Role/Age only) still imports dependents.
         { header: "SS start age", field: "social.startAge", type: "number", nullable: true, optional: true, role: "spouse" },

@@ -4,8 +4,9 @@
 // one definition.
 //
 // Load-bearing semantics, mirrored from src/model/schema.mjs:
-//   - EMPTY nullable cell (payoff/sale year, proceeds, lump-sum year) → null
-//     ("none"/"keep forever"), NEVER coerced to 0. A 0 sale year is an error.
+//   - EMPTY nullable cell (payoff/sale year, proceeds, support-cost window
+//     years) → null ("none"/"keep forever"/"open"), NEVER coerced to 0. A 0
+//     sale year is an error.
 //   - Per-tab replace: a present tab replaces its whole section; an absent tab
 //     leaves that section untouched. A tab with any cell error is BLOCKED
 //     individually; other valid tabs in the same file remain applicable.
@@ -451,12 +452,13 @@ function parseSettingsTab(def, sheet) {
 
 /**
  * Parse the Household tab into Person rows. Name + Role are required; role must
- * be one of PERSON_ROLES (else a cell-addressed error). Every person carries a
- * lump-sum cost (blank → 0, emptyZero) and lump-sum year (blank → null,
- * nullable) — chiefly a dependent's one-time future expense. A spouse row
- * builds newPerson("spouse") — carrying default social/health — then overrides
- * any sub-field a cell supplies; a blank spouse cell keeps the factory default.
- * A dependent builds newPerson("dependent") and ignores the spouse-only columns.
+ * be one of PERSON_ROLES (else a cell-addressed error). Every person carries an
+ * ongoing support cost (blank → 0, emptyZero) over a [fromYear, toYear] window
+ * (each blank → null, nullable = open) — chiefly a dependent's ongoing expense
+ * (raising a kid, supporting a parent). A spouse row builds newPerson("spouse")
+ * — carrying default social/health — then overrides any sub-field a cell
+ * supplies; a blank spouse cell keeps the factory default. A dependent builds
+ * newPerson("dependent") and ignores the spouse-only columns.
  * @param {TabDef} def
  * @param {import("xlsx").WorkSheet} sheet
  * @returns {ParsedTab} rows are Person objects
@@ -503,33 +505,53 @@ function parseHouseholdTab(def, sheet) {
       continue;
     }
 
-    // lumpSum: a blank cost cell means "no lump sum" → 0 (emptyZero, like a
-    // growth rate). lumpSumYear is nullable: blank → null (never 0, like sale
-    // year). Read independently — a cost with no year (or vice versa) is
-    // accepted with the null default, mirroring the sale-year/proceeds pairing.
-    const lumpSumCol = idx.lumpSum;
-    let lumpSum = 0;
-    if (lumpSumCol >= 0 && !isEmptyCell(rowCells[lumpSumCol])) {
-      const { value, error } = readNumber(rowCells[lumpSumCol], false);
+    // annualCost: a blank cost cell means "no support cost" → 0 (emptyZero,
+    // like a growth rate). fromYear/toYear are nullable: blank → null (never 0,
+    // like sale year — an open window). Read independently — a cost with no
+    // window (or a half-open window) is accepted, mirroring the sale-year/
+    // proceeds pairing; toYear < fromYear is a cell-addressed error (as Income).
+    const annualCostCol = idx.annualCost;
+    let annualCost = 0;
+    if (annualCostCol >= 0 && !isEmptyCell(rowCells[annualCostCol])) {
+      const { value, error } = readNumber(rowCells[annualCostCol], false);
       if (error !== undefined || typeof value !== "number") {
-        errors.push({ cell: cellAddr(def.name, r, lumpSumCol), message: error ?? "expected a number" });
+        errors.push({ cell: cellAddr(def.name, r, annualCostCol), message: error ?? "expected a number" });
         continue;
       }
-      lumpSum = value;
+      annualCost = value;
     }
 
-    const lumpSumYearCol = idx.lumpSumYear;
-    let lumpSumYear = /** @type {number|null} */ (null);
-    if (lumpSumYearCol >= 0) {
-      const { value, error } = readNumber(rowCells[lumpSumYearCol], true);
+    const fromYearCol = idx.fromYear;
+    let fromYear = /** @type {number|null} */ (null);
+    if (fromYearCol >= 0) {
+      const { value, error } = readNumber(rowCells[fromYearCol], true);
       if (error !== undefined) {
-        errors.push({ cell: cellAddr(def.name, r, lumpSumYearCol), message: error });
+        errors.push({ cell: cellAddr(def.name, r, fromYearCol), message: error });
         continue;
       }
-      lumpSumYear = value ?? null;
+      fromYear = value ?? null;
     }
 
-    const person = newPerson(role, { name, currentAge: currentAge ?? null, lumpSum, lumpSumYear });
+    const toYearCol = idx.toYear;
+    let toYear = /** @type {number|null} */ (null);
+    if (toYearCol >= 0) {
+      const { value, error } = readNumber(rowCells[toYearCol], true);
+      if (error !== undefined) {
+        errors.push({ cell: cellAddr(def.name, r, toYearCol), message: error });
+        continue;
+      }
+      toYear = value ?? null;
+    }
+
+    if (typeof fromYear === "number" && typeof toYear === "number" && toYear < fromYear) {
+      errors.push({
+        cell: cellAddr(def.name, r, toYearCol),
+        message: `to-year ${toYear} is before from-year ${fromYear}`,
+      });
+      continue;
+    }
+
+    const person = newPerson(role, { name, currentAge: currentAge ?? null, annualCost, fromYear, toYear });
 
     if (role === "spouse") {
       // Fill social/health from the spouse-only cells; a blank cell keeps the

@@ -131,11 +131,39 @@ function migrateV2(v2) {
   };
 }
 
+/**
+ * v3 → v4. The v3 dependent lump-sum (one-time cost at a year) becomes an
+ * ongoing annual cost over a window. A lump sum is losslessly a one-year
+ * window (annualCost = lumpSum, fromYear = toYear = lumpSumYear); no lump sum
+ * (0) becomes no cost with an open window.
+ * @param {any} v3
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV3(v3) {
+  return {
+    ...v3,
+    schemaVersion: 4,
+    household: {
+      people: arr(v3.household?.people).map((p) => {
+        const { lumpSum, lumpSumYear, ...rest } = p;
+        const hasLump = typeof lumpSum === "number" && lumpSum !== 0 && typeof lumpSumYear === "number";
+        return {
+          ...rest,
+          annualCost: hasLump ? lumpSum : 0,
+          fromYear: hasLump ? lumpSumYear : null,
+          toYear: hasLump ? lumpSumYear : null,
+        };
+      }),
+    },
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
   1: migrateV1,
   2: migrateV2,
+  3: migrateV3,
 };
 
 /**

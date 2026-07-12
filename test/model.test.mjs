@@ -177,7 +177,7 @@ test("v0 → … → current chains through every rung", () => {
   assert.equal(state.spending[0].realGrowthPct, 0);
 });
 
-test("v2 → v3 migration adds dependent lump-sum fields, preserving any that exist", () => {
+test("v2 → current migration adds dependent support fields; v3 lump sum becomes a one-year window", () => {
   const v2 = {
     ...migrate(V1_FIXTURE).state,
     schemaVersion: 2,
@@ -188,14 +188,22 @@ test("v2 → v3 migration adds dependent lump-sum fields, preserving any that ex
       ],
     },
   };
-  const { state, migrated } = migrate(v2);
-  assert.equal(migrated, true);
+  const { state } = migrate(v2);
   assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.deepEqual(validate(state).errors, []);
   for (const person of state.household.people) {
-    assert.equal(person.lumpSum, 0);
-    assert.equal(person.lumpSumYear, null);
+    assert.equal(person.annualCost, 0);
+    assert.equal(person.fromYear, null);
+    assert.equal(person.toYear, null);
   }
+
+  // a v3 lump sum migrates losslessly to a one-year window
+  const v3 = { ...state, schemaVersion: 3, household: { people: [{ name: "Kid", role: "dependent", currentAge: null, lumpSum: 150000, lumpSumYear: 2044 }] } };
+  const { state: s4 } = migrate(v3);
+  assert.deepEqual(validate(s4).errors, []);
+  assert.equal(s4.household.people[0].annualCost, 150000);
+  assert.equal(s4.household.people[0].fromYear, 2044);
+  assert.equal(s4.household.people[0].toYear, 2044);
 });
 
 test("reanchorYears shifts every year field by the delta and preserves nulls", () => {
@@ -207,7 +215,7 @@ test("reanchorYears shifts every year field by the delta and preserves nulls", (
   assert.equal(moved.incomes[0].fromYear, s.incomes[0].fromYear + 4);
   assert.equal(moved.incomes[0].toYear, s.incomes[0].toYear + 4);
   assert.equal(moved.spending.find((c) => c.toYear !== null)?.toYear, 2038 + 4);
-  assert.equal(moved.household.people[1].lumpSumYear, 2044 + 4);
+  assert.equal(moved.household.people[1].toYear, 2044 + 4);
   // delta 0 is identity
   assert.equal(reanchorYears(s, s.profile.currentYear), s);
   // original untouched (pure)

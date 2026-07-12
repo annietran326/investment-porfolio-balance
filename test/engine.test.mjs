@@ -27,7 +27,8 @@ test("balance-update ordering: growth on prior balance, then net cash lands", ()
   s.spending = [];
   s.social.monthly = 0;
   s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
-  s.incomes = [{ name: "x", annual: 100, fromYear: s.profile.currentYear, toYear: 9999 }];
+  s.incomes = [{ name: "x", annual: 100, fromYear: s.profile.currentYear, toYear: 9999, realGrowthPct: 0 }];
+  s.household = { people: [] };
   const sim = simulate(s);
   assert.equal(Math.round(sim.rows[0].bal), 1200);
   assert.equal(Math.round(sim.rows[1].bal), 1420);
@@ -281,28 +282,28 @@ test("a future-starting spending line with growth compounds from the current yea
   assert.ok(Math.abs(/** @type {number} */ (y2031) - 12000 * 1.03 ** 5) < 1e-6);
 });
 
-test("a dependent with no lump sum has no direct engine effect", () => {
+test("a dependent with no support cost has no direct engine effect", () => {
   const a = state();
   a.household = { people: [] };
   const b = structuredClone(a);
-  b.household = { people: [{ name: "Kid", role: "dependent", currentAge: 8, lumpSum: 0, lumpSumYear: null }] };
+  b.household = { people: [{ name: "Kid", role: "dependent", currentAge: null, annualCost: 0, fromYear: null, toYear: null }] };
   assert.deepEqual(simulate(a).rows, simulate(b).rows);
 });
 
-test("a dependent lump sum lands once, in its year only", () => {
+test("a dependent's annual support cost applies every year within its window", () => {
   const s = state();
   s.properties = [];
   s.incomes = [];
   s.spending = [];
   s.social.monthly = 0;
   s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 0 };
-  s.household = { people: [{ name: "Kid", role: "dependent", currentAge: null, lumpSum: 150_000, lumpSumYear: 2044 }] };
+  s.household = { people: [{ name: "Kid", role: "dependent", currentAge: null, annualCost: 18_000, fromYear: null, toYear: 2044 }] };
   const sim = simulate(s);
-  assert.equal(sim.rows.find((r) => r.year === 2043)?.spend, 0);
-  assert.equal(sim.rows.find((r) => r.year === 2044)?.spend, 150_000);
-  assert.equal(sim.rows.find((r) => r.year === 2045)?.spend, 0);
-  // the spending shock scenario does NOT scale a lump sum (it's a discrete event)
-  assert.equal(simulate(s, { spendMult: 1.2 }).rows.find((r) => r.year === 2044)?.spend, 150_000);
+  assert.equal(sim.rows.find((r) => r.year === 2026)?.spend, 18_000); // from the start (null fromYear)
+  assert.equal(sim.rows.find((r) => r.year === 2044)?.spend, 18_000); // last year of the window
+  assert.equal(sim.rows.find((r) => r.year === 2045)?.spend, 0); // window ended
+  // it IS a living expense, so the +20% spending shock scales it
+  assert.equal(simulate(s, { spendMult: 1.2 }).rows.find((r) => r.year === 2030)?.spend, 21_600);
 });
 
 test("engine purity: no node imports, no Date, no clock anywhere in src/engine", () => {

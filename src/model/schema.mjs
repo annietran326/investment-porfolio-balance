@@ -14,7 +14,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites — code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -71,8 +71,9 @@ export const BASE_YEAR = 2026;
  * @property {string} name
  * @property {PersonRole} role
  * @property {number|null} currentAge  needed for a spouse's SS/healthcare timing
- * @property {number} lumpSum   a one-time cost (today's $) — a dependent's big future expense (college, a wedding). 0 = none
- * @property {number|null} lumpSumYear  the year the lump sum lands; null = none
+ * @property {number} annualCost   ongoing support cost (today's $/yr) — raising a kid, supporting a parent. 0 = none
+ * @property {number|null} fromYear  first year the cost applies; null = from the start
+ * @property {number|null} toYear    last year the cost applies; null = for the whole plan
  * @property {Social} [social]  a spouse's own Social Security (absent = none)
  * @property {Health} [health]  a spouse's own healthcare load (absent = none)
  *
@@ -138,8 +139,9 @@ export function newPerson(role, o = {}) {
     name: o.name ?? (role === "spouse" ? "Spouse" : "Dependent"),
     role,
     currentAge: o.currentAge ?? null,
-    lumpSum: o.lumpSum ?? 0,
-    lumpSumYear: o.lumpSumYear ?? null,
+    annualCost: o.annualCost ?? 0,
+    fromYear: o.fromYear ?? null,
+    toYear: o.toYear ?? null,
   };
   if (role === "spouse") {
     p.social = o.social ?? newSocial();
@@ -198,7 +200,8 @@ export function reanchorYears(state, targetYear) {
     c.toYear = shift(c.toYear);
   }
   for (const person of next.household.people) {
-    person.lumpSumYear = shift(person.lumpSumYear);
+    person.fromYear = shift(person.fromYear);
+    person.toYear = shift(person.toYear);
   }
   return next;
 }
@@ -373,10 +376,14 @@ export function validate(s) {
     if (typeof person.name !== "string" || !person.name.trim()) add(errors, `${at}.name`, "name required");
     if (!PERSON_ROLES.includes(person.role)) add(errors, `${at}.role`, `must be one of ${PERSON_ROLES.join(", ")}`);
     requireNumberOrNull(errors, person.currentAge, `${at}.currentAge`);
-    requireNumber(errors, person.lumpSum, `${at}.lumpSum`);
-    requireNumberOrNull(errors, person.lumpSumYear, `${at}.lumpSumYear`);
-    if (typeof person.lumpSumYear === "number" && person.lumpSumYear < currentYear) {
-      add(warnings, `${at}.lumpSumYear`, `lump-sum year ${person.lumpSumYear} is in the past — this cost will never apply`);
+    requireNumber(errors, person.annualCost, `${at}.annualCost`);
+    requireNumberOrNull(errors, person.fromYear, `${at}.fromYear`);
+    requireNumberOrNull(errors, person.toYear, `${at}.toYear`);
+    if (typeof person.fromYear === "number" && typeof person.toYear === "number" && person.toYear < person.fromYear) {
+      add(errors, `${at}.toYear`, `to-year ${person.toYear} is before from-year ${person.fromYear}`);
+    }
+    if (typeof person.toYear === "number" && person.toYear < currentYear) {
+      add(warnings, `${at}.toYear`, `end year ${person.toYear} is in the past — this cost will never apply`);
     }
     if (person.role === "spouse") {
       spouseCount++;

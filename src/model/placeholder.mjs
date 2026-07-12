@@ -53,14 +53,15 @@ export function placeholderState() {
           name: "Example Spouse",
           role: "spouse",
           currentAge: 38,
-          lumpSum: 0,
-          lumpSumYear: null,
+          annualCost: 0,
+          fromYear: null,
+          toYear: null,
           social: { startAge: 67, monthly: 2400, haircutPct: 25 },
           health: { preMedicareAnnual: 16_000, postMedicareAnnual: 7_500, employerCoverageUntilAge: 40 },
         },
-        // A dependent carries a one-time future cost (e.g. college); ongoing
-        // costs go in regular spending lines.
-        { name: "Example Dependent (college 2044)", role: "dependent", currentAge: null, lumpSum: 150_000, lumpSumYear: 2044 },
+        // A dependent carries an ongoing support cost over a window — e.g.
+        // raising a kid at $18k/yr through 2044.
+        { name: "Example Dependent (support through 2044)", role: "dependent", currentAge: null, annualCost: 18_000, fromYear: null, toYear: 2044 },
       ],
     },
     endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },

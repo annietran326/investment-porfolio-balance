@@ -51,13 +51,14 @@ function blankPerson(role) {
       name: "Spouse",
       role,
       currentAge: null,
-      lumpSum: 0,
-      lumpSumYear: null,
+      annualCost: 0,
+      fromYear: null,
+      toYear: null,
       social: { startAge: 67, monthly: 0, haircutPct: 25 },
       health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 65 },
     };
   }
-  return { name: "Dependent", role, currentAge: null, lumpSum: 0, lumpSumYear: null };
+  return { name: "Dependent", role, currentAge: null, annualCost: 0, fromYear: null, toYear: null };
 }
 
 /** @param {RunwayState} state @param {ListKind} kind @returns {RunwayState} */

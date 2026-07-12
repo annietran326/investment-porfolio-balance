@@ -77,7 +77,7 @@
       <button id="addSpouse" type="button" class="small">+ spouse</button>
       <button id="addDependent" type="button" class="small">+ dependent</button>
     </div>
-    <div class="footnote">Self is above (Profile / Social Security / Healthcare). Add a spouse to fold in their Social Security and healthcare (their income goes in Income streams). A dependent carries one big one-time cost (e.g. college); recurring dependent costs go in Spending with a start/end year.</div>
+    <div class="footnote">Self is above (Profile / Social Security / Healthcare). Add a spouse to fold in their Social Security and healthcare (their income goes in Income streams). A dependent carries an ongoing support cost over a period — raising a kid for 18 years, supporting a parent until end of life.</div>
   </section>
 
   <section class="card">
@@ -195,7 +195,7 @@
           <li><strong>Income</strong> — each stream (entered net of tax), counted only between its from/to years, growing at its real growth rate. A spouse's income is just more income lines.</li>
           <li><strong>Social Security</strong> — starts at your start age, reduced by the haircut % (your hedge against the trust-fund shortfall). A spouse has their own, on their own age.</li>
           <li><strong>Property</strong> — per rental: rent − costs − mortgage P&amp;I. Rent and costs can grow vs inflation; the mortgage payment is fixed in dollars, so it's held flat (slightly conservative). A sale books its net proceeds once, in the sale year; the mortgage stops after its payoff year.</li>
-          <li><strong>Spending</strong> — monthly categories × 12, each only within its start/end years and growing at its real rate; plus healthcare (your pre-65 bridge once employer coverage ends, then Medicare at 65 — and your spouse's); plus any one-time dependent costs in the year they land.</li>
+          <li><strong>Spending</strong> — monthly categories × 12, each only within its start/end years and growing at its real rate; plus any dependent support costs over their window; plus healthcare (your pre-65 bridge once employer coverage ends, then Medicare at 65 — and your spouse's).</li>
         </ul>
         <p><strong>The verdict.</strong> First it runs the whole plan with no extra income. If the balance reaches your goal — die with zero, leave a bequest, or never dip below a floor — you're done. If not, it binary-searches the smallest net income you'd need each year, from now until your work-until age, to just reach the goal. That's your <strong>required income</strong>.</p>
         <p><strong>Stress scenarios</strong> rerun the same plan under bad cases — a rental vacant plus a big repair plus a delayed sale, a 30% market drop now, spending 20% higher forever, and all at once — so you see how fragile or robust the answer is.</p>
@@ -321,11 +321,12 @@
       <button type="button" class="small danger remove" aria-label="remove dependent">✕</button>
     </div>
     <div class="issue"></div>
-    <div class="grid2">
-      <div class="field"><label>one-time cost $</label><input type="number" data-field="lumpSum" placeholder="0"><div class="issue"></div></div>
-      <div class="field"><label>in year</label><input type="number" data-field="lumpSumYear" placeholder="e.g. 2044"><div class="issue"></div></div>
+    <div class="grid3">
+      <div class="field"><label>support $/yr</label><input type="number" data-field="annualCost" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>from yr</label><input type="number" data-field="fromYear" placeholder="from now"><div class="issue"></div></div>
+      <div class="field"><label>through yr</label><input type="number" data-field="toYear" placeholder="e.g. 2044"><div class="issue"></div></div>
     </div>
-    <div class="footnote">One big future cost — college, a wedding — as a lump sum in today's dollars, landing in that year. Ongoing costs (childcare, activities) go in Spending with a start/end year.</div>
+    <div class="footnote">Ongoing cost to support them, in today's dollars per year, over a period — e.g. raising a kid at $18k/yr through 2044, or a parent until end of life. Leave "from" blank to start now.</div>
   </div>
 </template>
 

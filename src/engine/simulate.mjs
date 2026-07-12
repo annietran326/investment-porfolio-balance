@@ -144,13 +144,16 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
         categorySpend += grownValue(c.monthly * 12, c.realGrowthPct, i);
       }
     }
+    // Household support costs (raising a kid, supporting a parent) — an ongoing
+    // living expense over each person's window, so it flexes with the spending
+    // shock like a category and holds constant in real terms.
+    for (const person of s.household?.people ?? []) {
+      if (person.annualCost && (person.fromYear == null || year >= person.fromYear) && (person.toYear == null || year <= person.toYear)) {
+        categorySpend += person.annualCost;
+      }
+    }
     let spend = categorySpend * spendMult + health;
     if (overlay.oneTimeCost && i === (overlay.oneTimeCostYearIdx ?? 0)) spend += overlay.oneTimeCost;
-    // Household one-time lump-sum costs (a dependent's college, etc.) — discrete
-    // events, not scaled by the spending-shock scenario.
-    for (const person of s.household?.people ?? []) {
-      if (person.lumpSum && person.lumpSumYear === year) spend += person.lumpSum;
-    }
 
     const net = income + ss + propCF + proceeds - spend;
     bal = bal * (1 + r) + net;
