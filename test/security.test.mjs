@@ -11,6 +11,7 @@ import { createServer, request } from "node:http";
 import { createStore } from "../src/server/store.mjs";
 import { createApi } from "../src/server/api.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
+import { makeWorkspace } from "../src/model/workspace.mjs";
 
 let dir;
 let publicDir;
@@ -28,7 +29,7 @@ before(async () => {
 
   store = createStore(dir);
   store.init();
-  store.save(placeholderState()); // seeded, rev 1
+  store.save(makeWorkspace({ id: "s1", state: placeholderState() })); // seeded, rev 1
 
   server = createServer(createApi(store, { publicDir }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

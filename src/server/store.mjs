@@ -36,10 +36,19 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SCHEMA_VERSION, validate } from "../model/schema.mjs";
 import { migrate, FutureVersionError } from "../model/migrate.mjs";
+import {
+  WORKSPACE_VERSION,
+  activeScenario,
+  activeState,
+  makeWorkspace,
+  migrateWorkspace,
+  validateWorkspace,
+} from "../model/workspace.mjs";
 import { requiredIncome } from "../engine/solver.mjs";
 import { SCENARIOS } from "../engine/scenarios.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
+/** @typedef {import("../model/workspace.mjs").Workspace} Workspace */
 /** @typedef {import("../model/schema.mjs").Issue} Issue */
 /** @typedef {{file: string, ts: string, source: string}} SnapshotInfo */
 /**
@@ -53,7 +62,7 @@ import { SCENARIOS } from "../engine/scenarios.mjs";
 /**
  * @typedef {Object} LoadResult
  * @property {boolean} seeded
- * @property {RunwayState} [state]
+ * @property {Workspace} [workspace]
  * @property {Issue[]} [warnings]
  * @property {boolean} [migrated]
  * @property {number} [rev]
@@ -200,12 +209,13 @@ export const AUX_SCHEMA_VERSION = 1;
 
 /**
  * @param {string} dataDir absolute path
- * @param {{now?: () => Date, _failAfter?: "current-write"|"transactions-write"|null}} [opts]
+ * @param {{now?: () => Date, makeId?: () => string, _failAfter?: "current-write"|"transactions-write"|null}} [opts]
  *   `now` is the injectable clock; `_failAfter` is a test-only hook that is
  *   read live on every save/write, so tests can pin commit-order invariants.
  */
 export function createStore(dataDir, opts = {}) {
   const now = opts.now ?? (() => new Date());
+  const makeId = opts.makeId ?? (() => randomUUID());
   const currentPath = join(dataDir, "current.json");
   const snapDir = join(dataDir, "snapshots");
   const trendsPath = join(dataDir, "trends.jsonl");
@@ -220,7 +230,7 @@ export function createStore(dataDir, opts = {}) {
   // Rev of the last trend row appended this session — drives the shutdown hook.
   let lastTrendRev = 0;
 
-  /** @param {RunwayState} state */
+  /** @param {RunwayState | Workspace} state */
   function serialize(state) {
     return JSON.stringify(state, null, 2) + "\n";
   }
@@ -339,18 +349,19 @@ export function createStore(dataDir, opts = {}) {
   /**
    * Trend rows are computed by the SERVER from the state it just persisted —
    * never accepted from a client.
-   * @param {RunwayState} state @param {string} source @param {number} rev
+   * @param {RunwayState} state @param {string} scenarioName @param {string} source @param {number} rev
    */
-  function computeTrendRow(state, source, rev) {
+  function computeTrendRow(state, scenarioName, source, rev) {
     const ts = now();
     const base = SCENARIOS.find((sc) => sc.key === "base");
     const worst = SCENARIOS.find((sc) => sc.key === "everything");
     return {
-      v: 1,
+      v: 2,
       ts: ts.toISOString(),
       date: dateOf(ts),
       source,
       rev,
+      scenario: scenarioName, // which plan this point belongs to
       totalBalance: state.portfolio.balance,
       // Current-year monthly spend: only categories active now (respects windows).
       monthlySpend: state.spending.reduce((sum, c) => {
@@ -367,10 +378,10 @@ export function createStore(dataDir, opts = {}) {
    * Append one self-describing JSONL row. Torn-tail discipline: if the file
    * doesn't end in a newline (crash mid-write), truncate back to the last
    * complete line before appending.
-   * @param {RunwayState} state @param {string} source @param {number} rev
+   * @param {RunwayState} state @param {string} scenarioName @param {string} source @param {number} rev
    */
-  function appendTrendRow(state, source, rev) {
-    const row = computeTrendRow(state, source, rev);
+  function appendTrendRow(state, scenarioName, source, rev) {
+    const row = computeTrendRow(state, scenarioName, source, rev);
     let content = readFileSafe(trendsPath) ?? "";
     if (content && !content.endsWith("\n")) content = content.slice(0, content.lastIndexOf("\n") + 1);
     atomicWriteSync(trendsPath, content + JSON.stringify(row) + "\n");
@@ -423,26 +434,32 @@ export function createStore(dataDir, opts = {}) {
     } catch {
       return quarantineCurrent();
     }
-    const v = data === null || typeof data !== "object" ? undefined : data.schemaVersion;
-    // A missing/garbled schemaVersion on the load path is corrupt — never
-    // sniffed. v0 exports enter only via the explicit importV0 path.
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 0) return quarantineCurrent();
-    if (v > SCHEMA_VERSION) throw new FutureVersionError(v);
-
-    let state = data;
-    let migrated = false;
-    if (v < SCHEMA_VERSION) {
-      writeSnapshotBytes(raw, "migration"); // preserve pre-migration bytes first
-      state = migrate(data).state;
-      migrated = true;
+    // migrateWorkspace accepts either a workspace or a bare (pre-workspace)
+    // state, wrapping the latter as "Base plan". MissingVersionError (garbage)
+    // → corrupt; FutureVersionError (workspace or state ahead of us) → refuse.
+    let workspace;
+    try {
+      ({ workspace } = migrateWorkspace(data, { makeId }));
+    } catch (e) {
+      if (e instanceof FutureVersionError) throw e;
+      return quarantineCurrent();
     }
-    const { errors, warnings } = validate(state);
-    if (errors.length) return quarantineCurrent();
-    if (migrated) {
-      atomicWriteSync(currentPath, serialize(state));
+    if (validateWorkspace(workspace).errors.length) return quarantineCurrent();
+
+    // Persist (with a pre-migration snapshot) only if load actually changed the
+    // on-disk shape: a bare state wrapped, a version bumped, or activeId repaired.
+    const changed =
+      !Array.isArray(data?.scenarios) ||
+      data.workspaceVersion !== WORKSPACE_VERSION ||
+      !data.scenarios.some((/** @type {any} */ s) => s?.id === data.activeId) ||
+      data.scenarios.some((/** @type {any} */ s) => s?.state?.schemaVersion !== SCHEMA_VERSION);
+    if (changed) {
+      writeSnapshotBytes(raw, "migration"); // preserve pre-migration bytes first
+      atomicWriteSync(currentPath, serialize(workspace));
       bumpRev();
     }
-    return { seeded: true, state, warnings, migrated, rev: manifest.rev };
+    const warnings = validate(activeState(workspace)).warnings;
+    return { seeded: true, workspace, warnings, migrated: changed, rev: manifest.rev };
   }
 
   /**
@@ -547,29 +564,30 @@ export function createStore(dataDir, opts = {}) {
   /**
    * Validate and persist a state. Validation errors reject; warnings pass
    * through. See the module header for the pinned commit order.
-   * @param {RunwayState} state
+   * @param {Workspace} workspace
    * @param {{source?: string}} [saveOpts]
    * @returns {{rev: number, warnings: Issue[]}}
    */
-  function save(state, { source = "edit" } = {}) {
-    const { errors, warnings } = validate(state);
+  function save(workspace, { source = "edit" } = {}) {
+    const { errors } = validateWorkspace(workspace);
     if (errors.length) throw new ValidationError(errors);
-    const bytes = serialize(state);
+    const bytes = serialize(workspace);
     // (1) current commits first — trends are always a subset of committed history.
     atomicWriteSync(currentPath, bytes);
     if (opts._failAfter === "current-write") throw new Error("injected failure: crashed after current.json commit");
     const rev = bumpRev();
-    // (2) snapshot once per calendar date, then (3) its trend row.
+    const active = activeScenario(workspace);
+    // (2) snapshot once per calendar date, then (3) its trend row (active scenario).
     // Neither failure may fail the save.
     if (!hasSnapshotForDate(dateOf(now()))) {
       try {
         writeSnapshotBytes(bytes, source);
-        appendTrendRow(state, source, rev);
+        appendTrendRow(active.state, active.name, source, rev);
       } catch (e) {
         process.stderr.write(`runway: snapshot/trend write failed (save already committed): ${message(e)}\n`);
       }
     }
-    return { rev, warnings };
+    return { rev, warnings: validate(active.state).warnings };
   }
 
   /**
@@ -583,8 +601,9 @@ export function createStore(dataDir, opts = {}) {
     const file = writeSnapshotBytes(raw, source);
     try {
       const data = JSON.parse(raw);
-      if (data?.schemaVersion === SCHEMA_VERSION && validate(data).errors.length === 0) {
-        appendTrendRow(data, source, manifest.rev);
+      if (data?.workspaceVersion === WORKSPACE_VERSION && validateWorkspace(data).errors.length === 0) {
+        const active = activeScenario(data);
+        appendTrendRow(active.state, active.name, source, manifest.rev);
       }
     } catch (e) {
       process.stderr.write(`runway: trend row skipped for snapshot ${file}: ${message(e)}\n`);
@@ -620,7 +639,7 @@ export function createStore(dataDir, opts = {}) {
    * transactions.json / mappings.json (see module header).
    * @param {string} file snapshot filename (validated against the listing)
    * @param {{baseRev: number}} restoreOpts
-   * @returns {{rev: number, state: RunwayState, warnings: Issue[]}}
+   * @returns {{rev: number, workspace: Workspace, warnings: Issue[]}}
    */
   function restore(file, { baseRev }) {
     if (baseRev !== manifest.rev) throw new RevConflictError(manifest.rev);
@@ -633,28 +652,25 @@ export function createStore(dataDir, opts = {}) {
     } catch {
       throw new SnapshotCorruptError(name, "not valid JSON");
     }
-    const v = data === null || typeof data !== "object" ? undefined : data.schemaVersion;
-    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    // A snapshot is a workspace (older snapshots may be a bare state or an older
+    // version — migrateWorkspace brings them current).
+    let workspace;
+    try {
+      ({ workspace } = migrateWorkspace(data, { makeId }));
+    } catch (e) {
+      if (e instanceof FutureVersionError) throw e;
       throw new SnapshotCorruptError(name, "missing schemaVersion");
     }
-    if (v > SCHEMA_VERSION) throw new FutureVersionError(v);
-
-    let bytes = raw;
-    let state = data;
-    if (v < SCHEMA_VERSION) {
-      writeSnapshotBytes(raw, "migration"); // pre-migration provenance
-      state = migrate(data).state;
-      bytes = serialize(state);
-    }
-    const { errors, warnings } = validate(state);
-    if (errors.length) throw new ValidationError(errors);
+    const wasCurrent = data?.workspaceVersion === WORKSPACE_VERSION && !data?.scenarios?.some((/** @type {any} */ s) => s?.state?.schemaVersion !== SCHEMA_VERSION);
+    if (validateWorkspace(workspace).errors.length) throw new ValidationError(validateWorkspace(workspace).errors);
 
     // Preserve what we're leaving — unless current.json is already gone
     // (corrupt-recovery: the corrupt file is preserved in quarantine).
     if (existsSync(currentPath)) snapshotNow("restore");
-    atomicWriteSync(currentPath, bytes);
+    if (!wasCurrent) writeSnapshotBytes(raw, "migration"); // pre-migration provenance for an old snapshot
+    atomicWriteSync(currentPath, wasCurrent ? raw : serialize(workspace));
     const rev = bumpRev();
-    return { rev, state, warnings };
+    return { rev, workspace, warnings: validate(activeState(workspace)).warnings };
   }
 
   /**
@@ -663,15 +679,16 @@ export function createStore(dataDir, opts = {}) {
    * snapshots/ as provenance before the ladder touches it.
    * @param {any} rawData
    * @param {{baseRev: number}} importOpts
-   * @returns {{rev: number, state: RunwayState, warnings: Issue[]}}
+   * @returns {{rev: number, workspace: Workspace, warnings: Issue[]}}
    */
   function importV0(rawData, { baseRev }) {
     if (baseRev !== manifest.rev) throw new RevConflictError(manifest.rev);
     writeSnapshotBytes(JSON.stringify(rawData, null, 2) + "\n", V0_PROVENANCE_SOURCE);
     const { state } = migrate(rawData, { declaredVersion: 0 });
     if (existsSync(currentPath)) snapshotNow("import");
-    const { rev, warnings } = save(state, { source: "migration" });
-    return { rev, state, warnings };
+    const workspace = makeWorkspace({ id: makeId(), state });
+    const { rev, warnings } = save(workspace, { source: "migration" });
+    return { rev, workspace, warnings };
   }
 
   /**
@@ -716,9 +733,10 @@ export function createStore(dataDir, opts = {}) {
     if (raw === null) return;
     try {
       const data = JSON.parse(raw);
-      if (data?.schemaVersion !== SCHEMA_VERSION) return;
-      if (validate(data).errors.length) return;
-      appendTrendRow(data, "shutdown", manifest.rev);
+      if (data?.workspaceVersion !== WORKSPACE_VERSION) return;
+      if (validateWorkspace(data).errors.length) return;
+      const active = activeScenario(data);
+      appendTrendRow(active.state, active.name, "shutdown", manifest.rev);
     } catch (e) {
       process.stderr.write(`runway: shutdown trend skipped: ${message(e)}\n`);
     }
@@ -746,5 +764,7 @@ export function createStore(dataDir, opts = {}) {
     // The store owns the clock; the API layer reads "now" through here so the
     // derivation window (current-month exclusion) stays test-controllable.
     now: () => now(),
+    // The store owns id generation too, so scenario ids stay test-controllable.
+    newId: () => makeId(),
   };
 }

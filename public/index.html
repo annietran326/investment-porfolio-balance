@@ -21,6 +21,8 @@
   <button id="btnReset" type="button" class="small danger">Reset</button>
 </header>
 
+<nav id="scenarioBar" class="scenario-bar" aria-label="scenarios"></nav>
+
 <div id="banners">
   <div id="recoveryPanel" class="banner banner-warn hidden">
     <div class="banner-row">
@@ -157,7 +159,7 @@
   <section class="card">
     <h2>Work</h2>
     <div class="field"><label for="f-workUntil">Willing to work until age</label><input id="f-workUntil" type="number" data-path="work.untilAge"><div class="issue"></div></div>
-    <div class="footnote">The spending shock is scenario-fixed (+20% — see the table); the solver's only variable is income over this window.</div>
+    <div class="footnote">The spending shock is stress-test-fixed (+20% — see the table); the solver's only variable is income over this window.</div>
   </section>
 
 </div>
@@ -176,16 +178,16 @@
   </div>
 
   <section class="card">
-    <h2>Required income by scenario</h2>
+    <h2>Required income by stress test</h2>
     <table>
-      <thead><tr><th>Scenario</th><th>Runway</th><th id="thRequired">Required $/yr</th></tr></thead>
+      <thead><tr><th>Stress test</th><th>Runway</th><th id="thRequired">Required $/yr</th></tr></thead>
       <tbody id="scenarioRows"></tbody>
     </table>
-    <div class="footnote">Runway = first year the balance goes below $0. Required income = minimum net $/yr from now until your work-until age so the plan lands on the goal.</div>
+    <div class="footnote">Runway = first year the balance goes below $0. Required income = minimum net $/yr from now until your work-until age so the plan lands on the goal. Each row stresses the active plan a different way; switch plans in the scenario bar up top.</div>
   </section>
 
   <section class="card">
-    <h2>Balance over time <span class="hint">hover or tap for a year; click a chip to toggle a scenario</span></h2>
+    <h2>Balance over time <span class="hint">hover or tap for a year; click a chip to toggle a stress test</span></h2>
     <div id="balanceChart" class="chart-wrap"></div>
     <details class="drill">
       <summary>Year-by-year cash flow (base case)</summary>

@@ -18,6 +18,7 @@ import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
 import { initTrends } from "./ui/trends.mjs";
 import { initSnapshots } from "./ui/snapshots.mjs";
 import { initImports } from "./ui/imports.mjs";
+import { initScenarioBar } from "./ui/scenarios.mjs";
 import {
   addRow,
   removeRow,
@@ -39,6 +40,9 @@ const JSON_HEADERS = { "Content-Type": "application/json" };
 const boot = await (await fetch("/api/state")).json();
 let state = boot.state;
 const seededAtLoad = boot.seeded === true;
+let seeded = seededAtLoad; // mutable: create/import seed on the server; the bar reads this
+let scenarios = boot.scenarios ?? [];
+let activeId = boot.activeId ?? "";
 let placeholderBannerLive = false;
 
 const pipeline = createSavePipeline({
@@ -239,6 +243,22 @@ function renderResults() {
   cashflow.update(base.sim.rows);
 }
 
+/**
+ * Render the WHOLE app for the current `state` — the boot sequence, factored so
+ * a scenario switch/create/delete can re-render a freshly-active plan without a
+ * page reload. Rebuilds the row lists + people, syncs scalars, then validates
+ * and (if clean) re-renders results. Focus/scroll resetting here is acceptable
+ * — a switch is a deliberate whole-plan swap, not an in-place edit.
+ */
+function renderAll() {
+  for (const kind of Object.keys(LISTS)) renderList(kind);
+  renderPeopleList();
+  syncScalars();
+  const { errors, warnings } = validate(state);
+  renderIssues(errors, warnings);
+  if (!errors.length) renderResults();
+}
+
 // ---------------------------------------------------------------------------
 // the single write path
 // ---------------------------------------------------------------------------
@@ -336,7 +356,47 @@ function renderRecovery(recovery) {
 // static wiring (runs once)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// scenario bar (workspace layer) — switch/create/rename/delete
+// ---------------------------------------------------------------------------
+
+// Built in buildStaticBindings(); the boot block renders it once state is live.
+/** @type {{render: (src: {scenarios: {id:string,name:string}[], activeId: string}) => void} | null} */
+let scenarioBar = null;
+
+/**
+ * Apply a scenario-mutation response. Threads the new rev into the save
+ * pipeline, updates the workspace view, and re-renders. A switch/create/delete
+ * returns a fresh active `state` → full re-render; a rename only moves labels.
+ * @param {{rev: number, activeId?: string, state?: object, scenarios: {id:string,name:string}[], warnings?: any[]}} resp
+ * @param {"switch"|"create"|"rename"|"delete"} kind
+ */
+function applyWorkspaceResponse(resp, kind) {
+  pipeline.setRev(resp.rev);
+  seeded = true; // any successful scenario mutation means the dir is now seeded
+  scenarios = resp.scenarios ?? scenarios;
+  if (resp.activeId) activeId = resp.activeId;
+  if (kind !== "rename" && resp.state) {
+    state = resp.state;
+    // a fresh plan is loaded — a debounced edit for the OLD plan is meaningless
+    pipeline.cancel();
+    if (placeholderBannerLive) {
+      show(qs("#placeholderBanner"), false);
+      placeholderBannerLive = false;
+    }
+    renderAll();
+  }
+  scenarioBar?.render({ scenarios, activeId });
+}
+
 function buildStaticBindings() {
+  scenarioBar = initScenarioBar(qs("#scenarioBar"), {
+    pipeline,
+    getSeeded: () => seeded,
+    onWorkspace: applyWorkspaceResponse,
+    onConflict: () => show(qs("#conflictBanner"), true),
+  });
+
   // scalar fields (number inputs + range sliders share data-path; syncScalars links them)
   for (const input of document.querySelectorAll("[data-path]")) {
     input.addEventListener("input", () => {
@@ -454,6 +514,7 @@ syncScalars();
   renderIssues(errors, warnings);
   if (!errors.length) renderResults(); // verdict is NEVER blank on load
 }
+scenarioBar?.render({ scenarios, activeId }); // the workspace bar reflects the boot state
 if (boot.recovery) {
   renderRecovery(boot.recovery); // placeholder renders underneath — the app stays alive
 } else if (!boot.seeded) {

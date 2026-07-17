@@ -17,6 +17,17 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { placeholderState } from "../model/placeholder.mjs";
 import { defaultState, reanchorYears } from "../model/schema.mjs";
+import {
+  WORKSPACE_VERSION,
+  activeState,
+  addScenario,
+  deleteScenario,
+  makeWorkspace,
+  renameScenario,
+  scenarioList,
+  setActive,
+  withActiveState,
+} from "../model/workspace.mjs";
 import { MissingVersionError, FutureVersionError } from "../model/migrate.mjs";
 import {
   applicableTabs,
@@ -195,8 +206,8 @@ export function createApi(store, opts = {}) {
   // in sync on every successful mutation.
   const loaded = store.load();
   let seeded = loaded.seeded;
-  /** @type {RunwayState|null} */
-  let state = loaded.state ?? null;
+  /** @type {import("../model/workspace.mjs").Workspace|null} */
+  let workspace = loaded.workspace ?? null;
   /** @type {Issue[]} */
   let warnings = loaded.warnings ?? [];
   /** @type {{quarantinedAs: string, snapshots: SnapshotInfo[]}|null} */
@@ -312,6 +323,10 @@ export function createApi(store, opts = {}) {
     if (pathname === "/api/import/transactions/apply" && method === "POST") return apiTxnApply(req, res);
     if (pathname === "/api/export/template" && method === "GET") return apiTemplateExport(res);
     if (pathname === "/api/reset" && method === "POST") return apiReset(req, res);
+    if (pathname === "/api/scenarios/create" && method === "POST") return apiScenarioCreate(req, res);
+    if (pathname === "/api/scenarios/switch" && method === "POST") return apiScenarioSwitch(req, res);
+    if (pathname === "/api/scenarios/rename" && method === "POST") return apiScenarioRename(req, res);
+    if (pathname === "/api/scenarios/delete" && method === "POST") return apiScenarioDelete(req, res);
     if (pathname === "/api/trends" && method === "GET") {
       return sendJson(res, 200, { rows: store.readTrends() });
     }
@@ -339,11 +354,30 @@ export function createApi(store, opts = {}) {
   function freshDefault() {
     return reanchorYears(defaultState(), store.now().getFullYear());
   }
+  // The single-scenario workspace shown before the first edit (unseeded). Its id
+  // is a fixed sentinel so GET is stable; it's never persisted.
+  function unseededWorkspace() {
+    return { workspaceVersion: WORKSPACE_VERSION, activeId: "local", scenarios: [{ id: "local", name: "Base plan", state: freshPlaceholder() }] };
+  }
+  // The active state to import onto / export from: the active scenario when
+  // seeded, else a fresh default (import) — export uses the placeholder instead.
+  /** @param {() => RunwayState} fallback */
+  function activeOr(fallback) {
+    return workspace ? activeState(workspace) : fallback();
+  }
 
   /** @param {Res} res */
   function apiGetState(res) {
+    const ws = workspace ?? unseededWorkspace();
     /** @type {Record<string, unknown>} */
-    const body = { state: state ?? freshPlaceholder(), rev: store.rev(), seeded, warnings };
+    const body = {
+      state: activeState(ws),
+      rev: store.rev(),
+      seeded,
+      warnings,
+      scenarios: scenarioList(ws),
+      activeId: ws.activeId,
+    };
     if (recovery) body.recovery = recovery;
     sendJson(res, 200, body);
   }
@@ -377,9 +411,16 @@ export function createApi(store, opts = {}) {
     if (body === undefined) return;
     const candidate = body?.state;
     if (requireBaseRev(body, res) === undefined) return;
+    // Field-level errors on the ACTIVE state (unprefixed so the client maps
+    // them to fields); the store separately guards the whole workspace.
+    const check = validate(candidate);
+    if (check.errors.length) return sendJson(res, 400, { errors: check.errors });
     try {
-      const result = store.save(candidate);
-      state = candidate;
+      // Seeded: replace the active scenario's state. Unseeded: first edit
+      // establishes the workspace with this state as the sole "Base plan".
+      const next = workspace ? withActiveState(workspace, candidate) : makeWorkspace({ id: store.newId(), state: candidate });
+      const result = store.save(next);
+      workspace = next;
       seeded = true;
       warnings = result.warnings;
       recovery = null;
@@ -403,7 +444,7 @@ export function createApi(store, opts = {}) {
     }
     try {
       const result = store.restore(file, { baseRev });
-      state = result.state;
+      workspace = result.workspace;
       seeded = true;
       warnings = result.warnings;
       recovery = null;
@@ -431,7 +472,7 @@ export function createApi(store, opts = {}) {
     }
     try {
       const result = store.importV0(data, { baseRev });
-      state = result.state;
+      workspace = result.workspace;
       seeded = true;
       warnings = result.warnings;
       recovery = null;
@@ -478,7 +519,7 @@ export function createApi(store, opts = {}) {
     evictOldest(templatePreviews, MAX_TEMPLATE_PREVIEWS);
     // Unseeded dirs import onto the schema defaults, never the placeholder —
     // example rentals must not silently become real data.
-    const base = state ?? freshDefault();
+    const base = activeOr(freshDefault);
     return sendJson(res, 200, { preview: previewTemplate(base, parsed), token, rev: store.rev() });
   }
 
@@ -510,11 +551,12 @@ export function createApi(store, opts = {}) {
       });
     }
     if (seeded) store.snapshotNow("template-import"); // preserve what the import replaces
-    const next = applyTabs(state ?? freshDefault(), entry.parsed, tabs);
+    const nextState = applyTabs(activeOr(freshDefault), entry.parsed, tabs);
+    const nextWs = workspace ? withActiveState(workspace, nextState) : makeWorkspace({ id: store.newId(), state: nextState });
     try {
-      const result = store.save(next, { source: "template-import" });
+      const result = store.save(nextWs, { source: "template-import" });
       templatePreviews.delete(token);
-      state = next;
+      workspace = nextWs;
       seeded = true;
       warnings = result.warnings;
       recovery = null;
@@ -706,16 +748,17 @@ export function createApi(store, opts = {}) {
     }
     const includeSet = new Set(include);
     const selected = entry.derived.categories.filter((c) => includeSet.has(c.name));
-    const next = applyDerived(state ?? freshDefault(), selected, mode);
+    const nextState = applyDerived(activeOr(freshDefault), selected, mode);
 
     // Validate BEFORE any write so a rejected state never leaves half an
     // import on disk (save re-validates; this keeps the write order clean).
-    const { errors } = validate(next);
+    const { errors } = validate(nextState);
     if (errors.length) return sendJson(res, 400, { errors });
+    const nextWs = workspace ? withActiveState(workspace, nextState) : makeWorkspace({ id: store.newId(), state: nextState });
 
     if (seeded) store.snapshotNow("txn-import"); // preserve what the import replaces
     store.writeTransactions(entry.stored.concat(entry.fresh)); // (1) rows first — see store header
-    const result = store.save(next, { source: "txn-import" }); // (2) then the derived state
+    const result = store.save(nextWs, { source: "txn-import" }); // (2) then the derived state
 
     // Persist the column mapping under the header signature so the next
     // import of this export format skips the mapping step. Convenience-only:
@@ -743,7 +786,7 @@ export function createApi(store, opts = {}) {
     }
 
     txnPreviews.delete(token);
-    state = next;
+    workspace = nextWs;
     seeded = true;
     warnings = result.warnings;
     recovery = null;
@@ -757,7 +800,7 @@ export function createApi(store, opts = {}) {
    * @param {Res} res
    */
   function apiTemplateExport(res) {
-    const buf = buildTemplateWorkbook(state ?? freshPlaceholder());
+    const buf = buildTemplateWorkbook(activeOr(freshPlaceholder));
     res.writeHead(200, {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": 'attachment; filename="runway-export.local.xlsx"',
@@ -775,7 +818,7 @@ export function createApi(store, opts = {}) {
     if (baseRev === undefined) return;
     try {
       const result = store.reset({ baseRev });
-      state = null;
+      workspace = null;
       seeded = false;
       warnings = [];
       recovery = null;
@@ -784,6 +827,95 @@ export function createApi(store, opts = {}) {
       if (e instanceof RevConflictError) return sendJson(res, 409, { rev: e.rev });
       throw e;
     }
+  }
+
+  // --- Scenario management: create / switch / rename / delete ------------------
+  // Each mutates the workspace and persists it (rev-checked). A scenario name is
+  // capped at 80 chars. Create seeds the workspace from a fresh default when the
+  // dir is still unseeded, so "Base plan" is a clean plan, never the example.
+
+  /**
+   * Persist a new workspace and refresh the API's in-memory view. Returns the save result.
+   * @param {import("../model/workspace.mjs").Workspace} next @param {string} source
+   */
+  function commitWorkspace(next, source) {
+    const result = store.save(next, { source });
+    workspace = next;
+    seeded = true;
+    warnings = result.warnings;
+    recovery = null;
+    return result;
+  }
+  /** @param {unknown} v */
+  function scenarioName(v) {
+    return typeof v === "string" && v.trim() ? v.trim().slice(0, 80) : "Scenario";
+  }
+
+  /** @param {Req} req @param {Res} res */
+  async function apiScenarioCreate(req, res) {
+    const body = await readJsonBody(req, res, MB);
+    if (body === undefined) return;
+    if (requireBaseRev(body, res) === undefined) return;
+    const base = workspace ?? makeWorkspace({ id: store.newId(), state: freshDefault() });
+    const fromScratch = body?.mode === "scratch";
+    const source = fromScratch
+      ? freshDefault()
+      : structuredClone((base.scenarios.find((s) => s.id === (body?.fromId ?? base.activeId)) ?? base.scenarios[0]).state);
+    const id = store.newId();
+    const next = addScenario(base, { id, name: scenarioName(body?.name), state: source });
+    try {
+      const result = commitWorkspace(next, "edit");
+      return sendJson(res, 200, { rev: result.rev, activeId: id, state: source, scenarios: scenarioList(next), warnings: result.warnings });
+    } catch (e) {
+      if (e instanceof ValidationError) return sendJson(res, 400, { errors: e.issues });
+      throw e;
+    }
+  }
+
+  /** @param {Req} req @param {Res} res */
+  async function apiScenarioSwitch(req, res) {
+    const body = await readJsonBody(req, res, MB);
+    if (body === undefined) return;
+    if (requireBaseRev(body, res) === undefined) return;
+    if (!workspace) return sendJson(res, 404, { errors: [{ path: "id", message: "no scenarios yet" }] });
+    let next;
+    try {
+      next = setActive(workspace, body?.id);
+    } catch {
+      return sendJson(res, 404, { errors: [{ path: "id", message: "unknown scenario" }] });
+    }
+    const result = commitWorkspace(next, "edit");
+    return sendJson(res, 200, { rev: result.rev, activeId: next.activeId, state: activeState(next), scenarios: scenarioList(next), warnings: result.warnings });
+  }
+
+  /** @param {Req} req @param {Res} res */
+  async function apiScenarioRename(req, res) {
+    const body = await readJsonBody(req, res, MB);
+    if (body === undefined) return;
+    if (requireBaseRev(body, res) === undefined) return;
+    if (!workspace) return sendJson(res, 404, { errors: [{ path: "id", message: "no scenarios yet" }] });
+    if (!workspace.scenarios.some((s) => s.id === body?.id)) {
+      return sendJson(res, 404, { errors: [{ path: "id", message: "unknown scenario" }] });
+    }
+    const next = renameScenario(workspace, body.id, scenarioName(body?.name));
+    const result = commitWorkspace(next, "edit");
+    return sendJson(res, 200, { rev: result.rev, scenarios: scenarioList(next) });
+  }
+
+  /** @param {Req} req @param {Res} res */
+  async function apiScenarioDelete(req, res) {
+    const body = await readJsonBody(req, res, MB);
+    if (body === undefined) return;
+    if (requireBaseRev(body, res) === undefined) return;
+    if (!workspace) return sendJson(res, 404, { errors: [{ path: "id", message: "no scenarios yet" }] });
+    let next;
+    try {
+      next = deleteScenario(workspace, body?.id);
+    } catch (e) {
+      return sendJson(res, 400, { errors: [{ path: "id", message: e instanceof Error ? e.message : String(e) }] });
+    }
+    const result = commitWorkspace(next, "edit");
+    return sendJson(res, 200, { rev: result.rev, activeId: next.activeId, state: activeState(next), scenarios: scenarioList(next), warnings: result.warnings });
   }
 
   /**

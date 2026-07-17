@@ -219,6 +219,18 @@ export function createSavePipeline(opts) {
     rev() {
       return rev;
     },
+
+    /**
+     * Adopt a rev that advanced OUTSIDE the PUT loop — a scenario
+     * switch/create/rename/delete bumps the server rev, and the next edit's PUT
+     * must carry it as baseRev or it self-409s. Only ever moves the rev FORWARD;
+     * a stale value is ignored. Callers flushOrCancel() first, so no in-flight
+     * PUT can be racing this.
+     * @param {number} next
+     */
+    setRev(next) {
+      if (typeof next === "number" && next > rev) rev = next;
+    },
     snapshot,
   };
 }

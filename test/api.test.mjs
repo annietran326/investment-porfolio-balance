@@ -54,14 +54,19 @@ async function currentRev() {
   return (await getJson("/health")).body.rev;
 }
 
-test("GET /api/state unseeded returns the placeholder, seeded:false, rev 0", async () => {
+test("GET /api/state unseeded returns the placeholder, seeded:false, rev 0, one Base-plan scenario", async () => {
   const { status, headers, body } = await getJson("/api/state");
   assert.equal(status, 200);
   assert.ok(headers.get("content-type").startsWith("application/json"));
   assert.equal(headers.get("x-content-type-options"), "nosniff");
   assert.equal(body.seeded, false);
   assert.equal(body.rev, 0);
+  // Placeholder is re-anchored to the real current year; in 2026 that's identity.
   assert.deepEqual(body.state, placeholderState());
+  // The unseeded view still surfaces the scenario bar: one "Base plan".
+  assert.equal(body.scenarios.length, 1);
+  assert.equal(body.scenarios[0].name, "Base plan");
+  assert.equal(body.activeId, body.scenarios[0].id, "activeId points at the sole scenario");
   assert.ok(!existsSync(join(dir, "current.json")), "GET never seeds the disk");
 });
 
@@ -83,8 +88,10 @@ test("stale baseRev → 409 with current rev; disk unchanged", async () => {
   const { status, body } = await sendJson("PUT", "/api/state", { state, baseRev: 0 });
   assert.equal(status, 409);
   assert.equal(body.rev, 1);
+  // current.json is a workspace — read the active scenario's state.
   const onDisk = JSON.parse(readFileSync(join(dir, "current.json"), "utf8"));
-  assert.equal(onDisk.portfolio.balance, 1_234_567, "stale write never lands");
+  const onDiskState = onDisk.scenarios.find((s) => s.id === onDisk.activeId).state;
+  assert.equal(onDiskState.portfolio.balance, 1_234_567, "stale write never lands");
 });
 
 test("PUT with text in a numeric field → 400 naming the path", async () => {
@@ -136,8 +143,8 @@ test("restore endpoint: 409 on stale rev, 404 on unknown file, 200 round-trip", 
 test("GET /api/trends parses rows and skips a hand-planted torn line", async () => {
   const beforeRows = (await getJson("/api/trends")).body.rows;
   assert.ok(beforeRows.length >= 1);
-  assert.ok(beforeRows.every((r) => r.v === 1 && typeof r.rev === "number"));
-  appendFileSync(join(dir, "trends.jsonl"), '{"v":1,"ts":"torn');
+  assert.ok(beforeRows.every((r) => r.v === 2 && typeof r.rev === "number"));
+  appendFileSync(join(dir, "trends.jsonl"), '{"v":2,"ts":"torn');
   const rows = (await getJson("/api/trends")).body.rows;
   assert.equal(rows.length, beforeRows.length, "torn line skipped");
 });
@@ -199,6 +206,133 @@ test("POST /api/reset snapshots current, returns to unseeded placeholder; 409 on
   const after = await getJson("/api/state");
   assert.equal(after.body.seeded, false, "unseeded semantics return");
   assert.deepEqual(after.body.state, placeholderState(), "placeholder renders, nothing on disk");
+});
+
+// --- Scenario endpoints -----------------------------------------------------
+// The store is unseeded again after the reset test above. Seed it with a known
+// active state, then exercise create / switch / rename / delete. Tests run in
+// file order and thread rev via /health, so each step reads the live rev.
+
+test("POST /api/scenarios/create mode:copy duplicates the active scenario's state and makes it active", async () => {
+  // Re-seed the active scenario with a recognizable balance.
+  const seed = placeholderState();
+  seed.portfolio.balance = 2_222_222;
+  const seeded = await sendJson("PUT", "/api/state", { state: seed, baseRev: await currentRev() });
+  assert.equal(seeded.status, 200);
+
+  const before = await getJson("/api/state");
+  assert.equal(before.body.scenarios.length, 1, "one scenario before create");
+
+  const rev = await currentRev();
+  const res = await sendJson("POST", "/api/scenarios/create", { name: "Copy plan", mode: "copy", baseRev: rev });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.rev, rev + 1, "create bumps the rev");
+  assert.equal(res.body.scenarios.length, 2, "scenario list grows");
+  assert.equal(res.body.scenarios[1].name, "Copy plan");
+  assert.equal(res.body.activeId, res.body.scenarios[1].id, "the new scenario becomes active");
+  assert.equal(res.body.state.portfolio.balance, 2_222_222, "copy duplicates the active state");
+
+  // GET reflects the new active scenario and the two-entry bar.
+  const state = await getJson("/api/state");
+  assert.equal(state.body.activeId, res.body.activeId);
+  assert.equal(state.body.scenarios.length, 2);
+  assert.equal(state.body.state.portfolio.balance, 2_222_222);
+});
+
+test("POST /api/scenarios/create mode:scratch adds a fresh empty-default plan (not a copy), made active", async () => {
+  const rev = await currentRev();
+  const res = await sendJson("POST", "/api/scenarios/create", { name: "Scratch plan", mode: "scratch", baseRev: rev });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.scenarios.length, 3, "list grows again");
+  assert.equal(res.body.scenarios[2].name, "Scratch plan");
+  assert.equal(res.body.activeId, res.body.scenarios[2].id, "scratch scenario becomes active");
+  // Fresh default is an empty plan (balance 0, no properties), NOT a copy of the
+  // 2,222,222 active state.
+  assert.equal(res.body.state.portfolio.balance, 0, "scratch is a fresh default, not a copy");
+  assert.equal(res.body.state.properties.length, 0);
+});
+
+test("POST /api/scenarios/switch changes the active state; 404 unknown; 409 stale", async () => {
+  const list = (await getJson("/api/state")).body.scenarios;
+  const copyId = list[1].id; // the 2,222,222 "Copy plan"
+
+  // 409 on a stale baseRev — nothing switches.
+  const stale = await sendJson("POST", "/api/scenarios/switch", { id: copyId, baseRev: (await currentRev()) - 1 });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.rev, await currentRev());
+
+  // 404 on an unknown id.
+  const unknown = await sendJson("POST", "/api/scenarios/switch", { id: "does-not-exist", baseRev: await currentRev() });
+  assert.equal(unknown.status, 404);
+
+  // 200: switching back to the copy makes its state active again.
+  const rev = await currentRev();
+  const ok = await sendJson("POST", "/api/scenarios/switch", { id: copyId, baseRev: rev });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.rev, rev + 1);
+  assert.equal(ok.body.activeId, copyId);
+  assert.equal(ok.body.state.portfolio.balance, 2_222_222, "active state follows the pointer");
+  assert.equal((await getJson("/api/state")).body.activeId, copyId);
+});
+
+test("POST /api/scenarios/rename renames a scenario; 404 unknown", async () => {
+  const list = (await getJson("/api/state")).body.scenarios;
+  const targetId = list[2].id; // the "Scratch plan"
+
+  const unknown = await sendJson("POST", "/api/scenarios/rename", { id: "ghost", name: "X", baseRev: await currentRev() });
+  assert.equal(unknown.status, 404);
+
+  const rev = await currentRev();
+  const ok = await sendJson("POST", "/api/scenarios/rename", { id: targetId, name: "Renamed plan", baseRev: rev });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.rev, rev + 1);
+  assert.equal(ok.body.scenarios.find((s) => s.id === targetId).name, "Renamed plan");
+  assert.equal((await getJson("/api/state")).body.scenarios.find((s) => s.id === targetId).name, "Renamed plan");
+});
+
+test("POST /api/scenarios/delete removes a scenario; deleting the active one reassigns active", async () => {
+  const before = (await getJson("/api/state")).body;
+  const activeId = before.activeId; // the "Copy plan" is active (from the switch test)
+  assert.equal(before.scenarios.length, 3, "three scenarios before delete");
+
+  const rev = await currentRev();
+  const ok = await sendJson("POST", "/api/scenarios/delete", { id: activeId, baseRev: rev });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.rev, rev + 1);
+  assert.equal(ok.body.scenarios.length, 2, "one fewer scenario");
+  assert.ok(!ok.body.scenarios.some((s) => s.id === activeId), "the deleted scenario is gone");
+  assert.notEqual(ok.body.activeId, activeId, "active reassigned off the deleted scenario");
+  assert.equal(ok.body.activeId, ok.body.scenarios[0].id, "active reassigned to the first remaining");
+  // The returned state is the newly-active scenario's state.
+  const state = (await getJson("/api/state")).body;
+  assert.equal(state.activeId, ok.body.activeId);
+  assert.deepEqual(state.state, ok.body.state);
+});
+
+test("POST /api/scenarios/delete refuses the LAST scenario with 400", async () => {
+  // Delete down to one, then the last delete is refused.
+  let list = (await getJson("/api/state")).body.scenarios;
+  while (list.length > 1) {
+    const nonActive = list.find((s) => s.id !== list[0].id) ?? list[list.length - 1];
+    const del = await sendJson("POST", "/api/scenarios/delete", { id: nonActive.id, baseRev: await currentRev() });
+    assert.equal(del.status, 200);
+    list = del.body.scenarios;
+  }
+  assert.equal(list.length, 1, "down to a single scenario");
+
+  const refuse = await sendJson("POST", "/api/scenarios/delete", { id: list[0].id, baseRev: await currentRev() });
+  assert.equal(refuse.status, 400, "the last scenario cannot be deleted");
+  assert.ok(refuse.body.errors.some((e) => /cannot delete the last scenario/.test(e.message)));
+  assert.equal((await getJson("/api/state")).body.scenarios.length, 1, "still one scenario");
+});
+
+test("scenario endpoints reject a non-JSON content type with 415", async () => {
+  const res = await fetch(base + "/api/scenarios/create", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({ name: "X", baseRev: 0 }),
+  });
+  assert.equal(res.status, 415, "mutations must declare application/json");
 });
 
 function freePort() {
