@@ -1,6 +1,9 @@
 // The deterministic year-by-year simulation. Pure: no clock (currentYear is
 // state), no filesystem, no globals. Everything in TODAY'S dollars with real
-// (after-inflation, after-tax) returns.
+// returns (after inflation, and after tax on reinvested returns). One further
+// tax is optional and off by default: an effective-rate charge on the gains
+// realized when the plan is forced to sell investments to cover a shortfall
+// (s.tax) — the realized-gains piece the real-return knob does not capture.
 import { propertyCashflowYear } from "./property.mjs";
 import { grownValue } from "./growth.mjs";
 
@@ -45,6 +48,7 @@ function ssAnnualOf(social) {
  * @property {number} proceeds sale proceeds landing this year
  * @property {number} health   healthcare cost this year
  * @property {number} spend    category spending + health + one-time shocks
+ * @property {number} tax      capital-gains tax on the forced portfolio drawdown this year (0 when disabled or no drawdown)
  * @property {number} bal      end-of-year balance
  *
  * @typedef {Object} SimResult
@@ -160,7 +164,24 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
     if (overlay.oneTimeCost && i === (overlay.oneTimeCostYearIdx ?? 0)) spend += overlay.oneTimeCost;
 
     const net = income + ss + propCF + proceeds - spend;
-    bal = bal * (1 + r) + net;
+    const balGrown = bal * (1 + r);
+
+    // Effective-rate tax on a FORCED portfolio drawdown — the one taxable event
+    // the base model omits. It fires only when the plan must sell investments to
+    // cover a shortfall (net < 0) and there's a positive balance to sell from.
+    // Gross-up: to net the shortfall S for spending, sell W = S / (1 − g·r) so
+    // the after-tax proceeds still equal S; the tax is W − S. Income and sale
+    // proceeds are already net-of-tax by convention, so nothing else is taxed.
+    // Disabled → tax 0 → the update reduces to the base model exactly.
+    let tax = 0;
+    if (s.tax.enabled && net < 0 && balGrown > 0) {
+      const gainRate = (s.tax.embeddedGainPct / 100) * (s.tax.effectiveGainsRatePct / 100);
+      // Denominator guarded: validation only warns on extreme rates, so cap it
+      // away from 0 (an absurd g·r ≥ 1 would otherwise divide by zero/negative).
+      const denom = Math.max(1e-9, 1 - gainRate);
+      tax = (-net) * gainRate / denom;
+    }
+    bal = balGrown + net - tax;
 
     // The balance after living through `year` is the portfolio at the next year.
     const balYear = year + 1;
@@ -171,7 +192,7 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
 
     path.push({ year: balYear, age: balAge, bal });
     // The row is the lived year's cash flows and its resulting end-of-year balance.
-    rows.push({ year, age, income, ss, propCF, proceeds, health, spend, bal });
+    rows.push({ year, age, income, ss, propCF, proceeds, health, spend, tax, bal });
   }
 
   return { path, rows, endBal: bal, firstNegYear, firstBreachYear, minBal, workUntilYear, startYear };
