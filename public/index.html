@@ -86,12 +86,20 @@
     <h2>Portfolio <span class="hint">liquid / investable</span></h2>
     <div class="field"><label for="f-balance">Balance ($)</label><input id="f-balance" type="number" data-path="portfolio.balance"><div class="issue"></div></div>
     <div class="field">
-      <label for="f-return">Real return %/yr (after tax &amp; inflation)</label>
+      <label for="f-return">Real return %/yr (after inflation &amp; tax on reinvested returns)</label>
       <div class="rangewrap">
         <input type="range" min="0" max="8" step="0.1" data-path="portfolio.realReturnPct" aria-label="real return slider">
         <input id="f-return" type="number" min="0" max="8" step="0.1" data-path="portfolio.realReturnPct" class="rangenum">
       </div>
       <div class="issue"></div>
+    </div>
+    <div class="field">
+      <label class="checkline"><input id="f-tax-enabled" type="checkbox" data-path="tax.enabled"> Tax investment sales made to cover spending</label>
+      <div class="footnote">When spending outruns income, the plan sells investments — and the realized gains are taxed. Income and property proceeds are entered net of tax, and the real-return knob above already nets tax on reinvested returns; this adds only the tax on those forced sales.</div>
+      <div id="taxKnobs" class="taxknobs">
+        <div class="field narrow"><label for="f-tax-rate">Effective capital-gains rate %</label><input id="f-tax-rate" type="number" min="0" max="50" step="1" data-path="tax.effectiveGainsRatePct"><div class="issue"></div></div>
+        <div class="field narrow"><label for="f-tax-gain">Taxable-gain share of each withdrawal %</label><input id="f-tax-gain" type="number" min="0" max="100" step="5" data-path="tax.embeddedGainPct"><div class="issue"></div></div>
+      </div>
     </div>
   </section>
 

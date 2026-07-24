@@ -558,3 +558,25 @@ test("yearDelta: year plus years-from-now, singular/plural", () => {
   assert.equal(yearDelta(2043, 2026), "2043 (17 yrs)");
   assert.equal(yearDelta(2027, 2026), "2027 (1 yr)");
 });
+
+// ---- v5: tax controls (pure transforms behind the assumptions toggle) ----
+
+test("tax.enabled toggles immutably via setValueAtPath", () => {
+  const s = placeholderState();
+  assert.equal(s.tax.enabled, false);
+  const on = setValueAtPath(s, "tax.enabled", true);
+  assert.equal(on.tax.enabled, true);
+  assert.equal(s.tax.enabled, false, "original state is not mutated");
+  const off = setValueAtPath(on, "tax.enabled", false);
+  assert.equal(off.tax.enabled, false);
+});
+
+test("tax knobs write through and keep the state valid", () => {
+  let s = placeholderState();
+  s = setValueAtPath(s, "tax.enabled", true);
+  s = setValueAtPath(s, "tax.effectiveGainsRatePct", parseNumField("23"));
+  s = setValueAtPath(s, "tax.embeddedGainPct", parseNumField("60"));
+  assert.equal(s.tax.effectiveGainsRatePct, 23);
+  assert.equal(s.tax.embeddedGainPct, 60);
+  assert.deepEqual(validate(s).errors, []);
+});
