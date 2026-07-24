@@ -11,6 +11,9 @@ export function placeholderState() {
     schemaVersion: SCHEMA_VERSION,
     profile: { currentAge: 40, endAge: 95, currentYear: 2026 },
     portfolio: { balance: 1_500_000, realReturnPct: 3.5 },
+    // Ships disabled so first-run numbers match the base model; the toggle in
+    // the assumptions panel turns on the effective-rate withdrawal tax.
+    tax: { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 },
     properties: [
       {
         name: "Example Rental A (selling next year)",

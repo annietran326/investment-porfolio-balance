@@ -14,7 +14,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites — code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -29,7 +29,17 @@ export const BASE_YEAR = 2026;
  *
  * @typedef {Object} Portfolio
  * @property {number} balance        liquid + invested, single bucket
- * @property {number} realReturnPct  real (after inflation and tax) %/yr
+ * @property {number} realReturnPct  real (after inflation and tax on reinvested returns) %/yr
+ *
+ * @typedef {Object} Tax
+ * Optional effective-rate tax on FORCED portfolio drawdowns — the one taxable
+ * event the base model omits. Income and property proceeds stay net-of-tax by
+ * convention (entered net), so this layer touches only the gains realized when
+ * the plan must sell investments to cover a spending shortfall. Off by default:
+ * enabled=false reproduces the pre-v5 simulation exactly.
+ * @property {boolean} enabled              apply the withdrawal tax at all
+ * @property {number} effectiveGainsRatePct blended fed+state LTCG rate on realized gains
+ * @property {number} embeddedGainPct       share of a withdrawn dollar that is taxable gain (vs return-of-basis)
  *
  * @typedef {Object} Property
  * @property {string} name
@@ -92,6 +102,7 @@ export const BASE_YEAR = 2026;
  * @property {number} schemaVersion
  * @property {Profile} profile
  * @property {Portfolio} portfolio
+ * @property {Tax} tax
  * @property {Property[]} properties
  * @property {Income[]} incomes
  * @property {SpendingCategory[]} spending
@@ -123,6 +134,10 @@ export function newProperty(o = {}) {
     payoffYear: o.payoffYear ?? null, saleYear: o.saleYear ?? null, saleNetProceeds: o.saleNetProceeds ?? null,
     rentRealGrowthPct: o.rentRealGrowthPct ?? 0, costsRealGrowthPct: o.costsRealGrowthPct ?? 0,
   };
+}
+/** @returns {Tax} */
+export function newTax() {
+  return { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 };
 }
 /** @returns {Social} */
 export function newSocial() {
@@ -159,6 +174,7 @@ export function defaultState() {
     schemaVersion: SCHEMA_VERSION,
     profile: { currentAge: 40, endAge: 95, currentYear: 2026 },
     portfolio: { balance: 0, realReturnPct: 3.5 },
+    tax: { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 },
     properties: [],
     incomes: [],
     spending: [],
@@ -252,6 +268,29 @@ function validateSocial(errors, warnings, social, path) {
   requireNumber(errors, social.haircutPct, `${path}.haircutPct`);
 }
 
+/**
+ * Tax section: enabled must be a boolean; rates must be numbers. Out-of-band
+ * rates warn (don't reject), matching the growth-sanity posture — a plan with a
+ * fat-fingered rate still simulates. The engine caps the gross-up denominator
+ * regardless, so validation is legibility, not a safety gate.
+ * @param {Issue[]} errors @param {Issue[]} warnings @param {any} tax @param {string} path
+ */
+function validateTax(errors, warnings, tax, path) {
+  if (!tax || typeof tax !== "object") {
+    add(errors, path, "missing section");
+    return;
+  }
+  if (typeof tax.enabled !== "boolean") add(errors, `${path}.enabled`, `must be true or false, got ${typeof tax.enabled}`);
+  const rateOk = requireNumber(errors, tax.effectiveGainsRatePct, `${path}.effectiveGainsRatePct`);
+  const gainOk = requireNumber(errors, tax.embeddedGainPct, `${path}.embeddedGainPct`);
+  if (rateOk && (tax.effectiveGainsRatePct < 0 || tax.effectiveGainsRatePct > 50)) {
+    add(warnings, `${path}.effectiveGainsRatePct`, `${tax.effectiveGainsRatePct}% is outside the expected 0–50% capital-gains range`);
+  }
+  if (gainOk && (tax.embeddedGainPct < 0 || tax.embeddedGainPct > 100)) {
+    add(warnings, `${path}.embeddedGainPct`, `${tax.embeddedGainPct}% is outside 0–100% — it is a share of each withdrawn dollar`);
+  }
+}
+
 /** @param {Issue[]} errors @param {any} health @param {string} path */
 function validateHealth(errors, health, path) {
   if (!health || typeof health !== "object") {
@@ -288,7 +327,7 @@ export function validate(s) {
     add(errors, "schemaVersion", `expected ${SCHEMA_VERSION}, got ${s.schemaVersion}`);
   }
 
-  for (const key of /** @type {const} */ (["profile", "portfolio", "social", "health", "household", "endState", "work"])) {
+  for (const key of /** @type {const} */ (["profile", "portfolio", "tax", "social", "health", "household", "endState", "work"])) {
     if (!s[key] || typeof s[key] !== "object") add(errors, key, "missing section");
   }
   for (const key of /** @type {const} */ (["properties", "incomes", "spending"])) {
@@ -310,6 +349,8 @@ export function validate(s) {
 
   requireNumber(errors, s.portfolio.balance, "portfolio.balance");
   requireNumber(errors, s.portfolio.realReturnPct, "portfolio.realReturnPct");
+
+  validateTax(errors, warnings, s.tax, "tax");
 
   s.properties.forEach((p, i) => {
     const at = `properties[${i}]`;

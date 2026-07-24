@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, reanchorYears } from "../src/model/schema.mjs";
+import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, newTax, reanchorYears } from "../src/model/schema.mjs";
 import { migrate, MissingVersionError, FutureVersionError } from "../src/model/migrate.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 
@@ -262,4 +262,61 @@ test("v2 validation: household people and spouse sub-objects", () => {
   // @ts-expect-error deliberate bad role
   badRole.household.people[1].role = "pet";
   assert.ok(validate(badRole).errors.some((e) => e.path === "household.people[1].role"));
+});
+
+// ---- v5 (optional effective-rate withdrawal tax) ----
+
+test("default and placeholder states carry a disabled tax section that validates clean", () => {
+  for (const s of [defaultState(), placeholderState()]) {
+    assert.equal(s.tax.enabled, false, "ships disabled");
+    assert.equal(typeof s.tax.effectiveGainsRatePct, "number");
+    assert.equal(typeof s.tax.embeddedGainPct, "number");
+    const { errors, warnings } = validate(s);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(warnings, []);
+  }
+});
+
+test("tax validation: enabled must be boolean, rates must be numbers, section required", () => {
+  const badEnabled = placeholderState();
+  // @ts-expect-error deliberate wrong type
+  badEnabled.tax.enabled = "yes";
+  assert.ok(validate(badEnabled).errors.some((e) => e.path === "tax.enabled"));
+
+  const badRate = placeholderState();
+  // @ts-expect-error deliberate wrong type
+  badRate.tax.effectiveGainsRatePct = "18";
+  assert.ok(validate(badRate).errors.some((e) => e.path === "tax.effectiveGainsRatePct"));
+
+  const missing = placeholderState();
+  // @ts-expect-error deliberate missing section
+  delete missing.tax;
+  assert.ok(validate(missing).errors.some((e) => e.path === "tax" && /missing section/.test(e.message)));
+});
+
+test("tax rates outside expected bands warn but do not reject", () => {
+  const hot = placeholderState();
+  hot.tax.enabled = true;
+  hot.tax.effectiveGainsRatePct = 80; // absurd LTCG rate
+  hot.tax.embeddedGainPct = 150; // >100% of a dollar
+  const { errors, warnings } = validate(hot);
+  assert.deepEqual(errors, [], "out-of-band rates still simulate");
+  assert.ok(warnings.some((w) => w.path === "tax.effectiveGainsRatePct"));
+  assert.ok(warnings.some((w) => w.path === "tax.embeddedGainPct"));
+});
+
+test("v4 → v5 migration is additive: adds a disabled tax section, preserves everything else, validates", () => {
+  const { tax, ...v4 } = placeholderState(); // strip tax to synthesize a v4-shaped state
+  void tax;
+  v4.schemaVersion = 4;
+  const { state, fromVersion, migrated } = migrate(v4);
+  assert.equal(fromVersion, 4);
+  assert.equal(migrated, true);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(state.tax, newTax(), "tax added from the factory, disabled");
+  assert.equal(state.tax.enabled, false);
+  // everything else preserved
+  assert.equal(state.portfolio.balance, v4.portfolio.balance);
+  assert.equal(state.properties.length, v4.properties.length);
+  assert.deepEqual(validate(state).errors, []);
 });
