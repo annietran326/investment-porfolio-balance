@@ -141,3 +141,51 @@ test("scenario keys are unique and base is first", () => {
   assert.equal(new Set(keys).size, keys.length);
   assert.equal(keys[0], "base");
 });
+
+// ---- v5: tax flows through the solver + scenarios (no solver.mjs change) ----
+
+const taxOn = { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 };
+
+test("solver precondition holds with tax on: end balance is monotone non-decreasing in extra income", () => {
+  const s = lean();
+  s.tax = { ...taxOn };
+  let prev = -Infinity;
+  for (let inc = 0; inc <= 400_000; inc += 20_000) {
+    const end = simulate(s, {}, inc).endBal;
+    assert.ok(end >= prev - 1e-6, `endBal must not decrease as income rises (at ${inc})`);
+    prev = end;
+  }
+});
+
+test("enabling tax never lowers required income, and genuinely bites on a drawdown plan", () => {
+  const off = requiredIncome(lean());
+  const on = lean();
+  on.tax = { ...taxOn };
+  const onRes = requiredIncome(on);
+  assert.equal(off.kind, "value");
+  assert.equal(onRes.kind, "value");
+  assert.ok(perYearOf(onRes) >= perYearOf(off), "tax on requires >= tax off");
+  // Strict, rounding-proof check: the tax-OFF answer no longer meets the goal
+  // once tax is on — so more income is genuinely needed.
+  assert.ok(!goalMet(on, simulate(on, {}, perYearOf(off))), "tax-off income falls short once tax is on");
+});
+
+test("three-way contract survives with tax enabled — met / value / unreachable, never blank", () => {
+  const withTax = (mk) => {
+    const s = mk();
+    s.tax = { ...taxOn };
+    return s;
+  };
+  assert.equal(requiredIncome(withTax(rich)).kind, "met");
+  assert.equal(requiredIncome(withTax(lean)).kind, "value");
+  assert.deepEqual(requiredIncome(withTax(hopeless)), { kind: "unreachable", cap: SOLVER_CAP });
+});
+
+test("stress scenario × tax: spending +20% with tax on requires at least the same scenario with tax off", () => {
+  const off = lean();
+  const on = lean();
+  on.tax = { ...taxOn };
+  const spend = SCENARIOS.find((x) => x.key === "spend");
+  assert.ok(spend);
+  assert.ok(perYearOf(requiredIncome(on, spend.overlay)) >= perYearOf(requiredIncome(off, spend.overlay)));
+});
