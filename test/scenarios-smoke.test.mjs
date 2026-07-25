@@ -12,6 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn, execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdtempSync, rmSync, readFileSync, accessSync, constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,7 +198,14 @@ test("scenario bar: renders, creates a pill, and switching re-renders the app", 
     assert.deepEqual(realErrors, [], `browser reported resource/JS errors:\n${realErrors.join("\n")}`);
   } finally {
     client?.close();
+    // Wait for Chrome to ACTUALLY exit before deleting its profile dir. kill()
+    // only sends the signal; if Chrome is still flushing the profile to disk,
+    // rmSync races it (new files appear mid-delete) and the final rmdir throws
+    // ENOTEMPTY — the flaky teardown that reddens CI. Arm the exit listener
+    // before killing so the event is never missed; skip if already exited.
+    const exited = child.exitCode === null && child.signalCode === null ? once(child, "exit") : Promise.resolve();
     child.kill("SIGKILL");
+    await exited;
     await new Promise((res) => server.close(res));
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(profileDir, { recursive: true, force: true });
