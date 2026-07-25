@@ -31,6 +31,33 @@ Open the printed `http://localhost:4207`. The app starts with obviously fake exa
 
 **A known, documented bias**: mortgage P&I is fixed in *nominal* dollars, but the simulation runs in *real* dollars, so late-year mortgage costs are overstated. The direction is conservative (the tool will tell you to earn slightly more, never less). See the engine's doc comments.
 
+## How the withdrawal tax works
+
+When it's enabled, the tax models one thing the base model skips: the years your spending outruns your income, you sell investments to cover the gap — and selling realizes capital gains, which are taxed. The subtlety is that you have to sell enough to cover **both** the spending *and* the tax on the sale.
+
+Two knobs drive it (defaults 18% / 50%; the worked example below uses **20% rate × 50% gain** for clean arithmetic):
+
+- **effective capital-gains rate** `r` — your blended federal + state rate on realized gains
+- **taxable-gain share** `g` — how much of each withdrawn dollar is gain (vs. return of your original basis)
+
+Say a year is short **$90,000**. Selling exactly $90,000 doesn't work: half is gain ($45,000), taxed at 20% = $9,000, so you'd pocket only $81,000 — still short. So the model *grosses up* the sale:
+
+```
+combined gain-tax rate   k = g × r = 0.50 × 0.20 = 0.10   (10%)
+
+sell   W = shortfall / (1 − k) = $90,000 / 0.90 = $100,000
+tax      = W − shortfall       = $100,000 − $90,000 = $10,000
+```
+
+You sell $100,000, pay $10,000 in tax, keep $90,000 to live on — and the portfolio drops by the full $100,000. On a $1,000,000 portfolio at 0% real return spending $90,000/yr, that's the difference between draining $90k/yr (tax off) and $100k/yr (tax on) — about **$50,000 more depleted over 5 years**, which is why enabling it raises your required-income answer.
+
+**Two boundaries keep it honest:**
+
+- **You're only taxed on what you actually sell.** If the account holds $50,000 but the year needs $90,000, the sale is capped at $50,000 — tax is `$50,000 × 50% × 20% = $5,000`, not the tax on a $100,000 sale you couldn't make. You can't realize gains on assets you don't own.
+- **No double-counting with the return knob.** The real-return knob's "after tax" is the drag on *reinvested* returns; this layer is the tax on *realized gains from forced sales* — genuinely separate events. Income and property proceeds are entered net of tax, so they're never touched here.
+
+It's an *effective-rate assumption, not a full tax engine* — account types, progressive brackets, RMDs, and cost-basis tracking are deliberately out of scope (see "What it models" above).
+
 ## Privacy posture and threat model
 
 - **Your data never enters this repo** and never leaves your machine. All state lives in your data directory as human-readable JSON. Copying that directory is a complete backup.
