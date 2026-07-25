@@ -384,12 +384,13 @@ test("tax enabled strictly shortens runway vs disabled when drawdowns occur", ()
   assert.ok(on.endBal < off.endBal, "tax draws the balance down faster");
 });
 
-test("already-broke edge: a year starting at a non-positive balance realizes no gains (tax 0)", () => {
-  // balance 50k, 90k/yr shortfall. Year 0 taxes the full shortfall (documented
-  // conservative overstatement); year 1 starts underwater → tax 0.
+test("partial-funding edge: tax is capped at what the balance can actually sell", () => {
+  // balance 50k, 90k/yr shortfall. Year 0 can only sell its 50k (not the full
+  // grossed-up 100k), so it's taxed on 50k of gains — not the whole shortfall.
+  // Year 1 starts underwater → no gains to realize → tax 0.
   const s = drawdownFixture({ balance: 50_000, monthly: 7500, years: 2, tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 } });
   const sim = simulate(s);
-  assert.equal(sim.rows[0].tax, 10_000);
-  assert.equal(sim.rows[0].bal, -50_000); // 50,000 − 90,000 − 10,000
+  assert.equal(sim.rows[0].tax, 5_000); // 50,000 sold × 50% gain × 20% rate
+  assert.equal(sim.rows[0].bal, -45_000); // 50,000 − 90,000 − 5,000
   assert.equal(sim.rows[1].tax, 0, "no gains to realize once underwater");
 });

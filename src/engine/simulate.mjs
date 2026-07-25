@@ -170,16 +170,23 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0) {
     // the base model omits. It fires only when the plan must sell investments to
     // cover a shortfall (net < 0) and there's a positive balance to sell from.
     // Gross-up: to net the shortfall S for spending, sell W = S / (1 − g·r) so
-    // the after-tax proceeds still equal S; the tax is W − S. Income and sale
-    // proceeds are already net-of-tax by convention, so nothing else is taxed.
-    // Disabled → tax 0 → the update reduces to the base model exactly.
+    // the after-tax proceeds still equal S; the tax is g·r on what's sold. Income
+    // and sale proceeds are already net-of-tax by convention, so nothing else is
+    // taxed. Disabled → tax 0 → the update reduces to the base model exactly.
     let tax = 0;
     if (s.tax.enabled && net < 0 && balGrown > 0) {
       const gainRate = (s.tax.embeddedGainPct / 100) * (s.tax.effectiveGainsRatePct / 100);
       // Denominator guarded: validation only warns on extreme rates, so cap it
       // away from 0 (an absurd g·r ≥ 1 would otherwise divide by zero/negative).
       const denom = Math.max(1e-9, 1 - gainRate);
-      tax = (-net) * gainRate / denom;
+      // Sell enough to net the shortfall, but never more than the balance holds —
+      // you can't realize gains on assets you don't own. Capping the sale at
+      // balGrown keeps the tax CONTINUOUS as the balance approaches zero (tax → 0),
+      // which preserves the solver's monotonicity precondition: an uncapped
+      // all-or-nothing tax would jump the moment a drawdown year's balance crossed
+      // zero, making end balance non-monotone in income and breaking bisection.
+      const sold = Math.min(-net / denom, balGrown);
+      tax = sold * gainRate;
     }
     bal = balGrown + net - tax;
 

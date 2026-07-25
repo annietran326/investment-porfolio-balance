@@ -189,3 +189,28 @@ test("stress scenario × tax: spending +20% with tax on requires at least the sa
   assert.ok(spend);
   assert.ok(perYearOf(requiredIncome(on, spend.overlay)) >= perYearOf(requiredIncome(off, spend.overlay)));
 });
+
+test("regression: capped tax keeps end balance monotone across a balance zero-crossing (fine sweep)", () => {
+  // A 2-year plan where year 1 is a pure drawdown whose starting balance IS
+  // year 0's end balance — which crosses zero as extra income rises. An uncapped
+  // all-or-nothing withdrawal tax jumps endBal DOWN at that crossing (more income
+  // → lower endBal), breaking bisection. The capped tax is continuous, so a fine
+  // $1,000 sweep must never see endBal drop as income rises.
+  const s = placeholderState();
+  s.profile = { currentAge: 40, endAge: 42, currentYear: 2026 };
+  s.portfolio = { balance: 120_000, realReturnPct: 0 };
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [{ name: "spend", monthly: 10_000, fromYear: null, toYear: null, realGrowthPct: 0 }];
+  s.social = { startAge: 67, monthly: 0, haircutPct: 25 };
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 40 };
+  s.household = { people: [] };
+  s.work = { untilAge: 40 }; // solver income applies to year 0 only
+  s.tax = { enabled: true, effectiveGainsRatePct: 40, embeddedGainPct: 100 }; // sharp g·r = 0.4
+  let prev = -Infinity;
+  for (let inc = 0; inc <= 240_000; inc += 1000) {
+    const end = simulate(s, {}, inc).endBal;
+    assert.ok(end >= prev - 1e-6, `endBal dropped as income rose (at income ${inc})`);
+    prev = end;
+  }
+});
