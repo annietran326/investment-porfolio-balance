@@ -362,7 +362,7 @@ export function createCashflowTable(mount) {
   let showAll = false;
 
   const headRow = el("tr", {}, el("th", {}, "year"), el("th", {}, "age"));
-  for (const label of ["income", "SS", "property", "sales", "health", "spend", "balance"]) {
+  for (const label of ["income", "SS", "property", "sales", "health", "spend", "tax", "balance"]) {
     headRow.appendChild(el("th", { class: "num" }, label));
   }
   const tbody = el("tbody");
@@ -392,6 +392,7 @@ export function createCashflowTable(mount) {
           money(r.proceeds),
           money(r.health),
           money(r.spend),
+          money(r.tax),
           el("td", { class: r.bal < 0 ? "num neg" : "num" }, fmtCompact(r.bal))
         )
       );

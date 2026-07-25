@@ -324,3 +324,73 @@ test("engine purity: no node imports, no Date, no clock anywhere in src/engine",
     assert.ok(!/\bprocess\b/.test(text), `${f} touches process`);
   }
 });
+
+// ---- v5: effective-rate withdrawal tax --------------------------------------
+
+// A minimal one-year drawdown fixture: no growth, no income/SS/property, a fixed
+// spending shortfall, so the tax is hand-computable.
+function drawdownFixture({ balance = 1_000_000, monthly = 7500, years = 1, tax } = {}) {
+  const s = state();
+  s.profile = { currentAge: 40, endAge: 40 + years, currentYear: 2026 };
+  s.portfolio = { balance, realReturnPct: 0 };
+  s.properties = [];
+  s.incomes = [];
+  s.spending = [{ name: "living", monthly, fromYear: null, toYear: null, realGrowthPct: 0 }];
+  s.social = { startAge: 67, monthly: 0, haircutPct: 25 };
+  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 40 };
+  s.household = { people: [] };
+  s.tax = tax ?? { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 };
+  return s;
+}
+
+test("tax disabled: every row carries tax 0 and the balance math is unchanged", () => {
+  const s = drawdownFixture({ monthly: 7500 }); // 90k/yr shortfall
+  const sim = simulate(s);
+  assert.equal(sim.rows[0].tax, 0);
+  // balGrown(=1,000,000) + net(-90,000) - tax(0)
+  assert.equal(sim.endBal, 910_000);
+});
+
+test("tax disabled === enabled-with-zero-rate === enabled-with-zero-gain (branch is a true no-op)", () => {
+  const off = simulate(drawdownFixture({ years: 10 }));
+  const zeroRate = simulate(drawdownFixture({ years: 10, tax: { enabled: true, effectiveGainsRatePct: 0, embeddedGainPct: 50 } }));
+  const zeroGain = simulate(drawdownFixture({ years: 10, tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 0 } }));
+  assert.equal(zeroRate.endBal, off.endBal);
+  assert.equal(zeroGain.endBal, off.endBal);
+  assert.ok(off.rows.every((r) => r.tax === 0));
+  assert.ok(zeroRate.rows.every((r) => r.tax === 0));
+});
+
+test("tax enabled, drawdown year: grossed-up tax on the gain portion (hand-computed)", () => {
+  // shortfall 90,000; embeddedGain 50% × rate 20% = gainRate 0.10
+  // W = 90,000 / (1 − 0.10) = 100,000 ; tax = W − shortfall = 10,000
+  // bal = 1,000,000 − 90,000 − 10,000 = 900,000
+  const s = drawdownFixture({ monthly: 7500, tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 } });
+  const sim = simulate(s);
+  assert.equal(sim.rows[0].tax, 10_000);
+  assert.equal(sim.endBal, 900_000);
+});
+
+test("tax enabled: no tax in surplus years (net ≥ 0)", () => {
+  const s = drawdownFixture({ tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 } });
+  s.incomes = [{ name: "plenty", annual: 200_000, fromYear: 2026, toYear: 9999, realGrowthPct: 0 }]; // net positive
+  const sim = simulate(s);
+  assert.ok(sim.rows.every((r) => r.tax === 0), "surplus years realize no gains → no tax");
+});
+
+test("tax enabled strictly shortens runway vs disabled when drawdowns occur", () => {
+  const off = simulate(drawdownFixture({ years: 8 }));
+  const on = simulate(drawdownFixture({ years: 8, tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 } }));
+  assert.ok(on.endBal < off.endBal, "tax draws the balance down faster");
+});
+
+test("partial-funding edge: tax is capped at what the balance can actually sell", () => {
+  // balance 50k, 90k/yr shortfall. Year 0 can only sell its 50k (not the full
+  // grossed-up 100k), so it's taxed on 50k of gains — not the whole shortfall.
+  // Year 1 starts underwater → no gains to realize → tax 0.
+  const s = drawdownFixture({ balance: 50_000, monthly: 7500, years: 2, tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 } });
+  const sim = simulate(s);
+  assert.equal(sim.rows[0].tax, 5_000); // 50,000 sold × 50% gain × 20% rate
+  assert.equal(sim.rows[0].bal, -45_000); // 50,000 − 90,000 − 5,000
+  assert.equal(sim.rows[1].tax, 0, "no gains to realize once underwater");
+});

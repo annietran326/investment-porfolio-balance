@@ -24,6 +24,8 @@ import {
   TRENDS_EMPTY_COPY,
 } from "../public/ui/trends.mjs";
 import { snapshotWhen, restoreConfirmText, initSnapshots, STALE_LIST_COPY } from "../public/ui/snapshots.mjs";
+import { simulate } from "../src/engine/simulate.mjs";
+import { placeholderState } from "../src/model/placeholder.mjs";
 
 // ---------------------------------------------------------------------------
 // harness
@@ -308,4 +310,23 @@ test("DOM controllers load under plain Node without touching document", () => {
   }
   assert.ok(TRENDS_EMPTY_COPY.includes("every day you save"));
   assert.ok(STALE_LIST_COPY.includes("try again"));
+});
+
+// ---- v5: the cash-flow table's tax column reads r.tax from the engine rows ----
+
+function taxDrawdownState(enabled) {
+  const s = placeholderState();
+  s.incomes = [];
+  s.properties = [];
+  s.portfolio.balance = 400_000; // small enough to draw down from year 0
+  s.tax = { enabled, effectiveGainsRatePct: 20, embeddedGainPct: 50 };
+  return s;
+}
+
+test("cashflowView preserves the per-year tax the column renders", () => {
+  const shownOn = cashflowView(simulate(taxDrawdownState(true)).rows, true).shown;
+  const shownOff = cashflowView(simulate(taxDrawdownState(false)).rows, true).shown;
+  assert.ok(shownOn.every((r) => typeof r.tax === "number"), "every row carries a numeric tax");
+  assert.ok(shownOn.some((r) => r.tax > 0), "a drawdown year shows a positive tax when enabled");
+  assert.ok(shownOff.every((r) => r.tax === 0), "disabled → every tax cell is 0");
 });

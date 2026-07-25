@@ -86,8 +86,10 @@ function setValueIfIdle(input, v) {
 /** Sync every scalar control from state (presets, sliders, end-state field). */
 function syncScalars() {
   for (const input of document.querySelectorAll("[data-path]")) {
-    setValueIfIdle(input, getPath(state, input.dataset.path));
+    if (input.type === "checkbox") input.checked = !!getPath(state, input.dataset.path);
+    else setValueIfIdle(input, getPath(state, input.dataset.path));
   }
+  show(qs("#taxKnobs"), state.tax.enabled); // knobs only matter when the tax is on
   for (const btn of qs("#agePresets").querySelectorAll("button")) {
     btn.classList.toggle("active", Number(btn.dataset.preset) === state.profile.endAge);
   }
@@ -397,10 +399,12 @@ function buildStaticBindings() {
     onConflict: () => show(qs("#conflictBanner"), true),
   });
 
-  // scalar fields (number inputs + range sliders share data-path; syncScalars links them)
+  // scalar fields (number inputs + range sliders share data-path; syncScalars links them).
+  // Checkboxes (the tax toggle) commit a boolean on change, not a parsed number.
   for (const input of document.querySelectorAll("[data-path]")) {
-    input.addEventListener("input", () => {
-      commit(setValueAtPath(state, input.dataset.path, parseNumField(input.value)));
+    const isCheckbox = input.type === "checkbox";
+    input.addEventListener(isCheckbox ? "change" : "input", () => {
+      commit(setValueAtPath(state, input.dataset.path, isCheckbox ? input.checked : parseNumField(input.value)));
     });
   }
 

@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty } from "./schema.mjs";
+import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty, newTax } from "./schema.mjs";
 
 export class MissingVersionError extends Error {
   constructor() {
@@ -158,12 +158,24 @@ function migrateV3(v3) {
   };
 }
 
+/**
+ * v4 → v5. Additive: adds the optional withdrawal-tax section, disabled, so a
+ * migrated v4 state simulates IDENTICALLY until the user enables it. The factory
+ * is the single source of the defaults.
+ * @param {any} v4
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV4(v4) {
+  return { ...v4, schemaVersion: 5, tax: newTax() };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
   1: migrateV1,
   2: migrateV2,
   3: migrateV3,
+  4: migrateV4,
 };
 
 /**

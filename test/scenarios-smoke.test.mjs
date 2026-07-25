@@ -12,6 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn, execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdtempSync, rmSync, readFileSync, accessSync, constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +41,22 @@ function findChrome() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Best-effort recursive remove. Chrome is multi-process: even after the launcher
+// exits, its renderer/GPU children keep touching the profile dir, so a single
+// rmSync races them and the rmdir throws ENOTEMPTY/EBUSY. Retry through the race,
+// then give up quietly — a leftover /tmp dir (the OS reaps it) must never fail a
+// test that already made its assertions.
+async function rmDirBestEffort(dir) {
+  for (let i = 0; i < 15; i++) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch {
+      await sleep(100);
+    }
+  }
+}
 
 /** Minimal zero-dependency CDP client over Node's global WebSocket. */
 async function cdp(wsUrl) {
@@ -197,9 +214,16 @@ test("scenario bar: renders, creates a pill, and switching re-renders the app", 
     assert.deepEqual(realErrors, [], `browser reported resource/JS errors:\n${realErrors.join("\n")}`);
   } finally {
     client?.close();
+    // Wait for Chrome to ACTUALLY exit before deleting its profile dir. kill()
+    // only sends the signal; if Chrome is still flushing the profile to disk,
+    // rmSync races it (new files appear mid-delete) and the final rmdir throws
+    // ENOTEMPTY — the flaky teardown that reddens CI. Arm the exit listener
+    // before killing so the event is never missed; skip if already exited.
+    const exited = child.exitCode === null && child.signalCode === null ? once(child, "exit") : Promise.resolve();
     child.kill("SIGKILL");
+    await exited;
     await new Promise((res) => server.close(res));
     rmSync(dataDir, { recursive: true, force: true });
-    rmSync(profileDir, { recursive: true, force: true });
+    await rmDirBestEffort(profileDir);
   }
 });
