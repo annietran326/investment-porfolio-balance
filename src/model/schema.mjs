@@ -7,8 +7,9 @@
 //     and income increases, rent growth. A growth rate left blank (null) means
 //     "rises with inflation".
 //   - Money lives in accounts (taxable, traditional IRA, 401(k), Roth IRA). The
-//     account type decides how withdrawals are taxed. All accounts share one
-//     household-level mix of the three investment buckets.
+//     account type decides how withdrawals are taxed. Each account is either
+//     invested in the household's three-bucket plan or held in its own fund
+//     (e.g. a target-date 401(k)) at its own return.
 //   - `saleYear: null` means "keep this property forever". Empty is meaningful;
 //     0 is an error, never coerced. Import parsers must preserve this distinction.
 //   - Spending lines carry an optional [fromYear, toYear] window (null = open).
@@ -17,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -34,6 +35,7 @@ export const BASE_YEAR = 2026;
  * @property {number} inflationPct the one inflation assumption, %/yr
  *
  * @typedef {"taxable"|"traditional_ira"|"401k"|"roth_ira"} AccountType
+ * @typedef {"buckets"|"own"} AccountInvest
  * @typedef {Object} Account
  * @property {string} name
  * @property {AccountType} type
@@ -41,8 +43,10 @@ export const BASE_YEAR = 2026;
  * @property {number|null} costBasis       taxable only: what you paid in total. null = same as balance (no gain yet)
  * @property {number} contributionAnnual   your own contribution, $/yr in today's dollars (payroll for a 401(k))
  * @property {number} employerMatchAnnual  employer match, $/yr in today's dollars
- * @property {number|null} contributeUntilAge last age contributions are made; null = until the work-until age
+ * @property {number} contributeYears     how many more years contributions continue (0 = none), starting this year
  * @property {number|null} contributionGrowthPct how fast contributions rise, %/yr; null = with inflation
+ * @property {AccountInvest} invest        "buckets" = part of the three-bucket plan; "own" = its own fund, left alone
+ * @property {number} ownReturnPct         the own fund's return, %/yr before inflation (used when invest is "own")
  *
  * @typedef {Object} Buckets
  * The three investment buckets and the time-based rule that splits money
@@ -116,7 +120,7 @@ export const BASE_YEAR = 2026;
  * @property {{bequest: number, floor: number}} amounts today's $, preserved across switches
  *
  * @typedef {Object} Work
- * @property {number} untilAge willing-to-work-until age: the required-income window
+ * @property {number} untilAge the window for the "or earn $X/yr" alternative to the gap
  *
  * @typedef {Object} RunwayState
  * @property {number} schemaVersion
@@ -139,6 +143,9 @@ export const BASE_YEAR = 2026;
 const RATE_SANITY_ABS = 25;
 
 export const ACCOUNT_TYPES = /** @type {AccountType[]} */ (["taxable", "traditional_ira", "401k", "roth_ira"]);
+export const ACCOUNT_INVEST = /** @type {AccountInvest[]} */ (["buckets", "own"]);
+// A stock-heavy target-date fund's rough long-run return, before inflation.
+export const DEFAULT_OWN_RETURN_PCT = 7;
 export const ACCOUNT_TYPE_LABELS = {
   taxable: "Taxable brokerage",
   traditional_ira: "Traditional IRA",
@@ -169,7 +176,8 @@ export function newAccount(o = {}) {
   return {
     name: o.name ?? "", type: o.type ?? "taxable", balance: o.balance ?? 0, costBasis: o.costBasis ?? null,
     contributionAnnual: o.contributionAnnual ?? 0, employerMatchAnnual: o.employerMatchAnnual ?? 0,
-    contributeUntilAge: o.contributeUntilAge ?? null, contributionGrowthPct: o.contributionGrowthPct ?? null,
+    contributeYears: o.contributeYears ?? 0, contributionGrowthPct: o.contributionGrowthPct ?? null,
+    invest: o.invest ?? "buckets", ownReturnPct: o.ownReturnPct ?? DEFAULT_OWN_RETURN_PCT,
   };
 }
 /** @returns {Buckets} */
@@ -414,9 +422,15 @@ export function validate(s) {
     requireNumberOrNull(errors, a.costBasis, `${at}.costBasis`);
     requireNumber(errors, a.contributionAnnual, `${at}.contributionAnnual`);
     requireNumber(errors, a.employerMatchAnnual, `${at}.employerMatchAnnual`);
-    requireNumberOrNull(errors, a.contributeUntilAge, `${at}.contributeUntilAge`);
+    const yearsOk = requireNumber(errors, a.contributeYears, `${at}.contributeYears`);
     requireNumberOrNull(errors, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
     warnIfExtremeRate(warnings, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
+    if (!ACCOUNT_INVEST.includes(a.invest)) add(errors, `${at}.invest`, `must be one of ${ACCOUNT_INVEST.join(", ")}`);
+    if (requireNumber(errors, a.ownReturnPct, `${at}.ownReturnPct`)) warnIfExtremeRate(warnings, a.ownReturnPct, `${at}.ownReturnPct`);
+    if (yearsOk && a.contributeYears < 0) add(errors, `${at}.contributeYears`, "can't be negative");
+    if (yearsOk && a.contributeYears === 0 && ((a.contributionAnnual ?? 0) > 0 || (a.employerMatchAnnual ?? 0) > 0)) {
+      add(warnings, `${at}.contributeYears`, "contributions are set but for 0 years, so none will be added. How many more years will you contribute?");
+    }
     if (typeof a.balance === "number" && a.balance < 0) add(errors, `${at}.balance`, "balance can't be negative");
     if (a.type === "taxable" && typeof a.costBasis === "number") {
       if (a.costBasis < 0) add(errors, `${at}.costBasis`, "cost basis can't be negative");

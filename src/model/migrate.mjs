@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty, newAccount, newBuckets, newEconomy, newTaxes } from "./schema.mjs";
+import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty, newAccount, newBuckets, newEconomy, newTaxes, DEFAULT_OWN_RETURN_PCT } from "./schema.mjs";
 
 export class MissingVersionError extends Error {
   constructor() {
@@ -206,7 +206,7 @@ function migrateV5(v5) {
   const balance = num(portfolio?.balance, 0);
   const gainShare = Math.min(100, Math.max(0, num(tax?.embeddedGainPct, 50)));
   const accounts = balance > 0
-    ? [newAccount({ name: "Portfolio (from the old app)", type: "taxable", balance, costBasis: Math.round(balance * (1 - gainShare / 100)) })]
+    ? [{ name: "Portfolio (from the old app)", type: "taxable", balance, costBasis: Math.round(balance * (1 - gainShare / 100)), contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null }]
     : [];
   return {
     ...rest,
@@ -230,6 +230,38 @@ function migrateV5(v5) {
   };
 }
 
+/**
+ * v6 -> v7: account contributions run for a number of years instead of until
+ * an age, and each account says how it's invested.
+ *   - contributeUntilAge A -> contributeYears = A - currentAge + 1 (contributing
+ *     at ages currentAge..A). A blank age meant "until the work-until age", so
+ *     it converts the same way from work.untilAge, but only when contributions
+ *     are actually set.
+ *   - A 401(k) moves to its own fund (a target-date fund you don't manage) at
+ *     the default own-fund return; every other account stays in the buckets.
+ * @param {any} v6
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV6(v6) {
+  const age = num(v6.profile?.currentAge, 0);
+  const workUntil = num(v6.work?.untilAge, age);
+  return {
+    ...v6,
+    schemaVersion: 7,
+    accounts: arr(v6.accounts).map((/** @type {any} */ a) => {
+      const { contributeUntilAge, ...rest } = a;
+      const contributes = num(a.contributionAnnual, 0) > 0 || num(a.employerMatchAnnual, 0) > 0;
+      const until = typeof contributeUntilAge === "number" ? contributeUntilAge : contributes ? workUntil : age - 1;
+      return newAccount({
+        ...rest,
+        contributeYears: Math.max(0, until - age + 1),
+        invest: a.type === "401k" ? "own" : "buckets",
+        ownReturnPct: DEFAULT_OWN_RETURN_PCT,
+      });
+    }),
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -238,6 +270,7 @@ const RUNGS = {
   3: migrateV3,
   4: migrateV4,
   5: migrateV5,
+  6: migrateV6,
 };
 
 /**

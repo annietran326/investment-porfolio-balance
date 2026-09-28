@@ -334,6 +334,9 @@ function parseListTab(def, sheet) {
     def.columns.forEach((col, i) => {
       const c = cols[i];
       const cell = c < 0 ? undefined : rowCells[c];
+      // An optional column that's absent or blank (and has no special blank
+      // meaning) is left out, so the section's factory fills in its default.
+      if (col.optional && !col.nullable && !col.emptyZero && isEmptyCell(cell)) return;
       if (col.type === "text") {
         const { value, error } = readText(cell);
         if (error !== undefined) errors.push({ cell: cellAddr(def.name, r, c), message: error });

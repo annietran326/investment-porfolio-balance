@@ -151,9 +151,9 @@ test("v4 round-trip: spouse + dependent (w/ ongoing support cost + window) + gro
     { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5 }, // open-ended from a future year
   ];
   state.accounts = [
-    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
-    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeUntilAge: 55, contributionGrowthPct: 2 },
-    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
+    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 },
+    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "own", ownReturnPct: 6.5 },
+    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 },
   ];
   state.economy.inflationPct = 3;
   state.buckets.preservationYears = 5;
@@ -305,7 +305,7 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
   assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null }]);
   assert.deepEqual(applied.accounts, [
-    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
+    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 },
   ]);
 });
 
@@ -356,16 +356,18 @@ test("empty sale-year cell → null (keep forever), NEVER 0; explicit 0 → erro
 test('coercion: "$1,200" → 1200, "25%" → 25, "1,200" → 1200, Excel percent format → plain number', () => {
   const parsed = parseTemplate(
     wbBuffer({
-      Accounts: [HEADERS.Accounts, ["IRA", "Traditional_IRA", "$1,200", null, "1,000", null, null, "25%"]],
+      Accounts: [HEADERS.Accounts, ["IRA", "Traditional_IRA", "$1,200", null, "1,000", null, null, "25%", "OWN", null]],
       Spending: [HEADERS.Spending, ["food", "1,200"]],
     })
   );
   assert.deepEqual(parsed.perTab.accounts.errors, []);
-  // Type is case-insensitive; blank contribution-style cells → 0; blank basis/age/increase → null.
+  // Type/invest are case-insensitive; blank contribution-style cells → 0; blank
+  // basis/increase → null; a blank own-fund return is left out (the factory's 7% applies).
   assert.deepEqual(parsed.perTab.accounts.rows[0], {
     name: "IRA", type: "traditional_ira", balance: 1200, costBasis: null, contributionAnnual: 1000,
-    employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: 25,
+    employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: 25, invest: "own",
   });
+  assert.equal(applyTabs(defaultState(), parsed, ["accounts"]).accounts[0].ownReturnPct, 7);
   // Blank window cells → null; blank increase cell → null (with inflation).
   assert.deepEqual(parsed.perTab.spending.rows[0], { name: "food", monthly: 1200, fromYear: null, toYear: null, growthPct: null });
 

@@ -60,7 +60,8 @@
   </section>
 
   <section class="card">
-    <h2>Profile</h2>
+    <h2>Household profile <span class="hint">you, your spouse, and dependents</span></h2>
+    <div class="subhead">You</div>
     <div class="grid3">
       <div class="field"><label for="f-currentAge">Current age</label><input id="f-currentAge" type="number" data-path="profile.currentAge"><div class="issue"></div></div>
       <div class="field"><label for="f-endAge">Plan to age</label><input id="f-endAge" type="number" data-path="profile.endAge"><div class="issue"></div></div>
@@ -70,6 +71,26 @@
       <span class="dim preset-label">plan-to presets</span>
       <span id="agePresets" class="segmented" role="group" aria-label="plan-to-age presets"></span>
     </div>
+    <div class="subhead">Your Social Security <span class="hint">today's $, rises with inflation</span></div>
+    <div class="grid3">
+      <div class="field"><label for="f-ssStart">Start age</label><input id="f-ssStart" type="number" data-path="social.startAge"><div class="issue"></div></div>
+      <div class="field"><label for="f-ssMonthly">$/mo (from your SSA statement)</label><input id="f-ssMonthly" type="number" data-path="social.monthly"><div class="issue"></div></div>
+      <div class="field"><label for="f-haircut">Haircut %</label><input id="f-haircut" type="number" min="0" max="50" step="1" data-path="social.haircutPct"><div class="issue"></div></div>
+    </div>
+    <div class="footnote">The haircut is a hedge against the trust-fund shortfall: the 2026 Trustees Report projects a 22–28% cut around 2032.</div>
+    <div class="subhead">Your healthcare <span class="hint">today's $/yr, rises with inflation</span></div>
+    <div class="grid3">
+      <div class="field"><label for="f-hcUntil">Employer coverage until age</label><input id="f-hcUntil" type="number" data-path="health.employerCoverageUntilAge"><div class="issue"></div></div>
+      <div class="field"><label for="f-hcPre">After that, before 65</label><input id="f-hcPre" type="number" data-path="health.preMedicareAnnual"><div class="issue"></div></div>
+      <div class="field"><label for="f-hcPost">65 and up (Medicare)</label><input id="f-hcPost" type="number" data-path="health.postMedicareAnnual"><div class="issue"></div></div>
+    </div>
+    <div class="subhead">Spouse &amp; dependents</div>
+    <div class="itemlist" id="peopleList"></div>
+    <div class="people-add">
+      <button id="addSpouse" type="button" class="small">+ spouse</button>
+      <button id="addDependent" type="button" class="small">+ dependent</button>
+    </div>
+    <div class="footnote">A spouse brings their own Social Security and healthcare, on their own age (their income goes in Income streams). A dependent carries an ongoing support cost over a period, like raising a kid or supporting a parent.</div>
   </section>
 
   <section class="card">
@@ -79,7 +100,8 @@
     <div class="footnote">
       <b>How each type is taxed when you take money out:</b> taxable brokerage pays capital-gains tax on the gain part of what you sell; traditional IRA and 401(k) pay ordinary income tax on the whole withdrawal (plus a 10% penalty before 59½); Roth IRA is tax-free.<br>
       <b>Cost basis</b> (taxable only) is what you paid in total. In Fidelity it's the "Cost Basis Total" on the Positions page. Leave it blank if you don't know it; that assumes no gain yet.<br>
-      <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
+      <b>Invested in:</b> "Bucket plan" means this money follows the recommended split. "Own fund" is for money you leave alone, like a 401(k) in a target-date fund: it earns its own return (7% before inflation by default, a rough figure for a stock-heavy target-date fund), isn't part of the split, and counts as long-term money, so the rest of your accounts need less in equities.<br>
+      <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match, starting this year for the number of years you enter. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
     </div>
   </section>
 
@@ -111,23 +133,6 @@
   </section>
 
   <section class="card">
-    <h2>Household <span class="hint">spouse &amp; dependents — self is in Profile</span></h2>
-    <div class="itemlist" id="peopleList"></div>
-    <div class="people-add">
-      <button id="addSpouse" type="button" class="small">+ spouse</button>
-      <button id="addDependent" type="button" class="small">+ dependent</button>
-    </div>
-    <div class="footnote">Self is above (Profile / Social Security / Healthcare). Add a spouse to fold in their Social Security and healthcare (their income goes in Income streams). A dependent carries an ongoing support cost over a period — raising a kid for 18 years, supporting a parent until end of life.</div>
-  </section>
-
-  <section class="card">
-    <h2>Properties <span class="hint">rentals — first-class, not an afterthought</span></h2>
-    <div class="itemlist" id="propList"></div>
-    <button id="addProp" type="button" class="small">+ property</button>
-    <div class="footnote">Sale proceeds = net cash after payoff, costs, taxes. Empty sale year = keep forever. P&amp;I stops after the payoff year even without a sale.</div>
-  </section>
-
-  <section class="card">
     <h2>Income streams <span class="hint">after tax, today's $</span></h2>
     <div class="itemlist" id="incomeList"></div>
     <button id="addIncome" type="button" class="small">+ income stream</button>
@@ -135,35 +140,21 @@
   </section>
 
   <section class="card">
-    <h2>Spending <span class="hint">$/mo — excl. property costs &amp; healthcare</span></h2>
+    <h2>Spending <span class="hint">$/mo, excluding property costs and healthcare</span></h2>
     <div class="itemlist" id="spendList"></div>
     <button id="addSpend" type="button" class="small">+ category</button>
     <div class="footnote">Leave the increase blank to rise with inflation, or enter your own rate (for example, 3.5 if you expect this cost to rise faster). Set start/end years for costs that stop, like a car loan.</div>
   </section>
 
   <section class="card">
-    <h2>Social Security &amp; healthcare <span class="hint">today's $, rising with inflation</span></h2>
-    <div class="field">
-      <label for="f-haircut">Social Security haircut %</label>
-      <div class="rangewrap">
-        <input type="range" min="0" max="50" step="1" data-path="social.haircutPct" aria-label="social security haircut slider">
-        <input id="f-haircut" type="number" min="0" max="50" step="1" data-path="social.haircutPct" class="rangenum">
-      </div>
-      <div class="issue"></div>
-    </div>
-    <div class="grid2">
-      <div class="field"><label for="f-ssStart">SS start age</label><input id="f-ssStart" type="number" data-path="social.startAge"><div class="issue"></div></div>
-      <div class="field"><label for="f-ssMonthly">SS $/mo (today's)</label><input id="f-ssMonthly" type="number" data-path="social.monthly"><div class="issue"></div></div>
-    </div>
-    <div class="grid3">
-      <div class="field"><label for="f-hcPre">Healthcare $/yr pre-65</label><input id="f-hcPre" type="number" data-path="health.preMedicareAnnual"><div class="issue"></div></div>
-      <div class="field"><label for="f-hcPost">Healthcare $/yr 65+</label><input id="f-hcPost" type="number" data-path="health.postMedicareAnnual"><div class="issue"></div></div>
-      <div class="field"><label for="f-hcUntil">Employer coverage until age</label><input id="f-hcUntil" type="number" data-path="health.employerCoverageUntilAge"><div class="issue"></div></div>
-    </div>
+    <h2>Properties <span class="hint">rentals</span></h2>
+    <div class="itemlist" id="propList"></div>
+    <button id="addProp" type="button" class="small">+ property</button>
+    <div class="footnote">Sale proceeds = net cash after payoff, costs, taxes. Empty sale year = keep forever. P&amp;I stops after the payoff year even without a sale.</div>
   </section>
 
   <section class="card">
-    <h2>End state</h2>
+    <h2>Goal <span class="hint">what "enough" means</span></h2>
     <div class="grid2">
       <div class="field">
         <label for="endMode">Goal</label>
@@ -180,12 +171,6 @@
         <div class="issue"></div>
       </div>
     </div>
-  </section>
-
-  <section class="card">
-    <h2>Work</h2>
-    <div class="field"><label for="f-workUntil">Willing to work until age</label><input id="f-workUntil" type="number" data-path="work.untilAge"><div class="issue"></div></div>
-    <div class="footnote">Used for two things: 401(k) contributions stop at this age unless the account says otherwise, and the stress-test table shows how much extra income through this age would close the gap instead.</div>
   </section>
 
 </div>
@@ -219,19 +204,20 @@
   <section class="card">
     <h2>How the split changes as you age <span class="hint">base case, rebalanced each year</span></h2>
     <table>
-      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
+      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Own funds</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
       <tbody id="glideRows"></tbody>
     </table>
-    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Money beyond what the plan needs sits in equities. Balances are in today's dollars.</div>
+    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Money beyond what the plan needs sits in equities. Percentages are of the money in your three-bucket plan; "Own funds" and "Balance" are in today's dollars, and the return is for everything combined.</div>
   </section>
 
   <section class="card">
     <h2>Stress tests</h2>
+    <div class="field narrow inline-field"><label for="f-workUntil">"Or earn" column: extra income through age</label><input id="f-workUntil" type="number" data-path="work.untilAge"><div class="issue"></div></div>
     <table>
       <thead><tr><th>Stress test</th><th>Money lasts until</th><th class="num">Gap today</th><th class="num" id="thRequired">Or earn $/yr</th></tr></thead>
       <tbody id="scenarioRows"></tbody>
     </table>
-    <div class="footnote">Gap today = extra money you'd need invested now (today's dollars) to reach your goal. "Or earn" = the after-tax income from now until your work-until age that would close the same gap instead. The market crash hits your split today: equities −30%, high income −15%, capital preservation untouched, which is where a bigger safe bucket pays off.</div>
+    <div class="footnote">Gap today = extra money you'd need invested now (today's dollars) to reach your goal. "Or earn" = the after-tax income, from now through the age above, that would close the same gap instead. The market crash hits your split today: equities −30%, high income −15%, capital preservation untouched, which is where a bigger safe bucket pays off.</div>
   </section>
 
   <section class="card">
@@ -268,10 +254,11 @@
       <summary>How the math works <span class="hint">exactly what goes into the numbers, click to expand</span></summary>
       <div class="math-doc">
         <p><strong>Dollars.</strong> You enter amounts in today's dollars. The engine then runs in actual future dollars: every cost and income rises at its own rate (or at inflation if you leave the rate blank), and returns are actual returns. Every result is converted back to today's dollars, so $1M at age 80 means what $1M buys today.</p>
-        <p><strong>Each year</strong>, in order: (1) the portfolio is split across the three buckets and earns the blended return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from the accounts.</p>
+        <p><strong>Each year</strong>, in order: (1) money in the bucket plan is split across the three buckets and earns the blended return, while any account in its own fund earns that fund's return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from the accounts.</p>
+        <p><strong>Own-fund accounts</strong> (like a 401(k) in a target-date fund) aren't part of the split. They're treated as long-term money, so they reduce how much the bucket plan needs to hold in equities. Contributions go in at year end for the number of years you enter on each account.</p>
         <p><strong>Cash flow each year</strong> = income + Social Security + property cash flow + sale proceeds − spending − healthcare. Social Security and healthcare rise with inflation. Mortgage payments are fixed dollar amounts and don't rise.</p>
         <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: years 1 through your capital preservation cutoff go to capital preservation, the next years through your high income cutoff go to high income, and the rest go to equities. Each withdrawal is valued at what it costs today, following the path its money takes (it waits in equities, then moves to high income, then to capital preservation). If you have more than the plan needs, the extra is long-term money and goes to equities. If you have less, every bucket is short by the same share, so the split stays the one your plan needs and the shortfall shows up as the gap. The split is redone every year.</p>
-        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth. Enough is taken to cover tax, so the after-tax amount pays the bills:</p>
+        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, bucket-plan money is used before own-fund money. Enough is taken to cover tax, so the after-tax amount pays the bills:</p>
         <ul>
           <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time. A sale lowers the basis in proportion (average cost).</li>
           <li><strong>Traditional IRA / 401(k)</strong>: ordinary income rate on the whole amount, plus a 10% penalty before age 59½.</li>
@@ -279,7 +266,7 @@
         </ul>
         <p><strong>Do I have enough?</strong> The plan runs once with what you have. If it reaches your goal (spend down to zero, leave an amount, or never drop below a floor) without the balance going negative, you have enough. If not, the <strong>gap</strong> is the smallest extra amount, invested today as new money in a taxable account, that reaches the goal. It's found by trying amounts until one just works.</p>
         <p><strong>Stress tests</strong> rerun the same plan under bad cases: a rental vacancy plus a big repair plus a delayed sale, a market crash today, spending 20% higher, and all at once.</p>
-        <p class="dim"><strong>What it doesn't do (yet):</strong> no random market paths (every year earns the expected return; Monte Carlo is planned), no required minimum distributions (slightly optimistic), no tax brackets (one effective rate each), rebalancing is treated as tax-free, and all accounts hold the same mix. Every number here follows from the inputs you can see.</p>
+        <p class="dim"><strong>What it doesn't do (yet):</strong> no random market paths (every year earns the expected return; Monte Carlo is planned), no required minimum distributions (slightly optimistic), no tax brackets (one effective rate each), rebalancing is treated as tax-free, and every account in the bucket plan holds the same mix. Every number here follows from the inputs you can see.</p>
       </div>
     </details>
   </section>
@@ -324,10 +311,18 @@
       <div class="field only-taxable"><label>cost basis $</label><input type="number" data-key="costBasis" placeholder="same as balance"><div class="issue"></div></div>
       <div class="field only-taxable gainshare"><label>taxable gain today</label><div class="readout" data-readout="gainShare"></div></div>
     </div>
+    <div class="grid2 invest">
+      <div class="field"><label>invested in</label>
+        <select data-key="invest" aria-label="how this account is invested">
+          <option value="buckets">Bucket plan</option>
+          <option value="own">Own fund</option>
+        </select><div class="issue"></div></div>
+      <div class="field only-own"><label>its return %/yr, before inflation</label><input type="number" step="0.1" data-key="ownReturnPct"><div class="issue"></div></div>
+    </div>
     <div class="grid2x2 contrib">
       <div class="field"><label>your contribution $/yr</label><input type="number" data-key="contributionAnnual" placeholder="0"><div class="issue"></div></div>
       <div class="field not-ira-match"><label>employer match $/yr</label><input type="number" data-key="employerMatchAnnual" placeholder="0"><div class="issue"></div></div>
-      <div class="field"><label>contribute until age</label><input type="number" data-key="contributeUntilAge" placeholder="work-until age"><div class="issue"></div></div>
+      <div class="field"><label>for how many more years</label><input type="number" min="0" step="1" data-key="contributeYears" placeholder="0"><div class="issue"></div></div>
       <div class="field"><label>contribution increase %/yr</label><input type="number" step="0.1" data-key="contributionGrowthPct" placeholder="inflation"><div class="issue"></div></div>
     </div>
   </div>

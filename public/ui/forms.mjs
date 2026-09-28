@@ -27,7 +27,7 @@
  */
 export function blankRow(kind, state) {
   if (kind === "accounts") {
-    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null };
+    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 };
   }
   if (kind === "properties") {
     return { name: "new property", rentMonthly: 0, costsMonthly: 0, mortgageMonthly: 0, payoffYear: null, saleYear: null, saleNetProceeds: null, rentGrowthPct: null, costsGrowthPct: null };
@@ -181,7 +181,7 @@ export function parseNumField(raw) {
  * Account fields where a blank box means $0 rather than "unknown". Keeps a
  * cleared contribution box from turning into a validation error.
  */
-export const ZERO_WHEN_BLANK = new Set(["contributionAnnual", "employerMatchAnnual"]);
+export const ZERO_WHEN_BLANK = new Set(["contributionAnnual", "employerMatchAnnual", "contributeYears"]);
 
 /**
  * Parse one list-row field. Text and dropdown fields pass through; numbers go

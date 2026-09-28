@@ -203,22 +203,73 @@ test("when every account is empty the shortfall is borrowed: balance goes negati
 // contributions
 // ---------------------------------------------------------------------------
 
-test("401(k) contributions + employer match land at year end through the contribute-until age", () => {
-  // Age 50, contribute $20k + $5k match through age 51. No growth, no inflation.
-  const s = flat({ age: 50, years: 4, accounts: [newAccount({ name: "401k", type: "401k", balance: 0, contributionAnnual: 20_000, employerMatchAnnual: 5_000, contributeUntilAge: 51 })] });
+test("401(k) contributions + employer match land at year end for the number of years entered", () => {
+  // Age 50, contribute $20k + $5k match for 2 more years. No growth, no inflation.
+  const s = flat({ age: 50, years: 4, accounts: [newAccount({ name: "401k", type: "401k", balance: 0, contributionAnnual: 20_000, employerMatchAnnual: 5_000, contributeYears: 2 })] });
   const sim = simulate(s);
   near(sim.rows[0].contrib, 25_000);
   near(sim.rows[1].contrib, 25_000);
-  assert.equal(sim.rows[2].contrib, 0, "stops after the contribute-until age");
+  assert.equal(sim.rows[2].contrib, 0, "stops after the years entered");
   near(sim.rows[1].bal, 50_000);
 });
 
-test("contributions default to the work-until age and rise with inflation", () => {
-  const s = flat({ age: 50, years: 4, inflationPct: 3, accounts: [newAccount({ name: "401k", type: "401k", balance: 0, contributionAnnual: 10_000 })] });
-  s.work.untilAge = 52;
+test("contributions rise with inflation when the increase is blank, and 0 years means none", () => {
+  const s = flat({ age: 50, years: 4, inflationPct: 3, accounts: [newAccount({ name: "401k", type: "401k", balance: 0, contributionAnnual: 10_000, contributeYears: 3 })] });
   const sim = simulate(s);
   near(sim.rows[2].contrib, 10_000, "flat in today's $ (rises with inflation in actual $)");
-  assert.equal(sim.rows[3].contrib, 0, "no contributions after the work-until age");
+  assert.equal(sim.rows[3].contrib, 0);
+  const none = flat({ accounts: [newAccount({ name: "401k", type: "401k", balance: 0, contributionAnnual: 10_000, contributeYears: 0 })] });
+  assert.ok(simulate(none).rows.every((r) => r.contrib === 0));
+  assert.ok(validate(none).warnings.some((w) => w.path === "accounts[0].contributeYears"), "contributions with 0 years is flagged");
+});
+
+test("an own-fund account earns its own return and stays out of the split", () => {
+  // Bucket plan earns 0%; the 401(k) sits in its own fund at 7%. No spending.
+  const s = flat({
+    accounts: [
+      newAccount({ name: "Brokerage", type: "taxable", balance: 100_000 }),
+      newAccount({ name: "401k", type: "401k", balance: 50_000, invest: "own", ownReturnPct: 7 }),
+    ],
+  });
+  const sim = simulate(s);
+  near(sim.startOwn, 50_000);
+  const split = sim.startMix;
+  near(split.preservation + split.income + split.equities, 100_000, "the split covers only bucket-plan money");
+  near(sim.rows[0].bal, 100_000 + 50_000 * 1.07);
+  near(sim.rows[0].returnPct, ((150_000 + 3_500) / 150_000 - 1) * 100, "row return is for everything combined", 1e-9);
+  near(sim.rows[1].ownBal, 53_500);
+});
+
+test("own-fund money counts as long-term: it reduces the equities target first", () => {
+  // Cutoffs 1 / 2, all returns 0, $12k/yr for 3 years → targets 12k / 12k / 12k.
+  const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 36_000 })] });
+  s.buckets = { preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
+  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 });
+  // Add $12k in an own fund: the bucket plan no longer needs equities.
+  s.accounts.push(newAccount({ name: "401k", type: "401k", balance: 12_000, invest: "own", ownReturnPct: 0 }));
+  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 }, "the extra $12k in the plan is surplus, so it sits in equities");
+  s.accounts[0].balance = 24_000;
+  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 0 });
+});
+
+test("withdrawals use bucket-plan money before own-fund money of the same tax type", () => {
+  const s = flat({
+    spendMonthly: 1000,
+    accounts: [
+      newAccount({ name: "401k (own)", type: "401k", balance: 100_000, invest: "own", ownReturnPct: 0 }),
+      newAccount({ name: "IRA", type: "traditional_ira", balance: 15_000 }),
+    ],
+  });
+  const sim = simulate(s);
+  // Year 0 takes $12k from the IRA; year 1 takes the IRA's last $3k then $9k from the 401(k).
+  near(sim.rows[0].ownBal, 100_000);
+  near(sim.rows[1].ownBal, 100_000, "own fund untouched in year 0");
+  near(sim.rows[2].ownBal, 91_000);
+});
+
+test("market crash: own funds fall the full equity drop", () => {
+  const s = flat({ accounts: [newAccount({ name: "401k", type: "401k", balance: 100_000, invest: "own", ownReturnPct: 0 })] });
+  near(simulate(s, { drawdownPct: 30 }).path[0].bal, 70_000);
 });
 
 // ---------------------------------------------------------------------------

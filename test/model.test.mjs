@@ -387,3 +387,31 @@ test("v5 → v6 with no balance makes no account", () => {
   assert.deepEqual(state.accounts, []);
   assert.deepEqual(validate(state).errors, []);
 });
+
+test("v6 → v7: contribute-until age becomes years; a 401(k) moves to its own fund; others stay in the buckets", () => {
+  const base = placeholderState();
+  const v6 = {
+    ...base,
+    schemaVersion: 6,
+    profile: { currentAge: 45, endAge: 95, currentYear: 2026 },
+    work: { untilAge: 55 },
+    accounts: [
+      { name: "Brokerage", type: "taxable", balance: 100_000, costBasis: 80_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
+      { name: "401k", type: "401k", balance: 50_000, costBasis: null, contributionAnnual: 20_000, employerMatchAnnual: 5_000, contributeUntilAge: 50, contributionGrowthPct: null },
+      { name: "Roth", type: "roth_ira", balance: 10_000, costBasis: null, contributionAnnual: 7_000, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: 2 },
+    ],
+  };
+  const { state, fromVersion } = migrate(v6);
+  assert.equal(fromVersion, 6);
+  assert.deepEqual(validate(state).errors, []);
+  const [brk, k401, roth] = state.accounts;
+  assert.equal(brk.contributeYears, 0, "no contributions → 0 years");
+  assert.equal(k401.contributeYears, 6, "ages 45..50 → 6 years");
+  assert.equal(roth.contributeYears, 11, "blank age meant 'until work-until age' (55) → ages 45..55");
+  assert.equal(k401.invest, "own");
+  assert.equal(k401.ownReturnPct, 7);
+  assert.equal(brk.invest, "buckets");
+  assert.equal(roth.invest, "buckets");
+  assert.ok(!("contributeUntilAge" in k401));
+  assert.equal(roth.contributionGrowthPct, 2, "other fields carry over");
+});

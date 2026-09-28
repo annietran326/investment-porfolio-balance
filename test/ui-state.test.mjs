@@ -579,12 +579,17 @@ test("account rows: add, change type, blank contributions read as $0", () => {
   let next = addRow(s, "accounts");
   const i = next.accounts.length - 1;
   assert.equal(next.accounts[i].type, "taxable", "a new account starts as taxable");
+  assert.equal(next.accounts[i].invest, "buckets", "and in the three-bucket plan");
   next = setRowValue(next, "accounts", i, "type", parseRowField("accounts", "type", "roth_ira", true));
   next = setRowValue(next, "accounts", i, "contributionAnnual", parseRowField("accounts", "contributionAnnual", "", false));
   next = setRowValue(next, "accounts", i, "costBasis", parseRowField("accounts", "costBasis", "", false));
+  next = setRowValue(next, "accounts", i, "contributeYears", parseRowField("accounts", "contributeYears", "", false));
+  next = setRowValue(next, "accounts", i, "invest", parseRowField("accounts", "invest", "own", true));
   assert.equal(next.accounts[i].type, "roth_ira");
   assert.equal(next.accounts[i].contributionAnnual, 0, "a cleared contribution is $0, not an error");
   assert.equal(next.accounts[i].costBasis, null, "a cleared cost basis means 'same as balance'");
+  assert.equal(next.accounts[i].contributeYears, 0, "cleared years is 0, not an error");
+  assert.equal(next.accounts[i].invest, "own");
   assert.deepEqual(validate(next).errors, []);
   assert.equal(s.accounts.length, placeholderState().accounts.length, "input never mutated");
 });

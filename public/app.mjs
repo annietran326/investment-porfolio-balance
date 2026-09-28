@@ -128,6 +128,7 @@ function syncAccountRows() {
     const row = rows[i];
     if (!row) return;
     row.dataset.type = a.type;
+    row.dataset.invest = a.invest;
     const readout = row.querySelector('[data-readout="gainShare"]');
     if (readout) {
       const g = gainShareOf(a);
@@ -304,6 +305,7 @@ function renderResults() {
 function renderSplit(base) {
   const dollars = base.sim.startMix;
   const total = dollars.preservation + dollars.income + dollars.equities;
+  /** @type {Record<string, [string, string]>} */
   const ids = { preservation: ["#kpiPres", "#kpiPresAmt"], income: ["#kpiInc", "#kpiIncAmt"], equities: ["#kpiEq", "#kpiEqAmt"] };
   const bar = qs("#splitBar");
   bar.textContent = "";
@@ -315,7 +317,8 @@ function renderSplit(base) {
     seg.style.width = `${share * 100}%`;
     bar.appendChild(seg);
   }
-  setText(qs("#splitHint"), `of the ${fmtCompact(total)} you have today`);
+  const own = base.sim.startOwn;
+  setText(qs("#splitHint"), own > 0 ? `of the ${fmtCompact(total)} in your three-bucket plan` : `of the ${fmtCompact(total)} you have today`);
 
   let note = "";
   if (!(total > 0)) {
@@ -327,6 +330,9 @@ function renderSplit(base) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {
     note = "Capital preservation and high income hold exactly what your withdrawals in their years need. Everything beyond that is long-term money and sits in global equities.";
+  }
+  if (own > 0) {
+    note += ` Not included: ${fmtMoney(own)} in accounts held in their own fund. That money is counted as long-term money, so it lowers how much the plan needs in equities.`;
   }
   setText(qs("#splitNote"), note);
 }
@@ -363,6 +369,7 @@ function renderGlide(sim) {
         pct(r.mix.preservation),
         pct(r.mix.income),
         pct(r.mix.equities),
+        el("td", { class: "num" }, r.ownBal > 0 ? fmtCompact(r.ownBal) : "—"),
         el("td", { class: "num dim" }, `${r.returnPct.toFixed(1)}%`),
         el("td", { class: r.bal < 0 ? "num neg" : "num" }, fmtCompact(r.bal))
       )
