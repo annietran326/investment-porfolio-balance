@@ -12,7 +12,6 @@ import {
   fmtMoney,
   fmtCompact,
   yearDelta,
-  requiredCell,
   runwayCell,
 } from "../public/ui/verdict.mjs";
 import { createDebouncer, createSavePipeline, putState } from "../public/ui/save.mjs";
@@ -122,9 +121,9 @@ function makePipeline({ server, initialRev = 0 } = {}) {
 
 test("verdictCopy: distinct non-empty copy for met / value / unreachable", () => {
   const s = placeholderState();
-  const met = verdictCopy({ kind: "met" }, { kind: "met" }, s, 1_000_000);
-  const value = verdictCopy({ kind: "value", amount: 250_000 }, { kind: "value", perYear: 30_000, untilAge: 55 }, s, -5);
-  const unreach = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, { kind: "unreachable", cap: 2_000_000 }, s, -5);
+  const met = verdictCopy({ kind: "met" }, s, 1_000_000);
+  const value = verdictCopy({ kind: "value", amount: 250_000 }, s, -5);
+  const unreach = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, s, -5);
   for (const c of [met, value, unreach]) {
     assert.ok(c.headline.length > 0, "headline never blank");
     assert.ok(c.detail.length > 0, "detail never blank");
@@ -134,22 +133,22 @@ test("verdictCopy: distinct non-empty copy for met / value / unreachable", () =>
 });
 
 test("verdictCopy met: good tone, names the goal and the end balance", () => {
-  const c = verdictCopy({ kind: "met" }, { kind: "met" }, placeholderState(), 1_234_000);
+  const c = verdictCopy({ kind: "met" }, placeholderState(), 1_234_000);
   assert.equal(c.tone, "good");
   assert.match(c.headline, /^Yes, you have enough/);
   assert.match(c.detail, /die with zero/);
   assert.match(c.detail, /\$1,234,000/);
 });
 
-test("verdictCopy value: names the gap in today's dollars and the income alternative", () => {
-  const c = verdictCopy({ kind: "value", amount: 250_000 }, { kind: "value", perYear: 30_000, untilAge: 55 }, placeholderState(), -5);
+test("verdictCopy value: names the gap in today's dollars", () => {
+  const c = verdictCopy({ kind: "value", amount: 250_000 }, placeholderState(), -5);
   assert.equal(c.tone, "bad");
   assert.match(c.headline, /gap is \$250,000 in today's dollars/);
-  assert.match(c.detail, /\$30,000\/yr after tax until age 55/);
+  assert.doesNotMatch(c.detail, /earn/, "no 'or earn' alternative any more");
 });
 
 test("verdictCopy unreachable: names the cap", () => {
-  const c = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, { kind: "unreachable", cap: 2_000_000 }, placeholderState(), -5);
+  const c = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, placeholderState(), -5);
   assert.equal(c.tone, "bad");
   assert.match(c.headline, /\$50,000,000/);
 });
@@ -173,14 +172,6 @@ test("goalText follows the end-state mode and its own amount", () => {
   assert.equal(goalText(bequest), "leave $500,000");
   const floor = setEndStateAmount(setEndStateMode(s, "floor"), 250_000);
   assert.equal(goalText(floor), "never drop below $250,000");
-});
-
-test("requiredCell: never blank; unreachable is red and names the cap", () => {
-  assert.deepEqual(requiredCell({ kind: "met" }), { text: "none needed", cls: "pos" });
-  assert.deepEqual(requiredCell({ kind: "value", perYear: 42_000, untilAge: 50 }), { text: "$42,000", cls: "warn" });
-  const u = requiredCell({ kind: "unreachable", cap: 2_000_000 });
-  assert.equal(u.cls, "neg");
-  assert.equal(u.text, "not achievable even at $2M/yr");
 });
 
 test("runwayCell: finite breach year is red with years-from-now; never is green", () => {

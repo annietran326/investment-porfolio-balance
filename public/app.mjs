@@ -8,12 +8,12 @@
 // lists rebuild only on add/remove. All user-controlled strings land via
 // .value / .textContent — never innerHTML.
 import { simulate } from "/engine/simulate.mjs";
-import { requiredIncome, requiredSavings } from "/engine/solver.mjs";
+import { requiredSavings } from "/engine/solver.mjs";
 import { BUCKET_KEYS } from "/engine/buckets.mjs";
 import { SCENARIOS } from "/engine/scenarios.mjs";
 import { validate, PLAN_TO_AGE_PRESETS, totalBalance } from "/model/schema.mjs";
 import { qs, el, setText, show } from "./ui/dom.mjs";
-import { verdictCopy, fmtCompact, fmtMoney, fmtPct, requiredCell, gapCell, runwayCell, errorsText } from "./ui/verdict.mjs";
+import { verdictCopy, fmtCompact, fmtMoney, fmtPct, gapCell, runwayCell, errorsText } from "./ui/verdict.mjs";
 import { createSavePipeline } from "./ui/save.mjs";
 import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
 import { initTrends } from "./ui/trends.mjs";
@@ -244,14 +244,13 @@ function renderResults() {
   const results = SCENARIOS.map((sc) => ({
     key: sc.key,
     label: sc.label,
-    sim: simulate(state, sc.overlay, 0),
+    sim: simulate(state, sc.overlay),
     gap: requiredSavings(state, sc.overlay),
-    req: requiredIncome(state, sc.overlay),
   }));
   const base = results[0];
 
   // Verdict: do I have enough, and if not, the gap.
-  const copy = verdictCopy(base.gap, base.req, state, base.sim.endBal);
+  const copy = verdictCopy(base.gap, state, base.sim.endBal);
   const verdict = qs("#verdict");
   verdict.classList.toggle("good", copy.tone === "good");
   verdict.classList.toggle("bad", copy.tone === "bad");
@@ -274,21 +273,18 @@ function renderResults() {
   renderFlags(base.sim);
   renderGlide(base.sim);
 
-  setText(qs("#thRequired"), `Or earn $/yr to age ${state.work.untilAge}`);
   const tbody = qs("#scenarioRows");
   tbody.textContent = "";
   for (const r of results) {
     const rc = runwayCell(r.sim);
     const gcell = gapCell(r.gap);
-    const qc = requiredCell(r.req);
     tbody.appendChild(
       el(
         "tr",
         {},
         el("td", { class: "name" }, r.label),
         el("td", { class: rc.cls }, rc.text),
-        el("td", { class: `num ${gcell.cls}` }, gcell.text),
-        el("td", { class: `num ${qc.cls}` }, qc.text)
+        el("td", { class: `num ${gcell.cls}` }, gcell.text)
       )
     );
   }
@@ -324,12 +320,12 @@ function renderSplit(base) {
   if (!(total > 0)) {
     note = "Add your accounts to see a recommended split.";
   } else if (base.gap.kind === "value") {
-    const funded = simulate(state, {}, 0, base.gap.amount).startMix;
-    note = `You're short, so every bucket holds less than the plan needs. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
+    const funded = simulate(state, {}, base.gap.amount).startMix;
+    note = `You're short, so every bucket holds less than the plan needs, by the same share. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
   } else if (dollars.preservation === 0 && dollars.income === 0) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {
-    note = "Capital preservation and high income hold exactly what your withdrawals in their years need. Everything beyond that is long-term money and sits in global equities.";
+    note = "Each bucket holds its share of your future withdrawals: the next years in capital preservation, the middle years in high income, and the later years in global equities. Money beyond what the plan needs is spread in the same proportions.";
   }
   if (own > 0) {
     note += ` Not included: ${fmtMoney(own)} in accounts held in their own fund. That money is counted as long-term money, so it lowers how much the plan needs in equities.`;

@@ -48,6 +48,7 @@ function flat(o = {}) {
 
 test("simulates from the current year to plan-to age; the current year shows the starting balance", () => {
   const s = state();
+  s.household.people = s.household.people.filter((p) => p.role !== "spouse"); // just you: the plan ends at your plan-to age
   const years = s.profile.endAge - s.profile.currentAge;
   const sim = simulate(s);
   const total = s.accounts.reduce((sum, a) => sum + a.balance, 0);
@@ -245,9 +246,10 @@ test("own-fund money counts as long-term: it reduces the equities target first",
   const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 36_000 })] });
   s.buckets = { preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
   assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 });
-  // Add $12k in an own fund: the bucket plan no longer needs equities.
+  // Add $12k in an own fund: it covers the equities need, so the bucket plan's
+  // targets become 12k / 12k / 0 and its $36k is spread in those proportions.
   s.accounts.push(newAccount({ name: "401k", type: "401k", balance: 12_000, invest: "own", ownReturnPct: 0 }));
-  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 }, "the extra $12k in the plan is surplus, so it sits in equities");
+  assert.deepEqual(simulate(s).startMix, { preservation: 18_000, income: 18_000, equities: 0 });
   s.accounts[0].balance = 24_000;
   assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 0 });
 });
@@ -289,14 +291,14 @@ test("bucketFor and pvFactor follow the time-based rule (hand-computed)", () => 
   near(pvFactor(20, b, r), 1 / (1.025 ** 8 * 1.055 ** 7 * 1.095 ** 5), "20 years out: 5 in equities, 7 in high income, 8 in preservation", 1e-12);
 });
 
-test("allocate: surplus goes to equities; a shortfall scales every bucket by the same share", () => {
+test("allocate: the split keeps the targets' proportions, whether there's extra money or a shortfall", () => {
   // Cutoffs 2 / 4, all returns 0 → each bucket's target is just the sum of its needs.
   const b = { ...newBuckets(), preservationYears: 2, incomeThroughYear: 4 };
   const needs = [10, 10, 10, 10, 10, 10].map((x) => x * 1000);
   const factors = [0, 1, 1, 1, 1, 1, 1];
   const targets = bucketTargets(needs, 0, factors, b);
   assert.deepEqual(targets, { preservation: 20_000, income: 20_000, equities: 20_000 });
-  assert.deepEqual(allocate(90_000, targets), { preservation: 20_000, income: 20_000, equities: 50_000 });
+  assert.deepEqual(allocate(90_000, targets), { preservation: 30_000, income: 30_000, equities: 30_000 }, "extra money spread the same way");
   assert.deepEqual(allocate(30_000, targets), { preservation: 10_000, income: 10_000, equities: 10_000 });
   assert.deepEqual(allocate(0, targets), { preservation: 0, income: 0, equities: 0 });
   assert.deepEqual(allocate(5_000, { preservation: 0, income: 0, equities: 0 }), { preservation: 0, income: 0, equities: 5_000 }, "no withdrawals ahead → all equities");
@@ -305,14 +307,19 @@ test("allocate: surplus goes to equities; a shortfall scales every bucket by the
 });
 
 test("the year's return is the split-weighted blend of the bucket returns", () => {
-  // Returns 0% / 5% / 10%; cutoffs 1 / 2; $12k/yr spending for 3 years; big
-  // portfolio, so targets are met in full and the rest is equities.
+  // Returns 0% / 5% / 10%; cutoffs 1 / 2; $12k/yr spending for 3 years.
+  // Targets: year 1 → 12k preservation; year 2 → 12k/1.05 income; year 3 →
+  // 12k/(1.1 × 1.05) equities. The $1M is spread in those proportions.
   const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 1_000_000 })] });
   s.buckets = { preservationReturnPct: 0, incomeReturnPct: 5, equitiesReturnPct: 10, preservationYears: 1, incomeThroughYear: 2 };
   const sim = simulate(s);
-  const pres = 12_000; // year 1, held 1 year at 0%
-  const inc = 12_000 / 1.05; // year 2: 1 year in income, 1 in preservation
-  const eq = 1_000_000 - pres - inc;
+  const tp = 12_000;
+  const ti = 12_000 / 1.05;
+  const te = 12_000 / (1.1 * 1.05);
+  const k = 1_000_000 / (tp + ti + te);
+  const pres = tp * k;
+  const inc = ti * k;
+  const eq = te * k;
   near(sim.startMix.preservation, pres);
   near(sim.startMix.income, inc);
   near(sim.startMix.equities, eq);
@@ -386,6 +393,48 @@ test("zero assets and no income runs out immediately", () => {
   s.properties = [];
   assert.deepEqual(validate(s).errors, []);
   assert.notEqual(simulate(s).firstNegYear, null);
+});
+
+// ---------------------------------------------------------------------------
+// shared plan-to age and the survivor benefit
+// ---------------------------------------------------------------------------
+
+/** You at `self`, a spouse at `spouse`, plan-to age 90, SS $2,000/mo each (no haircut) from 67. */
+function couple(self, spouse) {
+  const s = flat({ age: self, years: 90 - self });
+  s.profile.endAge = 90;
+  s.social = { startAge: 67, monthly: 2000, haircutPct: 0 };
+  s.health = { preMedicareAnnual: 10_000, postMedicareAnnual: 5_000, employerCoverageUntilAge: 0 };
+  s.household = {
+    people: [{ name: "Spouse", role: "spouse", currentAge: spouse, annualCost: 0, fromYear: null, toYear: null, social: { startAge: 67, monthly: 1000, haircutPct: 0 }, health: { preMedicareAnnual: 10_000, postMedicareAnnual: 5_000, employerCoverageUntilAge: 0 } }],
+  };
+  return s;
+}
+
+test("older spouse: the plan ends at YOUR plan-to age; their costs and SS stop at theirs", () => {
+  const sim = simulate(couple(60, 65)); // spouse reaches 90 when you're 85
+  assert.equal(sim.rows.at(-1)?.age, 89, "plan runs until you reach 90");
+  const at = (age) => /** @type {any} */ (sim.rows.find((r) => r.age === age));
+  near(at(84).health, 10_000, "both on Medicare at 5k");
+  near(at(85).health, 5_000, "spouse has passed 90: only your healthcare");
+  near(at(84).ss, (2000 + 1000) * 12, "both collecting");
+  near(at(85).ss, 2000 * 12, "survivor keeps the larger check (yours)");
+});
+
+test("younger spouse: the plan runs until THEY reach the plan-to age, and they keep the larger check", () => {
+  const sim = simulate(couple(65, 60)); // you reach 90 when the spouse is 85
+  assert.equal(sim.rows.at(-1)?.age, 94, "plan runs until the spouse reaches 90 (you'd be 95)");
+  const at = (age) => /** @type {any} */ (sim.rows.find((r) => r.age === age));
+  near(at(89).ss, (2000 + 1000) * 12);
+  near(at(90).ss, 2000 * 12, "surviving spouse steps up to your $2,000 check");
+  near(at(90).health, 5_000, "only the spouse's healthcare remains");
+  assert.equal(sim.path.at(-1)?.age, 95);
+});
+
+test("no spouse: the plan ends at your plan-to age as before", () => {
+  const s = couple(60, 60);
+  s.household.people = [];
+  assert.equal(simulate(s).rows.length, 30);
 });
 
 // ---------------------------------------------------------------------------

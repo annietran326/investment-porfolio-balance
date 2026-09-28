@@ -1,5 +1,5 @@
 // Trends over calendar time (U7): small multiples of totalBalance,
-// monthlySpend, and requiredBase over the trend-row history.
+// monthlySpend, and the base-case gap over the trend-row history.
 //
 // Fetched from /api/trends ONCE at page load — deliberately. A trend row is
 // appended at most on the first save of each calendar date (plus shutdown),
@@ -23,20 +23,23 @@ function isNum(v) {
 }
 
 /**
- * requiredBase → a plottable number: "met" → 0 (you need nothing),
- * "value" → perYear, "unreachable" (and any future kind) → null (a gap in
- * the line — there IS no finite requirement to plot).
- * @param {{kind?: unknown, perYear?: unknown}} required
+ * gapBase → a plottable number: "met" → 0 (nothing more needed), "value" →
+ * amount, "unreachable" (and any future kind) → null (a gap in the line).
+ * Rows written before the gap existed (v2, which carried the old required
+ * income instead) also plot as null: the two numbers aren't comparable.
+ * @param {unknown} gap
  * @returns {number|null}
  */
-export function requiredPerYear(required) {
-  if (required.kind === "met") return 0;
-  if (required.kind === "value" && isNum(required.perYear)) return required.perYear;
+export function gapAmount(gap) {
+  if (gap === null || typeof gap !== "object") return null;
+  const g = /** @type {{kind?: unknown, amount?: unknown}} */ (gap);
+  if (g.kind === "met") return 0;
+  if (g.kind === "value" && isNum(g.amount)) return /** @type {number} */ (g.amount);
   return null;
 }
 
 /**
- * @typedef {{date: string, totalBalance: number, monthlySpend: number, required: number|null}} TrendPoint
+ * @typedef {{date: string, totalBalance: number, monthlySpend: number, gap: number|null}} TrendPoint
  *
  * Shape raw trend rows (from GET /api/trends) into per-day points.
  * @param {unknown} rows
@@ -50,14 +53,16 @@ export function trendModel(rows) {
     const r = /** @type {Record<string, any>} */ (row);
     if (typeof r.date !== "string" || !DATE_RE.test(r.date)) continue;
     if (!isNum(r.totalBalance) || !isNum(r.monthlySpend)) continue;
-    if (r.requiredBase === null || typeof r.requiredBase !== "object") continue;
+    const hasGap = r.gapBase !== null && typeof r.gapBase === "object";
+    const hasLegacy = r.requiredBase !== null && typeof r.requiredBase === "object";
+    if (!hasGap && !hasLegacy) continue;
     // Unknown fields and future `v` values are tolerated (ignored). Map.set
     // means the last row per calendar date wins — file order is append order.
     byDate.set(r.date, {
       date: r.date,
       totalBalance: r.totalBalance,
       monthlySpend: r.monthlySpend,
-      required: requiredPerYear(r.requiredBase),
+      gap: hasGap ? gapAmount(r.gapBase) : null,
     });
   }
   const points = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -87,7 +92,7 @@ export function pathD(pts) {
  * Geometry for one small multiple. X is proportional to calendar time (a
  * missed week reads as a longer gap); Y spans the series' own min/max.
  * `latest` is the LAST point's value — null when the latest day is a gap.
- * @param {TrendPoint[]} points @param {"totalBalance"|"monthlySpend"|"required"} key
+ * @param {TrendPoint[]} points @param {"totalBalance"|"monthlySpend"|"gap"} key
  * @param {{width?: number, height?: number}} [opts]
  * @returns {{d: string, dots: {x:number,y:number}[], latest: number|null}}
  */
@@ -128,7 +133,7 @@ export const TRENDS_EMPTY_COPY =
 const SERIES = [
   { key: /** @type {const} */ ("totalBalance"), label: "total balance" },
   { key: /** @type {const} */ ("monthlySpend"), label: "monthly spend" },
-  { key: /** @type {const} */ ("required"), label: "required $/yr (base)" },
+  { key: /** @type {const} */ ("gap"), label: "gap today (base)" },
 ];
 
 // ---------------------------------------------------------------------------

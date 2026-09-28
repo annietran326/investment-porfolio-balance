@@ -6,7 +6,7 @@ A local-first retirement calculator that answers two questions:
 >
 > **2. Do I have enough to last the rest of my life? If not, how much more do I need today?**
 
-Adapted from [haiguan28/financial-runway-calculator](https://github.com/haiguan28/financial-runway-calculator) (MIT). The original answers "how much must I earn, until when?"; that answer is still here, in the stress-test table, but the headline is now the split and the gap.
+Adapted from [haiguan28/financial-runway-calculator](https://github.com/haiguan28/financial-runway-calculator) (MIT). The original answers "how much must I earn, until when?"; this version answers with the split and the gap instead.
 
 ## Quickstart
 
@@ -23,8 +23,9 @@ Open the printed `http://localhost:4207`. The app starts with obviously fake exa
 - **Rates are actual rates, before inflation.** Each spending line, income stream, rent, and contribution can have its own yearly increase. Leave it blank to rise with inflation.
 - **Accounts, by tax treatment.** Taxable brokerage, traditional IRA, 401(k), and Roth IRA, each with a balance and optional yearly contributions plus employer match for a set number of years (for a 401(k) still being funded).
 - **Bucket plan or own fund.** Each account either follows the recommended split or sits in its own fund at its own return (for money you leave alone, like a 401(k) in a target-date fund; default 7% before inflation). Own-fund money isn't part of the split; it counts as long-term money, so it lowers how much the bucket plan holds in equities.
+- **One plan-to age for both of you.** You and a spouse each live to the plan-to age; the plan runs until the younger of you reaches it. Each person's Social Security and healthcare stop after that age, and the survivor keeps the larger of the two Social Security checks. Household spending doesn't drop after a death (conservative).
 - **Three investment buckets.** Default returns before inflation: capital preservation 2.5%, high income 5.5%, global equities 9.5% (about 0% / 3% / 7% after inflation). All editable.
-- **The split rule.** Withdrawals needed in years 1 through 8 sit in capital preservation, years 9 through 15 in high income, and everything after that in global equities (both cutoffs editable). Each future withdrawal is valued at what it costs today, following the path its money takes through the buckets. Money beyond what the plan needs is long-term money and goes to equities. If the plan is short, every bucket is short by the same share. The split is redone every year as withdrawals get closer.
+- **The split rule.** Withdrawals needed in years 1 through 8 sit in capital preservation, years 9 through 15 in high income, and everything after that in global equities (both cutoffs editable). Each future withdrawal is valued at what it costs today, following the path its money takes through the buckets. The split always keeps those proportions: extra money is spread across the buckets the same way, and a shortfall makes every bucket short by the same share. So as fewer years remain, more money sits in capital preservation. The split is redone every year as withdrawals get closer.
 - **The gap.** If the plan doesn't reach your goal, the gap is the smallest extra amount, invested today in the recommended split, that would. It's in today's dollars.
 - **Taxes on withdrawals.** Money comes out of taxable first, then traditional IRA / 401(k), then Roth, grossed up so the after-tax cash covers spending:
   - *Taxable:* capital-gains rate × the gain share of what's sold. The app tracks your **cost basis** in dollars: growth raises the value but not the basis, so the taxed share rises over time, and a sale lowers the basis in proportion (average cost). Inflation alone creates taxable gain, as it does in real life.
@@ -35,7 +36,7 @@ Open the printed `http://localhost:4207`. The app starts with obviously fake exa
 ### Known simplifications
 
 - **No random market paths yet.** Every year earns the expected return, so the model shows the *cost* of a bigger safe bucket but not its benefit. The "market crash now" stress test (equities −30%, high income −15%, capital preservation untouched) is the partial answer. The engine has a `returnsByYear` hook in `simulate()` ready for Monte Carlo.
-- **No required minimum distributions** (slightly optimistic). **No tax brackets**: one effective rate each. **Rebalancing is tax-free.** **Every bucket-plan account holds the same mix.** **The plan runs to your plan-to age; a spouse's costs and Social Security run on their own age until then, with no death or survivor modeling.** Income and property proceeds are entered after tax.
+- **No required minimum distributions** (slightly optimistic). **No tax brackets**: one effective rate each. **Rebalancing is tax-free.** **Every bucket-plan account holds the same mix.** Income and property proceeds are entered after tax.
 
 ## Privacy posture and threat model
 

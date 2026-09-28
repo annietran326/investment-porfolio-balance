@@ -44,7 +44,7 @@ import {
   migrateWorkspace,
   validateWorkspace,
 } from "../model/workspace.mjs";
-import { requiredIncome } from "../engine/solver.mjs";
+import { requiredSavings } from "../engine/solver.mjs";
 import { SCENARIOS } from "../engine/scenarios.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
@@ -198,9 +198,9 @@ function message(e) {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** @param {import("../engine/solver.mjs").SolverResult} r */
-function encodeRequired(r) {
-  return r.kind === "value" ? { kind: r.kind, perYear: r.perYear } : { kind: r.kind };
+/** @param {import("../engine/solver.mjs").GapResult} r */
+function encodeGap(r) {
+  return r.kind === "value" ? { kind: r.kind, amount: r.amount } : { kind: r.kind };
 }
 
 // Aux-file (transactions.json / mappings.json) envelope version — independent
@@ -356,7 +356,7 @@ export function createStore(dataDir, opts = {}) {
     const base = SCENARIOS.find((sc) => sc.key === "base");
     const worst = SCENARIOS.find((sc) => sc.key === "everything");
     return {
-      v: 2,
+      v: 3,
       ts: ts.toISOString(),
       date: dateOf(ts),
       source,
@@ -369,8 +369,8 @@ export function createStore(dataDir, opts = {}) {
         const active = (c.fromYear === null || c.fromYear === undefined || cy >= c.fromYear) && (c.toYear === null || c.toYear === undefined || cy <= c.toYear);
         return active ? sum + c.monthly : sum;
       }, 0),
-      requiredBase: encodeRequired(requiredIncome(state, base?.overlay ?? {})),
-      requiredWorst: encodeRequired(requiredIncome(state, worst?.overlay ?? {})),
+      gapBase: encodeGap(requiredSavings(state, base?.overlay ?? {})),
+      gapWorst: encodeGap(requiredSavings(state, worst?.overlay ?? {})),
     };
   }
 

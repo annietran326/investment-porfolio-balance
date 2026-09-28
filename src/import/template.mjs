@@ -376,6 +376,10 @@ function parseListTab(def, sheet) {
   return { rows, errors };
 }
 
+// Settings older versions exported that no longer exist. An old spreadsheet
+// still imports: these rows are skipped instead of blocking the tab.
+const RETIRED_SETTINGS = ["work.untilAge"];
+
 /** @returns {TabDef} */
 function assumptionsDef() {
   const def = TEMPLATE_DEF.tabs.find((t) => t.key === "assumptions");
@@ -406,6 +410,7 @@ function parseSettingsTab(def, sheet) {
     if (isEmptyCell(keyCell)) continue;
     const key = (readText(keyCell).value ?? "").trim();
     if (key === "" || key.startsWith("#")) continue; // comment / note row
+    if (RETIRED_SETTINGS.includes(key)) continue; // from an older export: ignored, not an error
     const setting = settings.find((s) => s.key === key);
     if (!setting) {
       errors.push({ cell: cellAddr(def.name, r, keyCol), message: `unknown setting '${key}'` });

@@ -90,19 +90,14 @@
       <button id="addSpouse" type="button" class="small">+ spouse</button>
       <button id="addDependent" type="button" class="small">+ dependent</button>
     </div>
-    <div class="footnote">A spouse brings their own Social Security and healthcare, on their own age (their income goes in Income streams). A dependent carries an ongoing support cost over a period, like raising a kid or supporting a parent.</div>
+    <div class="footnote">You and your spouse each live to the plan-to age above; the plan runs until the younger of you reaches it. A spouse brings their own Social Security and healthcare, on their own age (their income goes in Income streams), and the survivor keeps the larger Social Security check. A dependent carries an ongoing support cost over a period, like raising a kid or supporting a parent.</div>
   </section>
 
   <section class="card">
-    <h2>Accounts <span class="hint">investable money, by tax treatment</span></h2>
-    <div class="itemlist" id="accountList"></div>
-    <button id="addAccount" type="button" class="small">+ account</button>
-    <div class="footnote">
-      <b>How each type is taxed when you take money out:</b> taxable brokerage pays capital-gains tax on the gain part of what you sell; traditional IRA and 401(k) pay ordinary income tax on the whole withdrawal (plus a 10% penalty before 59½); Roth IRA is tax-free.<br>
-      <b>Cost basis</b> (taxable only) is what you paid in total. In Fidelity it's the "Cost Basis Total" on the Positions page. Leave it blank if you don't know it; that assumes no gain yet.<br>
-      <b>Invested in:</b> "Bucket plan" means this money follows the recommended split. "Own fund" is for money you leave alone, like a 401(k) in a target-date fund: it earns its own return (7% before inflation by default, a rough figure for a stock-heavy target-date fund), isn't part of the split, and counts as long-term money, so the rest of your accounts need less in equities.<br>
-      <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match, starting this year for the number of years you enter. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
-    </div>
+    <h2>Income streams <span class="hint">after tax, today's $</span></h2>
+    <div class="itemlist" id="incomeList"></div>
+    <button id="addIncome" type="button" class="small">+ income stream</button>
+    <div class="footnote">Enter take-home pay, after taxes and after any 401(k) payroll deduction (the deduction goes in Portfolio). Leave the increase blank to rise with inflation.</div>
   </section>
 
   <section class="card">
@@ -124,19 +119,24 @@
   </section>
 
   <section class="card">
+    <h2>Portfolio <span class="hint">your investment accounts, by tax treatment</span></h2>
+    <div class="itemlist" id="accountList"></div>
+    <button id="addAccount" type="button" class="small">+ account</button>
+    <div class="footnote">
+      <b>How each type is taxed when you take money out:</b> taxable brokerage pays capital-gains tax on the gain part of what you sell; traditional IRA and 401(k) pay ordinary income tax on the whole withdrawal (plus a 10% penalty before 59½); Roth IRA is tax-free.<br>
+      <b>Cost basis</b> (taxable only) is what you paid in total. In Fidelity it's the "Cost Basis Total" on the Positions page. Leave it blank if you don't know it; that assumes no gain yet.<br>
+      <b>Invested in:</b> "Bucket plan" means this money follows the recommended split. "Own fund" is for money you leave alone, like a 401(k) in a target-date fund: it earns its own return (7% before inflation by default, a rough figure for a stock-heavy target-date fund), isn't part of the split, and counts as long-term money, so the rest of your accounts need less in equities.<br>
+      <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match, starting this year for the number of years you enter. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
+    </div>
+  </section>
+
+  <section class="card">
     <h2>Taxes on withdrawals <span class="hint">effective rates, federal + state</span></h2>
     <div class="grid2">
       <div class="field"><label for="f-taxOrd">Ordinary income rate % (traditional IRA / 401(k))</label><input id="f-taxOrd" type="number" step="1" data-path="taxes.ordinaryIncomePct"><div class="issue"></div></div>
       <div class="field"><label for="f-taxCg">Capital gains rate % (taxable account gains)</label><input id="f-taxCg" type="number" step="1" data-path="taxes.capitalGainsPct"><div class="issue"></div></div>
     </div>
     <div class="footnote">Use your average rate, not your top bracket: total tax divided by income. Income streams and property proceeds are entered after tax, so these rates apply only to money taken out of accounts.</div>
-  </section>
-
-  <section class="card">
-    <h2>Income streams <span class="hint">after tax, today's $</span></h2>
-    <div class="itemlist" id="incomeList"></div>
-    <button id="addIncome" type="button" class="small">+ income stream</button>
-    <div class="footnote">Enter take-home pay, after taxes and after any 401(k) payroll deduction (the deduction goes in Accounts). Leave the increase blank to rise with inflation.</div>
   </section>
 
   <section class="card">
@@ -207,17 +207,16 @@
       <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Own funds</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
       <tbody id="glideRows"></tbody>
     </table>
-    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Money beyond what the plan needs sits in equities. Percentages are of the money in your three-bucket plan; "Own funds" and "Balance" are in today's dollars, and the return is for everything combined.</div>
+    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. As fewer years remain, more of the money sits in capital preservation. Percentages are of the money in your three-bucket plan; "Own funds" and "Balance" are in today's dollars, and the return is for everything combined.</div>
   </section>
 
   <section class="card">
     <h2>Stress tests</h2>
-    <div class="field narrow inline-field"><label for="f-workUntil">"Or earn" column: extra income through age</label><input id="f-workUntil" type="number" data-path="work.untilAge"><div class="issue"></div></div>
     <table>
-      <thead><tr><th>Stress test</th><th>Money lasts until</th><th class="num">Gap today</th><th class="num" id="thRequired">Or earn $/yr</th></tr></thead>
+      <thead><tr><th>Stress test</th><th>Money lasts until</th><th class="num">Gap today</th></tr></thead>
       <tbody id="scenarioRows"></tbody>
     </table>
-    <div class="footnote">Gap today = extra money you'd need invested now (today's dollars) to reach your goal. "Or earn" = the after-tax income, from now through the age above, that would close the same gap instead. The market crash hits your split today: equities −30%, high income −15%, capital preservation untouched, which is where a bigger safe bucket pays off.</div>
+    <div class="footnote">Gap today = extra money you'd need invested now (today's dollars) to reach your goal. The market crash hits your split today: equities −30%, high income −15%, capital preservation untouched, which is where a bigger safe bucket pays off.</div>
   </section>
 
   <section class="card">
@@ -257,7 +256,7 @@
         <p><strong>Each year</strong>, in order: (1) money in the bucket plan is split across the three buckets and earns the blended return, while any account in its own fund earns that fund's return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from the accounts.</p>
         <p><strong>Own-fund accounts</strong> (like a 401(k) in a target-date fund) aren't part of the split. They're treated as long-term money, so they reduce how much the bucket plan needs to hold in equities. Contributions go in at year end for the number of years you enter on each account.</p>
         <p><strong>Cash flow each year</strong> = income + Social Security + property cash flow + sale proceeds − spending − healthcare. Social Security and healthcare rise with inflation. Mortgage payments are fixed dollar amounts and don't rise.</p>
-        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: years 1 through your capital preservation cutoff go to capital preservation, the next years through your high income cutoff go to high income, and the rest go to equities. Each withdrawal is valued at what it costs today, following the path its money takes (it waits in equities, then moves to high income, then to capital preservation). If you have more than the plan needs, the extra is long-term money and goes to equities. If you have less, every bucket is short by the same share, so the split stays the one your plan needs and the shortfall shows up as the gap. The split is redone every year.</p>
+        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: years 1 through your capital preservation cutoff go to capital preservation, the next years through your high income cutoff go to high income, and the rest go to equities. Each withdrawal is valued at what it costs today, following the path its money takes (it waits in equities, then moves to high income, then to capital preservation). The split always keeps those proportions: if you have more than the plan needs, every bucket gets the same extra share; if you have less, every bucket is short by the same share and the shortfall shows up as the gap. So as the years left get fewer, more of the money sits in capital preservation. The split is redone every year.</p>
         <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, bucket-plan money is used before own-fund money. Enough is taken to cover tax, so the after-tax amount pays the bills:</p>
         <ul>
           <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time. A sale lowers the basis in proportion (average cost).</li>

@@ -75,10 +75,10 @@ test("income window and end-age ordering rules", () => {
   assert.ok(validate(s2).errors.some((e) => e.path === "profile.endAge"));
 
   const s3 = placeholderState();
-  s3.work.untilAge = s3.profile.currentAge - 5;
+  s3.household.people[0].currentAge = s3.profile.endAge + 1; // spouse already past the plan-to age
   const r3 = validate(s3);
   assert.deepEqual(r3.errors, []);
-  assert.ok(r3.warnings.some((w) => w.path === "work.untilAge"));
+  assert.ok(r3.warnings.some((w) => w.path === "household.people[0].currentAge"));
 });
 
 test("v0 export migrates via declaredVersion 0 and passes validation", () => {
@@ -414,4 +414,18 @@ test("v6 → v7: contribute-until age becomes years; a 401(k) moves to its own f
   assert.equal(roth.invest, "buckets");
   assert.ok(!("contributeUntilAge" in k401));
   assert.equal(roth.contributionGrowthPct, 2, "other fields carry over");
+});
+
+test("v7 → v8 drops the work-until age; nothing else changes", () => {
+  const v7 = { ...placeholderState(), schemaVersion: 7, work: { untilAge: 55 } };
+  const { state, fromVersion } = migrate(v7);
+  assert.equal(fromVersion, 7);
+  assert.ok(!("work" in state));
+  assert.deepEqual(validate(state).errors, []);
+  const { schemaVersion, work, ...before } = v7;
+  void schemaVersion;
+  void work;
+  const { schemaVersion: _sv, ...after } = state;
+  void _sv;
+  assert.deepEqual(after, before);
 });

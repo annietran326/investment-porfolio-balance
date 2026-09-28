@@ -14,11 +14,12 @@
 //     0 is an error, never coerced. Import parsers must preserve this distinction.
 //   - Spending lines carry an optional [fromYear, toYear] window (null = open).
 //   - The household is self (profile/social/health) plus `household.people` for a
-//     spouse and dependents. No death modeling.
+//     spouse and dependents. You and a spouse each live to the plan-to age;
+//     the plan runs until the younger of you reaches it.
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -119,9 +120,6 @@ export const BASE_YEAR = 2026;
  * @property {EndStateMode} mode
  * @property {{bequest: number, floor: number}} amounts today's $, preserved across switches
  *
- * @typedef {Object} Work
- * @property {number} untilAge the window for the "or earn $X/yr" alternative to the gap
- *
  * @typedef {Object} RunwayState
  * @property {number} schemaVersion
  * @property {Profile} profile
@@ -136,7 +134,6 @@ export const BASE_YEAR = 2026;
  * @property {Health} health
  * @property {Household} household
  * @property {EndState} endState
- * @property {Work} work
  */
 
 // A growth or return rate this far out is almost certainly a typo.
@@ -238,7 +235,6 @@ export function defaultState() {
     health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 40 },
     household: { people: [] },
     endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },
-    work: { untilAge: 50 },
   };
 }
 
@@ -363,7 +359,7 @@ export function validate(s) {
     add(errors, "schemaVersion", `expected ${SCHEMA_VERSION}, got ${s.schemaVersion}`);
   }
 
-  for (const key of /** @type {const} */ (["profile", "economy", "buckets", "taxes", "social", "health", "household", "endState", "work"])) {
+  for (const key of /** @type {const} */ (["profile", "economy", "buckets", "taxes", "social", "health", "household", "endState"])) {
     if (!s[key] || typeof s[key] !== "object") add(errors, key, "missing section");
   }
   for (const key of /** @type {const} */ (["accounts", "properties", "incomes", "spending"])) {
@@ -520,6 +516,9 @@ export function validate(s) {
     if (person.role === "spouse") {
       spouseCount++;
       if (person.currentAge === null) add(warnings, `${at}.currentAge`, "spouse age is needed to time their Social Security and healthcare");
+      else if (typeof person.currentAge === "number" && typeof s.profile.endAge === "number" && person.currentAge >= s.profile.endAge) {
+        add(warnings, `${at}.currentAge`, `already at or past the plan-to age (${s.profile.endAge}), so their Social Security and healthcare aren't counted`);
+      }
       if (person.social !== undefined) validateSocial(errors, warnings, person.social, `${at}.social`);
       if (person.health !== undefined) validateHealth(errors, person.health, `${at}.health`);
     }
@@ -536,10 +535,6 @@ export function validate(s) {
     requireNumber(errors, s.endState.amounts.floor, "endState.amounts.floor");
   }
 
-  requireNumber(errors, s.work.untilAge, "work.untilAge");
-  if (typeof s.work.untilAge === "number" && typeof s.profile.currentAge === "number" && s.work.untilAge < s.profile.currentAge) {
-    add(warnings, "work.untilAge", "work-until age is below current age, so the income window is empty");
-  }
 
   return { errors, warnings };
 }

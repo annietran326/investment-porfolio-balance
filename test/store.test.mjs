@@ -146,15 +146,15 @@ test("first save of a date: current + one snapshot + one trend row; 20 same-day 
   assert.equal(active.state.accounts[0].balance, 1_000_018, "current.json still updates every save");
 
   const row = JSON.parse(trendLines(dir)[0]);
-  assert.equal(row.v, 2, "trend rows are v2 now");
+  assert.equal(row.v, 3, "trend rows are v3 (gap) now");
   assert.equal(row.date, "2026-07-10");
   assert.equal(row.source, "edit");
   assert.equal(row.rev, 1);
   assert.equal(row.scenario, "Base plan", "trend row carries the active scenario name");
   assert.equal(row.totalBalance, 1_000_000);
   assert.equal(row.monthlySpend, 3500 + 3000 + 1200); // the placeholder's spending lines
-  assert.ok(["met", "value", "unreachable"].includes(row.requiredBase.kind));
-  assert.ok(["met", "value", "unreachable"].includes(row.requiredWorst.kind));
+  assert.ok(["met", "value", "unreachable"].includes(row.gapBase.kind), "trend rows track the gap");
+  assert.ok(["met", "value", "unreachable"].includes(row.gapWorst.kind));
   assert.ok(!("rev" in current), "rev is server-owned, never inside current.json");
 });
 
@@ -607,7 +607,7 @@ test("appendShutdownTrend appends only when rev moved since the last trend row",
   const lines = trendLines(dir);
   assert.equal(lines.length, 2);
   const last = JSON.parse(lines[1]);
-  assert.equal(last.v, 2);
+  assert.equal(last.v, 3);
   assert.equal(last.source, "shutdown");
   assert.equal(last.rev, 2);
   assert.equal(last.scenario, "Base plan");

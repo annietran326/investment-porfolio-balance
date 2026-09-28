@@ -16,11 +16,12 @@
 // out with cutoffs 8/15 spends 5 years in equities, 7 in high income, and 8 in
 // capital preservation.)
 //
-// When the portfolio is LARGER than what the withdrawals need, the surplus goes
-// to equities (money with no withdrawal date is long-term money). When it is
-// SMALLER, every bucket is scaled down by the same share, so the split stays
-// the one the plan needs and the shortfall shows up as the gap, not as a
-// lopsided mix.
+// The split always follows those targets' proportions, whatever the portfolio
+// size: with more money than the withdrawals need, every bucket gets the same
+// extra share; with less, every bucket is short by the same share. So late in
+// life, when only a few years remain, nearly everything sits in capital
+// preservation, and a shortfall shows up as the gap rather than a lopsided mix.
+// Only with no withdrawals ahead at all does money default to equities.
 
 export const BUCKET_KEYS = /** @type {const} */ (["preservation", "income", "equities"]);
 export const BUCKET_LABELS = {
@@ -92,9 +93,7 @@ export function bucketTargets(needs, fromIdx, factors, b) {
 }
 
 /**
- * Split a portfolio across the buckets. At or below the total need, each
- * bucket gets the same share of its target; above it, targets are met in full
- * and the surplus goes to equities.
+ * Split a portfolio across the buckets in proportion to their targets.
  * @param {number} total portfolio value (<= 0 means nothing to split)
  * @param {BucketAmounts} targets
  * @returns {BucketAmounts} dollars per bucket, summing to max(total, 0)
@@ -103,11 +102,8 @@ export function allocate(total, targets) {
   if (!(total > 0)) return { preservation: 0, income: 0, equities: 0 };
   const need = targets.preservation + targets.income + targets.equities;
   if (!(need > 0)) return { preservation: 0, income: 0, equities: total };
-  if (total <= need) {
-    const k = total / need;
-    return { preservation: targets.preservation * k, income: targets.income * k, equities: targets.equities * k };
-  }
-  return { preservation: targets.preservation, income: targets.income, equities: total - targets.preservation - targets.income };
+  const k = total / need;
+  return { preservation: targets.preservation * k, income: targets.income * k, equities: targets.equities * k };
 }
 
 /**

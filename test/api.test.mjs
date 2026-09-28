@@ -143,8 +143,8 @@ test("restore endpoint: 409 on stale rev, 404 on unknown file, 200 round-trip", 
 test("GET /api/trends parses rows and skips a hand-planted torn line", async () => {
   const beforeRows = (await getJson("/api/trends")).body.rows;
   assert.ok(beforeRows.length >= 1);
-  assert.ok(beforeRows.every((r) => r.v === 2 && typeof r.rev === "number"));
-  appendFileSync(join(dir, "trends.jsonl"), '{"v":2,"ts":"torn');
+  assert.ok(beforeRows.every((r) => r.v === 3 && typeof r.rev === "number"));
+  appendFileSync(join(dir, "trends.jsonl"), '{"v":3,"ts":"torn');
   const rows = (await getJson("/api/trends")).body.rows;
   assert.equal(rows.length, beforeRows.length, "torn line skipped");
 });

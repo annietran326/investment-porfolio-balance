@@ -18,6 +18,12 @@
 //         treated as long-term money: it reduces how much the bucket plan
 //         needs to hold in equities.
 //
+// Lifespans: you and a spouse each live to the same plan-to age. The plan runs
+// until the younger of you reaches it. Each person's Social Security and
+// healthcare stop after they pass it; the survivor keeps the larger of the two
+// Social Security checks (the survivor-benefit rule, from age 60). Household
+// spending is unchanged after a death (conservative).
+//
 // Within a year (pinned by tests): growth applies to the balance at the START
 // of the year, then contributions and the year's net cash flow land at the
 // end. Cash arriving during a year earns no return until the next year.
@@ -44,6 +50,8 @@ const MEDICARE_AGE = 65;
 // A year counts as "before" when you're under 59 1/2 at mid-year (start age < 59).
 export const EARLY_WITHDRAWAL_START_AGE = 59;
 export const EARLY_WITHDRAWAL_PENALTY_PCT = 10;
+// A surviving spouse can collect the late spouse's Social Security from age 60.
+export const SURVIVOR_MIN_AGE = 60;
 // In the market-drop stress, high income falls by this share of the equity drop.
 export const INCOME_DROP_SHARE = 0.5;
 
@@ -107,7 +115,6 @@ function ssAnnualOf(social) {
  * @property {number|null} firstNegYear first year balance < 0, or null
  * @property {number|null} firstBreachYear first year balance < the runway threshold (the floor in floor mode, else $0), or null
  * @property {number} minBal   today's $
- * @property {number} workUntilYear last year the solver's extra income applies
  * @property {number} startYear
  * @property {Mix} startMix    the recommended split today for the bucket-plan money, as dollars (today's $)
  * @property {number} startOwn  money in own-fund accounts today (today's $)
@@ -120,13 +127,12 @@ function ssAnnualOf(social) {
  *
  * @param {import("../model/schema.mjs").RunwayState} s validated state
  * @param {ScenarioOverlay} [overlay]
- * @param {number} [extraIncomeAnnual] the required-income solver's variable: after-tax $/yr (today's $, rising with inflation) from now through work.untilAge
  * @param {number} [extraSavingsToday] the gap solver's variable: extra $ added to the taxable account today (as fresh cash: basis = amount)
  * @returns {SimResult}
  */
-export function simulate(s, overlay = {}, extraIncomeAnnual = 0, extraSavingsToday = 0) {
+export function simulate(s, overlay = {}, extraSavingsToday = 0) {
   const startYear = s.profile.currentYear;
-  const years = Math.max(0, s.profile.endAge - s.profile.currentAge);
+  const endAge = s.profile.endAge;
   const inflPct = s.economy.inflationPct;
   const infl = inflPct / 100;
   const deflator = (/** @type {number} */ i) => (1 + infl) ** i; // today's $ -> year-i $
@@ -139,7 +145,8 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0, extraSavingsTod
   // Spouses with their own age contribute Social Security and a healthcare load
   // on their own age trajectory.
   const spouses = (s.household?.people ?? []).filter((p) => p.role === "spouse" && typeof p.currentAge === "number");
-  const workUntilYear = startYear + Math.max(0, s.work.untilAge - s.profile.currentAge);
+  // The plan runs until the youngest of you reaches the plan-to age.
+  const years = Math.max(0, endAge - s.profile.currentAge, ...spouses.map((sp) => endAge - /** @type {number} */ (sp.currentAge)));
   const propOverlay = {
     startYear,
     inflationPct: inflPct,
@@ -160,14 +167,26 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0, extraSavingsTod
     for (const inc of s.incomes) {
       if (year >= inc.fromYear && year <= inc.toYear) income += grownValue(inc.annual, effectiveGrowthPct(inc.growthPct, inflPct), i);
     }
-    if (extraIncomeAnnual && year <= workUntilYear) income += extraIncomeAnnual * d;
 
-    // Social Security rises with inflation (the annual COLA).
-    let ss = age >= s.social.startAge ? ssAnnualSelf : 0;
-    for (const sp of spouses) {
+    // Social Security rises with inflation (the annual COLA). Each living
+    // person collects their own from their start age; a surviving spouse keeps
+    // the larger of their own and the late spouse's check.
+    const selfAlive = age < endAge;
+    const selfOwn = selfAlive && age >= s.social.startAge ? ssAnnualSelf : 0;
+    let ss = selfOwn;
+    spouses.forEach((sp, k) => {
       const spAge = /** @type {number} */ (sp.currentAge) + i;
-      if (sp.social && spAge >= sp.social.startAge) ss += ssAnnualOf(sp.social);
-    }
+      const spAlive = spAge < endAge;
+      const spBenefit = sp.social ? ssAnnualOf(sp.social) : 0;
+      const spOwn = spAlive && sp.social && spAge >= sp.social.startAge ? spBenefit : 0;
+      if (k !== 0) {
+        ss += spOwn; // survivor rule applies to the first spouse only
+        return;
+      }
+      if (selfAlive && !spAlive && age >= SURVIVOR_MIN_AGE) ss = Math.max(selfOwn, spBenefit);
+      else if (!selfAlive && spAlive && spAge >= SURVIVOR_MIN_AGE) ss = Math.max(spOwn, ssAnnualSelf);
+      else ss += spOwn;
+    });
     ss *= d;
 
     let propCF = 0;
@@ -178,10 +197,11 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0, extraSavingsTod
       proceeds += res.proceeds;
     }
 
-    // Healthcare rises with inflation.
-    let health = healthCostAt(s.health, age);
+    // Healthcare rises with inflation; each person's stops after they pass the plan-to age.
+    let health = selfAlive ? healthCostAt(s.health, age) : 0;
     for (const sp of spouses) {
-      if (sp.health) health += healthCostAt(sp.health, /** @type {number} */ (sp.currentAge) + i);
+      const spAge = /** @type {number} */ (sp.currentAge) + i;
+      if (sp.health && spAge < endAge) health += healthCostAt(sp.health, spAge);
     }
     health *= d;
 
@@ -373,7 +393,6 @@ export function simulate(s, overlay = {}, extraIncomeAnnual = 0, extraSavingsTod
     firstNegYear,
     firstBreachYear,
     minBal,
-    workUntilYear,
     startYear,
     startMix: startDollars,
     startOwn,

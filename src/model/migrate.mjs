@@ -91,7 +91,7 @@ function migrateV0(v0) {
         floor: mode === "floor" ? amount : 0,
       },
     },
-    work: { untilAge: num(v0?.work?.untilAge, d.work.untilAge) },
+    work: { untilAge: num(v0?.work?.untilAge, 50) },
   };
 }
 
@@ -262,6 +262,18 @@ function migrateV6(v6) {
   };
 }
 
+/**
+ * v7 -> v8: the work-until age is gone. It only set the window for the old
+ * "or earn $X/yr" answer, which was removed.
+ * @param {any} v7
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV7(v7) {
+  const { work, ...rest } = v7;
+  void work;
+  return { ...rest, schemaVersion: 8 };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -271,6 +283,7 @@ const RUNGS = {
   4: migrateV4,
   5: migrateV5,
   6: migrateV6,
+  7: migrateV7,
 };
 
 /**

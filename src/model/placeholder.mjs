@@ -58,6 +58,5 @@ export function placeholderState() {
       ],
     },
     endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },
-    work: { untilAge: 55 },
   };
 }

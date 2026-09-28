@@ -3,7 +3,6 @@
 // SolverResult kind maps to distinct, non-empty copy.
 
 /**
- * @typedef {import("../../src/engine/solver.mjs").SolverResult} SolverResult
  * @typedef {import("../../src/model/schema.mjs").RunwayState} RunwayState
  */
 
@@ -59,12 +58,11 @@ export function fmtPct(share) {
 /**
  * The headline answer, as copy: do I have enough, and if not, the gap.
  * @param {import("../../src/engine/solver.mjs").GapResult} gap base-case requiredSavings(state, {})
- * @param {SolverResult} income base-case requiredIncome(state, {})
  * @param {RunwayState} state
  * @param {number} endBal base-case end balance, today's $
  * @returns {{tone: "good"|"bad", headline: string, detail: string}}
  */
-export function verdictCopy(gap, income, state, endBal) {
+export function verdictCopy(gap, state, endBal) {
   const goal = goalText(state);
   if (gap.kind === "met") {
     return {
@@ -74,11 +72,10 @@ export function verdictCopy(gap, income, state, endBal) {
     };
   }
   if (gap.kind === "value") {
-    const orEarn = income.kind === "value" ? ` Or, instead, earn ${fmtMoney(income.perYear)}/yr after tax until age ${income.untilAge}.` : "";
     return {
       tone: "bad",
       headline: `Not yet. The gap is ${fmtMoney(gap.amount)} in today's dollars.`,
-      detail: `That's how much more you'd need invested today, in the recommended split, to ${goal} by age ${state.profile.endAge}.${orEarn}`,
+      detail: `That's how much more you'd need invested today, in the recommended split, to ${goal} by age ${state.profile.endAge}.`,
     };
   }
   return {
@@ -97,17 +94,6 @@ export function gapCell(gap) {
   if (gap.kind === "met") return { text: "none", cls: "pos" };
   if (gap.kind === "value") return { text: fmtMoney(gap.amount), cls: "warn" };
   return { text: `over ${fmtCompact(gap.cap)}`, cls: "neg" };
-}
-
-/**
- * Required-income table/KPI cell — never blank, color class per kind.
- * @param {SolverResult} result
- * @returns {{text: string, cls: "pos"|"warn"|"neg"}}
- */
-export function requiredCell(result) {
-  if (result.kind === "met") return { text: "none needed", cls: "pos" };
-  if (result.kind === "value") return { text: fmtMoney(result.perYear), cls: "warn" };
-  return { text: `not achievable even at ${fmtCompact(result.cap)}/yr`, cls: "neg" };
 }
 
 /**

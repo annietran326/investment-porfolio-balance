@@ -408,11 +408,11 @@ test("assumptions: note row ignored, unknown/duplicate keys error, bad mode erro
   assert.equal(applied.endState.mode, "bequest");
   assert.equal(applied.endState.amounts.bequest, 250000);
   assert.equal(applied.profile.endAge, state.profile.endAge, "missing key keeps the current value");
-  assert.equal(applied.work.untilAge, state.work.untilAge);
+  assert.equal(applied.economy.inflationPct, state.economy.inflationPct);
 
   const bad = parseTemplate(
     wbBuffer({
-      Assumptions: [A, ["profile.wat", 5], ["endState.mode", "everything"], ["work.untilAge", 50], ["work.untilAge", 51]],
+      Assumptions: [A, ["profile.wat", 5], ["endState.mode", "everything"], ["profile.endAge", 90], ["profile.endAge", 95], ["work.untilAge", 50]],
     })
   );
   const msgs = bad.perTab.assumptions.errors;
@@ -420,7 +420,8 @@ test("assumptions: note row ignored, unknown/duplicate keys error, bad mode erro
   assert.deepEqual(msgs[0], { cell: "Assumptions!A2", message: "unknown setting 'profile.wat'" });
   assert.equal(msgs[1].cell, "Assumptions!B3");
   assert.match(msgs[1].message, /must be one of zero, bequest, floor/);
-  assert.match(msgs[2].message, /duplicate setting 'work.untilAge'/);
+  assert.match(msgs[2].message, /duplicate setting 'profile.endAge'/);
+  // work.untilAge (from an older export) is a retired setting: skipped, not an error.
 });
 
 test("all tabs renamed → no recognized tabs", () => {

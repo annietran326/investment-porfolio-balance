@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simulate } from "../src/engine/simulate.mjs";
-import { requiredIncome, requiredSavings, goalMet, SOLVER_CAP, ROUND_TO, GAP_CAP, GAP_ROUND_TO } from "../src/engine/solver.mjs";
+import { requiredSavings, goalMet, GAP_CAP, GAP_ROUND_TO } from "../src/engine/solver.mjs";
 import {
   SCENARIOS,
   STRESS_VACANCY_MONTHS,
@@ -36,36 +36,16 @@ const hopeless = () => {
   const s = lean();
   withBalance(s, 0);
   s.spending = [{ name: "impossible", monthly: 400_000, fromYear: null, toYear: null, growthPct: null }]; // $4.8M/yr forever
-  s.work.untilAge = s.profile.currentAge + 1; // 2-year window
   return s;
 };
 
-test("three-way contract: met / value / unreachable — never anything else", () => {
-  assert.deepEqual(requiredIncome(rich()), { kind: "met" });
-
-  const res = requiredIncome(lean());
-  assert.equal(res.kind, "value");
-  if (res.kind === "value") {
-    assert.ok(res.perYear > 0);
-    assert.equal(res.perYear % ROUND_TO, 0, "rounds to $500");
-    assert.equal(res.untilAge, lean().work.untilAge);
-    // boundary tightness: goal met AT the answer, not met $1,000 below it
-    const s = lean();
-    assert.ok(goalMet(s, simulate(s, {}, res.perYear)));
-    assert.ok(!goalMet(s, simulate(s, {}, res.perYear - 1000)));
-  }
-
-  const un = requiredIncome(hopeless());
-  assert.deepEqual(un, { kind: "unreachable", cap: SOLVER_CAP });
-});
-
-const perYearOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.perYear : Infinity);
+const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
 
 test("monotonicity: every stress scenario requires at least the base case", () => {
   const s = lean();
-  const base = perYearOf(requiredIncome(s, {}));
+  const base = gapOf(requiredSavings(s, {}));
   for (const sc of SCENARIOS) {
-    const req = perYearOf(requiredIncome(s, sc.overlay));
+    const req = gapOf(requiredSavings(s, sc.overlay));
     assert.ok(req >= base, `${sc.key} (${req}) should require >= base (${base})`);
   }
 });
@@ -87,34 +67,26 @@ test("monotonicity with properties kept: a past sale is never resurrected by sal
     saleYear: s.profile.currentYear - 1,
     saleNetProceeds: 750_000,
   });
-  const base = perYearOf(requiredIncome(s, {}));
+  const base = gapOf(requiredSavings(s, {}));
   for (const key of ["stress", "everything"]) {
     const sc = SCENARIOS.find((x) => x.key === key);
     assert.ok(sc);
-    const req = perYearOf(requiredIncome(s, sc.overlay));
+    const req = gapOf(requiredSavings(s, sc.overlay));
     assert.ok(req >= base, `${key} (${req}) should require >= base (${base})`);
   }
 });
 
 test("monotonicity: bequest and floor require at least die-with-zero", () => {
   const s = lean();
-  const zero = perYearOf(requiredIncome(s));
+  const zero = gapOf(requiredSavings(s));
 
   const bequest = lean();
   bequest.endState = { mode: "bequest", amounts: { bequest: 1_000_000, floor: 0 } };
-  assert.ok(perYearOf(requiredIncome(bequest)) >= zero);
+  assert.ok(gapOf(requiredSavings(bequest)) >= zero);
 
   const floor = lean();
   floor.endState = { mode: "floor", amounts: { bequest: 0, floor: 200_000 } };
-  assert.ok(perYearOf(requiredIncome(floor)) >= zero);
-});
-
-test("monotonicity: a longer working window never requires more per year", () => {
-  const early = lean();
-  early.work.untilAge = 45;
-  const late = lean();
-  late.work.untilAge = 60;
-  assert.ok(perYearOf(requiredIncome(late)) <= perYearOf(requiredIncome(early)));
+  assert.ok(gapOf(requiredSavings(floor)) >= zero);
 });
 
 test("goalMet picks the amount for the ACTIVE mode only", () => {
@@ -160,8 +132,8 @@ test("gap: three-way contract, rounded, and tight at the boundary", () => {
   if (res.kind === "value") {
     assert.ok(res.amount > 0);
     assert.equal(res.amount % GAP_ROUND_TO, 0, "rounds up to $1,000");
-    assert.ok(goalMet(s, simulate(s, {}, 0, res.amount)), "the gap closes the plan");
-    assert.ok(!goalMet(s, simulate(s, {}, 0, res.amount - 2000)), "and $2,000 less does not");
+    assert.ok(goalMet(s, simulate(s, {}, res.amount)), "the gap closes the plan");
+    assert.ok(!goalMet(s, simulate(s, {}, res.amount - 2000)), "and $2,000 less does not");
   }
   assert.deepEqual(requiredSavings(hopeless()), { kind: "unreachable", cap: GAP_CAP });
 });
@@ -182,26 +154,13 @@ test("gap solver precondition: end balance never falls as savings today rise (in
   s.taxes = { ordinaryIncomePct: 30, capitalGainsPct: 25 };
   let prev = -Infinity;
   for (let x = 0; x <= 3_000_000; x += 50_000) {
-    const end = simulate(s, {}, 0, x).endBal;
+    const end = simulate(s, {}, x).endBal;
     assert.ok(end >= prev - 1e-6, `endBal dropped as savings rose (at ${x})`);
     prev = end;
   }
 });
 
-test("income solver precondition: end balance never falls as extra income rises", () => {
-  const s = lean();
-  s.taxes = { ordinaryIncomePct: 30, capitalGainsPct: 25 };
-  s.accounts = [newAccount({ name: "Brk", type: "taxable", balance: 300_000, costBasis: 50_000 })];
-  let prev = -Infinity;
-  for (let inc = 0; inc <= 400_000; inc += 10_000) {
-    const end = simulate(s, {}, inc).endBal;
-    assert.ok(end >= prev - 1e-6, `endBal dropped as income rose (at ${inc})`);
-    prev = end;
-  }
-});
-
 test("gap monotonicity: every stress scenario needs at least the base gap; bigger safe buckets cost more", () => {
-  const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
   const s = lean();
   const base = gapOf(requiredSavings(s));
   for (const sc of SCENARIOS) {
@@ -218,7 +177,6 @@ test("gap monotonicity: every stress scenario needs at least the base gap; bigge
 });
 
 test("higher taxes never shrink the gap; a traditional IRA needs more than the same money in a Roth", () => {
-  const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
   const roth = lean();
   roth.accounts = [newAccount({ name: "Roth", type: "roth_ira", balance: 300_000 })];
   const trad = lean();

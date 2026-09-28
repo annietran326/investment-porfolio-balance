@@ -165,7 +165,6 @@ export const TEMPLATE_DEF = {
         { key: "endState.mode", type: "mode", doc: "one of: zero, bequest, floor" },
         { key: "endState.bequest", type: "number", doc: "$ to leave (used when mode is bequest)" },
         { key: "endState.floor", type: "number", doc: "$ the balance never drops below (used when mode is floor)" },
-        { key: "work.untilAge", type: "number", doc: "for the 'or earn $X/yr' answer: extra income is earned through this age" },
       ],
       note: "# Amounts are in today's dollars; rates are actual (before inflation)",
     },

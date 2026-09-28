@@ -1,19 +1,7 @@
-// The two solvers. Both invert the simulation by bisection (the end balance
-// only ever rises as the variable rises, so the search is sound):
-//   - requiredSavings: the GAP. How much more money, invested today, the plan
-//     needs to land on its chosen end state. This is the headline answer.
-//   - requiredIncome: how much after-tax income, earned from now through
-//     work.untilAge, would close the same gap instead.
+// The gap solver: how much more money, invested today, the plan needs to
+// land on its chosen end state. It inverts the simulation by bisection (the
+// end balance only ever rises as savings today rise, so the search is sound).
 import { simulate } from "./simulate.mjs";
-
-// Explicit, named, visible. If a plan genuinely needs more than $2M/yr of
-// income the answer the user needs is "unreachable", not a bigger number.
-export const SOLVER_CAP = 2_000_000;
-// Answers round UP to the nearest $500 for legibility ("earn at least $X").
-export const ROUND_TO = 500;
-// Bisection stops when the bracket is tighter than this; the round-up to $500
-// absorbs the residual interval.
-const PRECISION = 250;
 
 /**
  * Did this simulation land the end state?
@@ -28,32 +16,6 @@ export function goalMet(s, sim) {
   if (mode === "floor") return sim.minBal >= amounts.floor;
   const target = mode === "bequest" ? amounts.bequest : 0;
   return sim.firstNegYear === null && sim.endBal >= target;
-}
-
-/**
- * Three-way outcome type — the UI renders each distinctly and can never show blank.
- * @typedef {{kind: "met"}
- *   | {kind: "value", perYear: number, untilAge: number}
- *   | {kind: "unreachable", cap: number}} SolverResult
- */
-
-/**
- * @param {import("../model/schema.mjs").RunwayState} s validated state
- * @param {import("./simulate.mjs").ScenarioOverlay} [overlay]
- * @returns {SolverResult}
- */
-export function requiredIncome(s, overlay = {}) {
-  if (goalMet(s, simulate(s, overlay, 0))) return { kind: "met" };
-  if (!goalMet(s, simulate(s, overlay, SOLVER_CAP))) return { kind: "unreachable", cap: SOLVER_CAP };
-
-  let lo = 0;
-  let hi = SOLVER_CAP;
-  while (hi - lo > PRECISION) {
-    const mid = (lo + hi) / 2;
-    if (goalMet(s, simulate(s, overlay, mid))) hi = mid;
-    else lo = mid;
-  }
-  return { kind: "value", perYear: Math.ceil(hi / ROUND_TO) * ROUND_TO, untilAge: s.work.untilAge };
 }
 
 // The gap solver's ceiling: a plan more than $50M short is "unreachable".
@@ -77,13 +39,13 @@ const GAP_PRECISION = 500;
  * @returns {GapResult}
  */
 export function requiredSavings(s, overlay = {}) {
-  if (goalMet(s, simulate(s, overlay, 0, 0))) return { kind: "met" };
-  if (!goalMet(s, simulate(s, overlay, 0, GAP_CAP))) return { kind: "unreachable", cap: GAP_CAP };
+  if (goalMet(s, simulate(s, overlay, 0))) return { kind: "met" };
+  if (!goalMet(s, simulate(s, overlay, GAP_CAP))) return { kind: "unreachable", cap: GAP_CAP };
   let lo = 0;
   let hi = GAP_CAP;
   while (hi - lo > GAP_PRECISION) {
     const mid = (lo + hi) / 2;
-    if (goalMet(s, simulate(s, overlay, 0, mid))) hi = mid;
+    if (goalMet(s, simulate(s, overlay, mid))) hi = mid;
     else lo = mid;
   }
   return { kind: "value", amount: Math.ceil(hi / GAP_ROUND_TO) * GAP_ROUND_TO };

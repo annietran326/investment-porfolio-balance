@@ -16,7 +16,7 @@ import {
 } from "../public/ui/charts.mjs";
 import {
   trendModel,
-  requiredPerYear,
+  gapAmount,
   pathD,
   seriesGeometry,
   renderTrends,
@@ -54,8 +54,8 @@ function trendRow(overrides = {}) {
     rev: 3,
     totalBalance: 1_500_000,
     monthlySpend: 7200,
-    requiredBase: { kind: "value", perYear: 85_000 },
-    requiredWorst: { kind: "unreachable" },
+    gapBase: { kind: "value", amount: 85_000 },
+    gapWorst: { kind: "unreachable" },
     ...overrides,
   };
 }
@@ -208,8 +208,8 @@ test("trendModel: null / non-object / missing-field / wrong-type rows are skippe
     trendRow({ date: "July 1" }),
     trendRow({ totalBalance: "1500000" }),
     trendRow({ monthlySpend: NaN }),
-    trendRow({ requiredBase: undefined }),
-    trendRow({ requiredBase: null }),
+    trendRow({ gapBase: undefined }),
+    trendRow({ gapBase: null }),
     trendRow({ date: "2026-07-03" }), // the one good row
   ]);
   assert.equal(points.length, 1);
@@ -225,18 +225,20 @@ test("trendModel: unknown fields and future v values are tolerated", () => {
   assert.equal(points[1].totalBalance, 7);
 });
 
-test("trendModel/requiredPerYear: met → 0, value → perYear, unreachable and unknown kinds → gap", () => {
-  assert.equal(requiredPerYear({ kind: "met" }), 0);
-  assert.equal(requiredPerYear({ kind: "value", perYear: 85_000 }), 85_000);
-  assert.equal(requiredPerYear({ kind: "unreachable" }), null);
-  assert.equal(requiredPerYear({ kind: "some-future-kind" }), null);
-  assert.equal(requiredPerYear({ kind: "value", perYear: "85000" }), null, "non-numeric perYear → gap, not NaN");
+test("trendModel/gapAmount: met → 0, value → amount, unreachable/unknown → gap; old required-income rows keep balance/spend but no gap", () => {
+  assert.equal(gapAmount({ kind: "met" }), 0);
+  assert.equal(gapAmount({ kind: "value", amount: 85_000 }), 85_000);
+  assert.equal(gapAmount({ kind: "unreachable" }), null);
+  assert.equal(gapAmount({ kind: "some-future-kind" }), null);
+  assert.equal(gapAmount({ kind: "value", amount: "85000" }), null, "non-numeric amount → gap, not NaN");
   const { points } = trendModel([
-    trendRow({ date: "2026-07-01", requiredBase: { kind: "met" } }),
-    trendRow({ date: "2026-07-02", requiredBase: { kind: "unreachable" } }),
-    trendRow({ date: "2026-07-03", requiredBase: { kind: "value", perYear: 40_000 } }),
+    trendRow({ date: "2026-07-01", gapBase: { kind: "met" } }),
+    trendRow({ date: "2026-07-02", gapBase: { kind: "unreachable" } }),
+    trendRow({ date: "2026-07-03", gapBase: { kind: "value", amount: 40_000 } }),
+    trendRow({ date: "2026-07-04", gapBase: undefined, requiredBase: { kind: "value", perYear: 9 } }), // a v2 row
   ]);
-  assert.deepEqual(points.map((p) => p.required), [0, null, 40_000]);
+  assert.deepEqual(points.map((p) => p.gap), [0, null, 40_000, null]);
+  assert.equal(points[3].totalBalance, trendRow().totalBalance, "the old row still counts for balance");
 });
 
 test("trendModel: fewer than 2 points flags the empty state (0 rows, 1 row, same-day rows)", () => {
@@ -261,16 +263,16 @@ test("pathD: null points lift the pen — one M per segment", () => {
 
 test("seriesGeometry: gaps split segments, dots mark real points, latest is the LAST day's value", () => {
   const points = [
-    { date: "2026-07-01", totalBalance: 1, monthlySpend: 1, required: 10_000 },
-    { date: "2026-07-02", totalBalance: 2, monthlySpend: 1, required: null }, // unreachable day
-    { date: "2026-07-03", totalBalance: 3, monthlySpend: 1, required: 30_000 },
-    { date: "2026-07-04", totalBalance: 4, monthlySpend: 1, required: 20_000 },
+    { date: "2026-07-01", totalBalance: 1, monthlySpend: 1, gap: 10_000 },
+    { date: "2026-07-02", totalBalance: 2, monthlySpend: 1, gap: null }, // unreachable day
+    { date: "2026-07-03", totalBalance: 3, monthlySpend: 1, gap: 30_000 },
+    { date: "2026-07-04", totalBalance: 4, monthlySpend: 1, gap: 20_000 },
   ];
-  const g = seriesGeometry(points, "required");
+  const g = seriesGeometry(points, "gap");
   assert.equal((g.d.match(/M/g) ?? []).length, 2, "the gap breaks the line into two segments");
   assert.equal(g.dots.length, 3, "one dot per non-null point");
   assert.equal(g.latest, 20_000);
-  const gapLast = seriesGeometry(points.slice(0, 2), "required");
+  const gapLast = seriesGeometry(points.slice(0, 2), "gap");
   assert.equal(gapLast.latest, null, "latest is null when the newest day is a gap");
   assert.ok(!/NaN/.test(seriesGeometry(points, "monthlySpend").d), "flat series stays finite");
   assert.deepEqual(seriesGeometry([], "totalBalance"), { d: "", dots: [], latest: null });
@@ -278,9 +280,9 @@ test("seriesGeometry: gaps split segments, dots mark real points, latest is the 
 
 test("seriesGeometry: x spacing is proportional to calendar time", () => {
   const points = [
-    { date: "2026-07-01", totalBalance: 1, monthlySpend: 1, required: null },
-    { date: "2026-07-02", totalBalance: 2, monthlySpend: 1, required: null },
-    { date: "2026-07-11", totalBalance: 3, monthlySpend: 1, required: null }, // a 9-day silence
+    { date: "2026-07-01", totalBalance: 1, monthlySpend: 1, gap: null },
+    { date: "2026-07-02", totalBalance: 2, monthlySpend: 1, gap: null },
+    { date: "2026-07-11", totalBalance: 3, monthlySpend: 1, gap: null }, // a 9-day silence
   ];
   const [a, b, c] = seriesGeometry(points, "totalBalance").dots;
   assert.ok(c.x - b.x > (b.x - a.x) * 5, "a missed week reads as a longer gap");
