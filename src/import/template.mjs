@@ -24,7 +24,7 @@
 import { inflateRawSync } from "node:zlib";
 import * as XLSX from "xlsx";
 import { TEMPLATE_DEF } from "../../scripts/build-template.mjs";
-import { END_STATE_MODES, PERSON_ROLES, newProperty, newIncome, newSpendingCategory, newPerson } from "../model/schema.mjs";
+import { END_STATE_MODES, PERSON_ROLES, newProperty, newIncome, newSpendingCategory, newPerson, newAccount, totalBalance } from "../model/schema.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
 /** @typedef {import("../../scripts/build-template.mjs").TabDef} TabDef */
@@ -337,12 +337,16 @@ function parseListTab(def, sheet) {
       if (col.type === "text") {
         const { value, error } = readText(cell);
         if (error !== undefined) errors.push({ cell: cellAddr(def.name, r, c), message: error });
-        else if (value === "") errors.push({ cell: cellAddr(def.name, r, c), message: "name required" });
-        else row[col.field] = value;
+        else if (value === "") errors.push({ cell: cellAddr(def.name, r, c), message: `${col.field} required` });
+        else if (col.choices) {
+          const choice = (value ?? "").trim().toLowerCase();
+          if (col.choices.includes(choice)) row[col.field] = choice;
+          else errors.push({ cell: cellAddr(def.name, r, c), message: `must be one of ${col.choices.join(", ")}` });
+        } else row[col.field] = value;
         return;
       }
-      // A blank growth cell means "grows with inflation" → 0 (distinct from a
-      // blank nullable window cell, which stays null = open).
+      // A blank emptyZero cell means 0 (distinct from a blank nullable cell,
+      // which stays null = open / with inflation).
       if (col.emptyZero && isEmptyCell(cell)) {
         row[col.field] = 0;
         return;
@@ -367,23 +371,6 @@ function parseListTab(def, sheet) {
     rows.push(row);
   }
   return { rows, errors };
-}
-
-/**
- * Accounts is the single portfolio bucket — exactly one data row.
- * @param {TabDef} def
- * @param {import("xlsx").WorkSheet} sheet
- * @returns {ParsedTab}
- */
-function parseSingleTab(def, sheet) {
-  const parsed = parseListTab(def, sheet);
-  if (parsed.errors.length) return parsed;
-  if (parsed.rows.length === 0) {
-    parsed.errors.push({ cell: `${def.name}!A2`, message: "enter the portfolio balance in row 2" });
-  } else if (parsed.rows.length > 1) {
-    parsed.errors.push({ cell: `${def.name}!A3`, message: "only one portfolio row is supported (single bucket)" });
-  }
-  return parsed;
 }
 
 /** @returns {TabDef} */
@@ -618,8 +605,7 @@ export function parseTemplate(buffer) {
     const sheet = wb.Sheets[actual];
     /** @type {ParsedTab} */
     let parsed;
-    if (def.kind === "single") parsed = parseSingleTab(def, sheet);
-    else if (def.kind === "settings") parsed = parseSettingsTab(def, sheet);
+    if (def.kind === "settings") parsed = parseSettingsTab(def, sheet);
     else if (def.kind === "household") parsed = parseHouseholdTab(def, sheet);
     else parsed = parseListTab(def, sheet);
 
@@ -741,11 +727,7 @@ export function previewTemplate(state, parsed) {
       tabs.push({ ...base, status: "blocked", errors: t.errors });
       continue;
     }
-    if (def.kind === "single") {
-      const row = t.rows[0];
-      const changed = !Object.is(row.balance, state.portfolio.balance) || !Object.is(row.realReturnPct, state.portfolio.realReturnPct);
-      tabs.push({ ...base, status: "ready", changes: changed ? 1 : 0, errors: [] });
-    } else if (def.kind === "settings") {
+    if (def.kind === "settings") {
       const changes = /** @type {{key: string, value: number|string}[]} */ (t.rows).filter(
         ({ key, value }) => !Object.is(getAssumption(state, key), value)
       ).length;
@@ -754,7 +736,7 @@ export function previewTemplate(state, parsed) {
       const counts = diffPeople(state.household.people, t.rows);
       tabs.push({ ...base, status: "ready", ...counts, errors: [] });
     } else {
-      const section = /** @type {"properties"|"incomes"|"spending"} */ (def.section);
+      const section = /** @type {"accounts"|"properties"|"incomes"|"spending"} */ (def.section);
       const counts = diffList(state[section], t.rows, def.columns.map((c) => c.field));
       tabs.push({ ...base, status: "ready", ...counts, errors: [] });
     }
@@ -765,7 +747,7 @@ export function previewTemplate(state, parsed) {
   return {
     tabs,
     headline: {
-      totalBalance: { before: state.portfolio.balance, after: after.portfolio.balance },
+      totalBalance: { before: totalBalance(state), after: totalBalance(after) },
       monthlySpend: { before: monthlySpend(state), after: monthlySpend(after) },
     },
   };
@@ -788,10 +770,7 @@ export function applyTabs(state, parsed, tabKeys) {
     const def = TEMPLATE_DEF.tabs.find((t) => t.key === key);
     if (!def) throw new Error(`unknown tab '${key}'`);
     const t = parsed.perTab[key];
-    if (def.kind === "single") {
-      const row = t.rows[0];
-      next.portfolio = { balance: row.balance, realReturnPct: row.realReturnPct };
-    } else if (def.kind === "settings") {
+    if (def.kind === "settings") {
       for (const { key: path, value } of /** @type {{key: string, value: number|string}[]} */ (t.rows)) {
         setAssumption(next, path, value);
       }
@@ -801,7 +780,7 @@ export function applyTabs(state, parsed, tabKeys) {
     } else {
       // Normalize each row through its factory so any field an optional column
       // omitted lands with its correct v2 default (never a partial v1 shape).
-      const section = /** @type {"properties"|"incomes"|"spending"} */ (def.section);
+      const section = /** @type {"accounts"|"properties"|"incomes"|"spending"} */ (def.section);
       /** @type {any} */ (next)[section] = t.rows.map((row) => makeRow(section, row));
     }
   }
@@ -810,11 +789,12 @@ export function applyTabs(state, parsed, tabKeys) {
 
 /**
  * Wrap a parsed list row in its section's factory so the result is a complete,
- * valid v2 item — optional-column omissions fall back to schema defaults.
- * @param {"properties"|"incomes"|"spending"} section
+ * valid item: optional-column omissions fall back to schema defaults.
+ * @param {"accounts"|"properties"|"incomes"|"spending"} section
  * @param {any} row
  */
 function makeRow(section, row) {
+  if (section === "accounts") return newAccount(row);
   if (section === "properties") return newProperty(row);
   if (section === "incomes") return newIncome(row);
   return newSpendingCategory(row);
@@ -871,9 +851,7 @@ export function buildTemplateWorkbook(state) {
   for (const def of TEMPLATE_DEF.tabs) {
     /** @type {(string|number|null|undefined)[][]} */
     const aoa = [def.columns.map((c) => c.header)];
-    if (def.kind === "single") {
-      aoa.push([state.portfolio.balance, state.portfolio.realReturnPct]);
-    } else if (def.kind === "settings") {
+    if (def.kind === "settings") {
       for (const s of def.settings ?? []) {
         const v = s.key === "endState.mode" ? state.endState.mode : /** @type {number} */ (getAssumption(state, s.key));
         aoa.push([s.key, v, s.doc]);
@@ -884,7 +862,7 @@ export function buildTemplateWorkbook(state) {
         aoa.push(def.columns.map((c) => personCell(person, c)));
       }
     } else {
-      const section = /** @type {"properties"|"incomes"|"spending"} */ (def.section);
+      const section = /** @type {"accounts"|"properties"|"incomes"|"spending"} */ (def.section);
       for (const row of /** @type {any[]} */ (state[section])) {
         aoa.push(def.columns.map((c) => row[c.field]));
       }

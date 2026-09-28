@@ -153,8 +153,8 @@ test("scenario bar: renders, creates a pill, and switching re-renders the app", 
     //     We drive fetch directly with the live rev, then call the app's own
     //     re-render path by clicking the newly-added non-active pill later.
     const seededRev = await ev(`(async () => {
-      const bal = document.getElementById("f-balance");
-      bal.value = "1234567";
+      const bal = document.getElementById("f-inflation");
+      bal.value = "7.5";
       bal.dispatchEvent(new Event("input", { bubbles: true }));
       // wait for the debounced save (1500ms) to land, then read the rev
       await new Promise(r => setTimeout(r, 2200));
@@ -188,11 +188,11 @@ test("scenario bar: renders, creates a pill, and switching re-renders the app", 
     const activeName = await ev('document.querySelector("#scenarioBar .scenario-pill.active .scenario-pill-name")?.textContent ?? ""');
     assert.equal(activeName, "Aggressive", "the created scenario is active");
 
-    // The active plan ("Aggressive", a fresh/empty plan) has a $0 balance,
-    // distinct from "Base plan" (which we set to 1,234,567) — proof the switch
+    // The active plan ("Aggressive", a fresh/empty plan) has the default 2.5%
+    // inflation, distinct from "Base plan" (which we set to 7.5%) — proof the switch
     // will actually change what's rendered.
-    const activeBalance = await ev('document.getElementById("f-balance")?.value ?? ""');
-    assert.notEqual(activeBalance, "1234567", "the fresh scenario is not the seeded base plan");
+    const activeBalance = await ev('document.getElementById("f-inflation")?.value ?? ""');
+    assert.notEqual(activeBalance, "7.5", "the fresh scenario is not the seeded base plan");
 
     // (3) Click the non-active "Base plan" pill → the whole app re-renders for
     //     it WITHOUT a reload. The balance field flips back to the seeded value.
@@ -203,8 +203,8 @@ test("scenario bar: renders, creates a pill, and switching re-renders the app", 
     })()`);
     await sleep(1500);
 
-    const afterSwitchBalance = await ev('document.getElementById("f-balance")?.value ?? ""');
-    assert.equal(afterSwitchBalance, "1234567", "switching re-rendered the app for the base plan (no reload)");
+    const afterSwitchBalance = await ev('document.getElementById("f-inflation")?.value ?? ""');
+    assert.equal(afterSwitchBalance, "7.5", "switching re-rendered the app for the base plan (no reload)");
     const afterSwitchActive = await ev('document.querySelector("#scenarioBar .scenario-pill.active .scenario-pill-name")?.textContent ?? ""');
     assert.equal(afterSwitchActive, "Base plan", "the base pill is now the active one");
     const verdict = await ev('document.getElementById("verdictHeadline")?.textContent ?? ""');

@@ -551,7 +551,7 @@ export function deriveCategories(storedRows, { now }) {
 export function applyDerived(state, categories, mode) {
   const next = structuredClone(state);
   // Derived categories are v2 spending lines: perpetual (fromYear/toYear null)
-  // and inflation-tracking (realGrowthPct 0) by default. The factory fills the
+  // and inflation-tracking (growthPct null) by default. The factory fills the
   // new fields so nothing is missed and the result validates as v2.
   const cats = categories.map((c) => newSpendingCategory({ name: c.name, monthly: c.monthly }));
   if (mode === "replace-all") {

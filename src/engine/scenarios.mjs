@@ -31,7 +31,7 @@ export const SCENARIOS = [
       saleDelayYears: STRESS_SALE_DELAY_YEARS,
     },
   },
-  { key: "drawdown", label: `Market −${DRAWDOWN_PCT}% now`, overlay: { drawdownPct: DRAWDOWN_PCT } },
+  { key: "drawdown", label: `Market crash now (equities −${DRAWDOWN_PCT}%, high income −${DRAWDOWN_PCT / 2}%)`, overlay: { drawdownPct: DRAWDOWN_PCT } },
   { key: "spend", label: "Spending +20% forever", overlay: { spendMult: SPEND_SHOCK_MULT } },
   {
     key: "everything",

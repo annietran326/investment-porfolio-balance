@@ -34,7 +34,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { SCHEMA_VERSION, validate } from "../model/schema.mjs";
+import { SCHEMA_VERSION, validate, totalBalance } from "../model/schema.mjs";
 import { migrate, FutureVersionError } from "../model/migrate.mjs";
 import {
   WORKSPACE_VERSION,
@@ -362,7 +362,7 @@ export function createStore(dataDir, opts = {}) {
       source,
       rev,
       scenario: scenarioName, // which plan this point belongs to
-      totalBalance: state.portfolio.balance,
+      totalBalance: totalBalance(state),
       // Current-year monthly spend: only categories active now (respects windows).
       monthlySpend: state.spending.reduce((sum, c) => {
         const cy = state.profile.currentYear;

@@ -8,11 +8,12 @@
 // lists rebuild only on add/remove. All user-controlled strings land via
 // .value / .textContent — never innerHTML.
 import { simulate } from "/engine/simulate.mjs";
-import { requiredIncome } from "/engine/solver.mjs";
+import { requiredIncome, requiredSavings } from "/engine/solver.mjs";
+import { BUCKET_KEYS } from "/engine/buckets.mjs";
 import { SCENARIOS } from "/engine/scenarios.mjs";
-import { validate, PLAN_TO_AGE_PRESETS } from "/model/schema.mjs";
+import { validate, PLAN_TO_AGE_PRESETS, totalBalance } from "/model/schema.mjs";
 import { qs, el, setText, show } from "./ui/dom.mjs";
-import { verdictCopy, fmtCompact, requiredCell, runwayCell, errorsText } from "./ui/verdict.mjs";
+import { verdictCopy, fmtCompact, fmtMoney, fmtPct, requiredCell, gapCell, runwayCell, errorsText } from "./ui/verdict.mjs";
 import { createSavePipeline } from "./ui/save.mjs";
 import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
 import { initTrends } from "./ui/trends.mjs";
@@ -28,6 +29,8 @@ import {
   setEndStateAmount,
   endStateAmountValue,
   parseNumField,
+  parseRowField,
+  gainShareOf,
   renderRows,
   addPerson,
   removePerson,
@@ -53,6 +56,7 @@ const pipeline = createSavePipeline({
 });
 
 const LISTS = {
+  accounts: { container: qs("#accountList"), template: qs("#tpl-account"), addBtn: qs("#addAccount") },
   properties: { container: qs("#propList"), template: qs("#tpl-property"), addBtn: qs("#addProp") },
   incomes: { container: qs("#incomeList"), template: qs("#tpl-income"), addBtn: qs("#addIncome") },
   spending: { container: qs("#spendList"), template: qs("#tpl-spend"), addBtn: qs("#addSpend") },
@@ -89,7 +93,7 @@ function syncScalars() {
     if (input.type === "checkbox") input.checked = !!getPath(state, input.dataset.path);
     else setValueIfIdle(input, getPath(state, input.dataset.path));
   }
-  show(qs("#taxKnobs"), state.tax.enabled); // knobs only matter when the tax is on
+  syncDerivedNotes();
   for (const btn of qs("#agePresets").querySelectorAll("button")) {
     btn.classList.toggle("active", Number(btn.dataset.preset) === state.profile.endAge);
   }
@@ -106,10 +110,47 @@ function renderList(kind) {
   const { container, template } = LISTS[kind];
   renderRows(container, /** @type {HTMLTemplateElement} */ (template), state[kind], {
     onField: (index, key, raw, isText) => {
-      commit(setRowValue(state, kind, index, key, isText ? raw : parseNumField(raw)));
+      commit(setRowValue(state, kind, index, key, parseRowField(kind, key, raw, isText)));
     },
     onRemove: (index) => commit(removeRow(state, kind, index), kind),
   });
+  if (kind === "accounts") syncAccountRows();
+}
+
+/**
+ * Per-account display touches that depend on the row's values: which fields
+ * show for its type, and the live "taxable gain today" readout. Runs on every
+ * commit, updating in place (never rebuilding, so typing keeps focus).
+ */
+function syncAccountRows() {
+  const rows = LISTS.accounts.container.children;
+  state.accounts.forEach((a, i) => {
+    const row = rows[i];
+    if (!row) return;
+    row.dataset.type = a.type;
+    const readout = row.querySelector('[data-readout="gainShare"]');
+    if (readout) {
+      const g = gainShareOf(a);
+      readout.textContent = g === null ? "—" : `${fmtPct(g)} of the balance`;
+    }
+  });
+}
+
+/** Small helper notes derived from the inputs (after-inflation returns, the bucket rule). */
+function syncDerivedNotes() {
+  const b = state.buckets;
+  const inf = state.economy.inflationPct;
+  const nums = [b.preservationReturnPct, b.incomeReturnPct, b.equitiesReturnPct, inf];
+  if (nums.every((n) => typeof n === "number" && Number.isFinite(n))) {
+    const real = (/** @type {number} */ r) => (((1 + r / 100) / (1 + inf / 100) - 1) * 100).toFixed(1);
+    setText(qs("#realReturnsNote"), `After ${inf}% inflation: ${real(b.preservationReturnPct)}% / ${real(b.incomeReturnPct)}% / ${real(b.equitiesReturnPct)}%.`);
+  } else setText(qs("#realReturnsNote"), "");
+  if (typeof b.preservationYears === "number" && typeof b.incomeThroughYear === "number") {
+    setText(
+      qs("#bucketRuleNote"),
+      `Withdrawals in years 1–${b.preservationYears} sit in capital preservation, years ${b.preservationYears + 1}–${b.incomeThroughYear} in high income, and everything after year ${b.incomeThroughYear} in global equities. Money you need soonest is kept safe, so a market drop never forces you to sell stocks.`
+    );
+  }
 }
 
 // Household field parse: name (text) passes through; every numeric field —
@@ -146,7 +187,7 @@ function issueSlotNear(input) {
 }
 
 function issueSlotFor(path) {
-  const m = /^(properties|incomes|spending)\[(\d+)\]\.(\w+)$/.exec(path);
+  const m = /^(accounts|properties|incomes|spending)\[(\d+)\]\.(\w+)$/.exec(path);
   if (m) {
     const row = LISTS[m[1]].container.children[Number(m[2])];
     const input = row?.querySelector(`[data-key="${m[3]}"]`);
@@ -203,32 +244,41 @@ function renderResults() {
     key: sc.key,
     label: sc.label,
     sim: simulate(state, sc.overlay, 0),
+    gap: requiredSavings(state, sc.overlay),
     req: requiredIncome(state, sc.overlay),
   }));
   const base = results[0];
 
-  const copy = verdictCopy(base.req, state);
+  // Verdict: do I have enough, and if not, the gap.
+  const copy = verdictCopy(base.gap, base.req, state, base.sim.endBal);
   const verdict = qs("#verdict");
   verdict.classList.toggle("good", copy.tone === "good");
   verdict.classList.toggle("bad", copy.tone === "bad");
   setText(qs("#verdictHeadline"), copy.headline);
   setText(qs("#verdictDetail"), copy.detail);
 
-  const run = runwayCell(base.sim);
-  setKpi("#kpiRunway", run.text, run.cls === "neg" ? "warn" : run.cls);
-  const req = requiredCell(base.req);
-  setKpi("#kpiRequired", req.text, req.cls);
-  setText(qs("#kpiRequiredLabel"), `required income → age ${state.work.untilAge}`);
-  setKpi("#kpiEndBal", fmtCompact(base.sim.endBal), base.sim.endBal >= 0 ? "pos" : "neg");
-  setText(qs("#kpiEndBalLabel"), `end balance @ ${state.profile.endAge} (no extra income)`);
-  const annualSpend = state.spending.reduce((sum, c) => sum + (typeof c.monthly === "number" ? c.monthly : 0), 0) * 12;
-  setKpi("#kpiSpend", fmtCompact(annualSpend), "");
+  renderSplit(base);
 
-  setText(qs("#thRequired"), `Required $/yr → age ${state.work.untilAge}`);
+  // Headline numbers.
+  const gc = gapCell(base.gap);
+  setKpi("#kpiGap", gc.text, gc.cls);
+  setText(qs("#kpiGapLabel"), base.gap.kind === "met" ? "gap today (you have enough)" : "gap today (more needed now)");
+  setKpi("#kpiTotal", fmtCompact(totalBalance(state)), "");
+  setKpi("#kpiEndBal", fmtCompact(base.sim.endBal), base.sim.endBal >= 0 ? "pos" : "neg");
+  setText(qs("#kpiEndBalLabel"), `balance at ${state.profile.endAge} (today's $)`);
+  const run = runwayCell(base.sim);
+  const runAge = base.sim.firstBreachYear === null ? null : base.sim.firstBreachYear - state.profile.currentYear + state.profile.currentAge;
+  setKpi("#kpiRunway", runAge === null ? "never runs out" : `age ${runAge} (${base.sim.firstBreachYear})`, run.cls === "neg" ? "warn" : run.cls);
+
+  renderFlags(base.sim);
+  renderGlide(base.sim);
+
+  setText(qs("#thRequired"), `Or earn $/yr to age ${state.work.untilAge}`);
   const tbody = qs("#scenarioRows");
   tbody.textContent = "";
   for (const r of results) {
     const rc = runwayCell(r.sim);
+    const gcell = gapCell(r.gap);
     const qc = requiredCell(r.req);
     tbody.appendChild(
       el(
@@ -236,13 +286,88 @@ function renderResults() {
         {},
         el("td", { class: "name" }, r.label),
         el("td", { class: rc.cls }, rc.text),
-        el("td", { class: qc.cls }, qc.text)
+        el("td", { class: `num ${gcell.cls}` }, gcell.text),
+        el("td", { class: `num ${qc.cls}` }, qc.text)
       )
     );
   }
 
   balanceChart.update(results.map((r) => ({ key: r.key, label: r.label, path: r.sim.path })));
   cashflow.update(base.sim.rows);
+}
+
+/**
+ * The recommended split: shares and dollars for the money you have today. When
+ * there's a gap, also say what each bucket would hold with the gap closed.
+ * @param {{sim: any, gap: any}} base
+ */
+function renderSplit(base) {
+  const dollars = base.sim.startMix;
+  const total = dollars.preservation + dollars.income + dollars.equities;
+  const ids = { preservation: ["#kpiPres", "#kpiPresAmt"], income: ["#kpiInc", "#kpiIncAmt"], equities: ["#kpiEq", "#kpiEqAmt"] };
+  const bar = qs("#splitBar");
+  bar.textContent = "";
+  for (const k of BUCKET_KEYS) {
+    const share = total > 0 ? dollars[k] / total : 0;
+    setKpi(ids[k][0], total > 0 ? fmtPct(share) : "—", "");
+    setText(qs(ids[k][1]), total > 0 ? fmtMoney(dollars[k]) : "");
+    const seg = el("span", { class: `seg bucket-${k}` });
+    seg.style.width = `${share * 100}%`;
+    bar.appendChild(seg);
+  }
+  setText(qs("#splitHint"), `of the ${fmtCompact(total)} you have today`);
+
+  let note = "";
+  if (!(total > 0)) {
+    note = "Add your accounts to see a recommended split.";
+  } else if (base.gap.kind === "value") {
+    const funded = simulate(state, {}, 0, base.gap.amount).startMix;
+    note = `You're short, so every bucket holds less than the plan needs. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
+  } else if (dollars.preservation === 0 && dollars.income === 0) {
+    note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
+  } else {
+    note = "Capital preservation and high income hold exactly what your withdrawals in their years need. Everything beyond that is long-term money and sits in global equities.";
+  }
+  setText(qs("#splitNote"), note);
+}
+
+/** Warnings about early withdrawals from retirement accounts. @param {any} sim */
+function renderFlags(sim) {
+  const box = qs("#flags");
+  box.textContent = "";
+  const span = (/** @type {number[]} */ ys) => (ys.length === 1 ? `${ys[0]}` : `${ys[0]}–${ys[ys.length - 1]}`);
+  const lines = [];
+  if (sim.earlyDeferredYears.length) {
+    lines.push(`The plan has to take money from a traditional IRA or 401(k) before age 59½ (${span(sim.earlyDeferredYears)}), so a 10% penalty is included. More money in a taxable account for those years would avoid it.`);
+  }
+  if (sim.earlyRothYears.length) {
+    lines.push(`The plan taps the Roth IRA before age 59½ (${span(sim.earlyRothYears)}). Your contributions can come out tax-free anytime, but earnings may be taxed and penalized, which isn't modeled.`);
+  }
+  for (const line of lines) box.appendChild(el("div", {}, line));
+  show(box, lines.length > 0);
+}
+
+/** How the split changes as you age: every 5 years plus the final year. @param {any} sim */
+function renderGlide(sim) {
+  const tbody = qs("#glideRows");
+  tbody.textContent = "";
+  const rows = sim.rows.filter((/** @type {any} */ _r, /** @type {number} */ i) => i % 5 === 0 || i === sim.rows.length - 1);
+  for (const r of rows) {
+    const empty = !(r.mix.preservation + r.mix.income + r.mix.equities > 0);
+    const pct = (/** @type {number} */ x) => el("td", { class: "num" }, empty ? "—" : fmtPct(x));
+    tbody.appendChild(
+      el(
+        "tr",
+        {},
+        el("td", {}, `${r.age} (${r.year})`),
+        pct(r.mix.preservation),
+        pct(r.mix.income),
+        pct(r.mix.equities),
+        el("td", { class: "num dim" }, `${r.returnPct.toFixed(1)}%`),
+        el("td", { class: r.bal < 0 ? "num neg" : "num" }, fmtCompact(r.bal))
+      )
+    );
+  }
 }
 
 /**
@@ -279,6 +404,7 @@ function commit(next, rebuildKind) {
   if (rebuildKind === "people") renderPeopleList();
   else if (rebuildKind) renderList(rebuildKind);
   syncScalars();
+  syncAccountRows();
   const { errors, warnings } = validate(state);
   renderIssues(errors, warnings);
   if (errors.length) {
@@ -400,7 +526,7 @@ function buildStaticBindings() {
   });
 
   // scalar fields (number inputs + range sliders share data-path; syncScalars links them).
-  // Checkboxes (the tax toggle) commit a boolean on change, not a parsed number.
+  // Checkboxes commit a boolean on change, not a parsed number.
   for (const input of document.querySelectorAll("[data-path]")) {
     const isCheckbox = input.type === "checkbox";
     input.addEventListener(isCheckbox ? "change" : "input", () => {

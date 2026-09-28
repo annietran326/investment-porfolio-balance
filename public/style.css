@@ -525,3 +525,41 @@ button.linklike {
   .math-doc { column-count: 2; column-gap: 32px; }
   .math-doc p, .math-doc ul { break-inside: avoid; }
 }
+
+/* ---- buckets: split KPIs, the split bar, account rows ---- */
+.bucket-preservation { --bucket: #60a5fa; }
+.bucket-income { --bucket: #f59e0b; }
+.bucket-equities { --bucket: #5eead4; }
+
+.kpi.kpi3 { grid-template-columns: repeat(3, 1fr); margin-bottom: 10px; }
+.kpi .box[class*="bucket-"] { border-top: 3px solid var(--bucket); }
+.kpi .box .amt { font: 13px var(--mono); color: var(--dim); }
+
+.splitbar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--panel2);
+  margin-bottom: 8px;
+}
+.splitbar .seg { background: var(--bucket); height: 100%; }
+
+.small-note { font-size: 12px; margin: -2px 0 8px; }
+.subhead { font-size: 12px; color: var(--dim); margin: 10px 0 6px; text-transform: uppercase; letter-spacing: .6px; }
+
+.itemlist .item.account .head select { width: auto; flex: 0 1 170px; min-width: 0; }
+.itemlist .item.account .head input { min-width: 0; }
+.item.account .readout { font: 14px var(--mono); padding: 6px 0; color: var(--text); }
+.item.account .contrib { margin-top: 10px; }
+/* Show only the fields that apply to each account type. */
+.item.account:not([data-type="taxable"]) .only-taxable { display: none; }
+.item.account[data-type="taxable"] .not-ira-match,
+.item.account[data-type="traditional_ira"] .not-ira-match,
+.item.account[data-type="roth_ira"] .not-ira-match { display: none; }
+
+#flags div + div { margin-top: 6px; }
+
+@media (max-width: 640px) {
+  .kpi.kpi3 { grid-template-columns: 1fr; }
+}

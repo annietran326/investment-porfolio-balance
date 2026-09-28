@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Runway — do I still need to work?</title>
+<title>Runway: how should my money be split?</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 <script type="module" src="/app.mjs"></script>
@@ -12,7 +12,7 @@
 
 <header>
   <h1>Runway</h1>
-  <div class="sub">do I still need to work — and if so, how much per year, until when?</div>
+  <div class="sub">how should my money be split, and do I have enough?</div>
   <div class="spacer"></div>
   <span id="saveBadge" class="badge hidden">
     <span id="saveBadgeText"></span>
@@ -56,7 +56,7 @@
   <div id="globalIssues"></div>
 
   <section class="card">
-    <div class="privacy">All data stays on this machine — served from 127.0.0.1, saved to your local data dir. Amounts are in <b>today's dollars</b>; returns are <b>real</b> (after inflation and tax).</div>
+    <div class="privacy">All data stays on this machine: served from 127.0.0.1, saved to your local data folder. Enter amounts in <b>today's dollars</b>. Enter rates as <b>actual rates, before inflation</b> (inflation is its own input below). Results are shown in today's dollars.</div>
   </section>
 
   <section class="card">
@@ -73,6 +73,44 @@
   </section>
 
   <section class="card">
+    <h2>Accounts <span class="hint">investable money, by tax treatment</span></h2>
+    <div class="itemlist" id="accountList"></div>
+    <button id="addAccount" type="button" class="small">+ account</button>
+    <div class="footnote">
+      <b>How each type is taxed when you take money out:</b> taxable brokerage pays capital-gains tax on the gain part of what you sell; traditional IRA and 401(k) pay ordinary income tax on the whole withdrawal (plus a 10% penalty before 59½); Roth IRA is tax-free.<br>
+      <b>Cost basis</b> (taxable only) is what you paid in total. In Fidelity it's the "Cost Basis Total" on the Positions page. Leave it blank if you don't know it; that assumes no gain yet.<br>
+      <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Returns &amp; inflation <span class="hint">actual rates, before inflation</span></h2>
+    <div class="field narrow"><label for="f-inflation">Inflation %/yr</label><input id="f-inflation" type="number" step="0.1" data-path="economy.inflationPct"><div class="issue"></div></div>
+    <div class="subhead">Expected return of each bucket, %/yr</div>
+    <div class="grid3">
+      <div class="field"><label for="f-rPres">Capital preservation</label><input id="f-rPres" type="number" step="0.1" data-path="buckets.preservationReturnPct"><div class="issue"></div></div>
+      <div class="field"><label for="f-rInc">High income</label><input id="f-rInc" type="number" step="0.1" data-path="buckets.incomeReturnPct"><div class="issue"></div></div>
+      <div class="field"><label for="f-rEq">Global equities</label><input id="f-rEq" type="number" step="0.1" data-path="buckets.equitiesReturnPct"><div class="issue"></div></div>
+    </div>
+    <div class="dim small-note" id="realReturnsNote"></div>
+    <div class="subhead">Which years of withdrawals each bucket covers</div>
+    <div class="grid2">
+      <div class="field"><label for="f-presYears">Capital preservation: through year</label><input id="f-presYears" type="number" min="0" step="1" data-path="buckets.preservationYears"><div class="issue"></div></div>
+      <div class="field"><label for="f-incYears">High income: through year</label><input id="f-incYears" type="number" min="0" step="1" data-path="buckets.incomeThroughYear"><div class="issue"></div></div>
+    </div>
+    <div class="footnote" id="bucketRuleNote">Money you'll need soonest sits in capital preservation, so a market drop never forces you to sell stocks. Global equities hold everything needed further out.</div>
+  </section>
+
+  <section class="card">
+    <h2>Taxes on withdrawals <span class="hint">effective rates, federal + state</span></h2>
+    <div class="grid2">
+      <div class="field"><label for="f-taxOrd">Ordinary income rate % (traditional IRA / 401(k))</label><input id="f-taxOrd" type="number" step="1" data-path="taxes.ordinaryIncomePct"><div class="issue"></div></div>
+      <div class="field"><label for="f-taxCg">Capital gains rate % (taxable account gains)</label><input id="f-taxCg" type="number" step="1" data-path="taxes.capitalGainsPct"><div class="issue"></div></div>
+    </div>
+    <div class="footnote">Use your average rate, not your top bracket: total tax divided by income. Income streams and property proceeds are entered after tax, so these rates apply only to money taken out of accounts.</div>
+  </section>
+
+  <section class="card">
     <h2>Household <span class="hint">spouse &amp; dependents — self is in Profile</span></h2>
     <div class="itemlist" id="peopleList"></div>
     <div class="people-add">
@@ -83,27 +121,6 @@
   </section>
 
   <section class="card">
-    <h2>Portfolio <span class="hint">liquid / investable</span></h2>
-    <div class="field"><label for="f-balance">Balance ($)</label><input id="f-balance" type="number" data-path="portfolio.balance"><div class="issue"></div></div>
-    <div class="field">
-      <label for="f-return">Real return %/yr (after inflation &amp; tax on reinvested returns)</label>
-      <div class="rangewrap">
-        <input type="range" min="0" max="8" step="0.1" data-path="portfolio.realReturnPct" aria-label="real return slider">
-        <input id="f-return" type="number" min="0" max="8" step="0.1" data-path="portfolio.realReturnPct" class="rangenum">
-      </div>
-      <div class="issue"></div>
-    </div>
-    <div class="field">
-      <label class="checkline"><input id="f-tax-enabled" type="checkbox" data-path="tax.enabled"> Tax investment sales made to cover spending</label>
-      <div class="footnote">When spending outruns income, the plan sells investments — and the realized gains are taxed. Income and property proceeds are entered net of tax, and the real-return knob above already nets tax on reinvested returns; this adds only the tax on those forced sales.</div>
-      <div id="taxKnobs" class="taxknobs">
-        <div class="field narrow"><label for="f-tax-rate">Effective capital-gains rate %</label><input id="f-tax-rate" type="number" min="0" max="50" step="1" data-path="tax.effectiveGainsRatePct"><div class="issue"></div></div>
-        <div class="field narrow"><label for="f-tax-gain">Taxable-gain share of each withdrawal %</label><input id="f-tax-gain" type="number" min="0" max="100" step="5" data-path="tax.embeddedGainPct"><div class="issue"></div></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="card">
     <h2>Properties <span class="hint">rentals — first-class, not an afterthought</span></h2>
     <div class="itemlist" id="propList"></div>
     <button id="addProp" type="button" class="small">+ property</button>
@@ -111,20 +128,21 @@
   </section>
 
   <section class="card">
-    <h2>Income streams <span class="hint">net of tax, today's $</span></h2>
+    <h2>Income streams <span class="hint">after tax, today's $</span></h2>
     <div class="itemlist" id="incomeList"></div>
     <button id="addIncome" type="button" class="small">+ income stream</button>
+    <div class="footnote">Enter take-home pay, after taxes and after any 401(k) payroll deduction (the deduction goes in Accounts). Leave the increase blank to rise with inflation.</div>
   </section>
 
   <section class="card">
     <h2>Spending <span class="hint">$/mo — excl. property costs &amp; healthcare</span></h2>
     <div class="itemlist" id="spendList"></div>
     <button id="addSpend" type="button" class="small">+ category</button>
-    <div class="footnote">Leave growth blank to grow with inflation; set start/end years for time-boxed costs (a dependent, a loan).</div>
+    <div class="footnote">Leave the increase blank to rise with inflation, or enter your own rate (for example, 3.5 if you expect this cost to rise faster). Set start/end years for costs that stop, like a car loan.</div>
   </section>
 
   <section class="card">
-    <h2>Assumptions <span class="hint">all visible, all editable</span></h2>
+    <h2>Social Security &amp; healthcare <span class="hint">today's $, rising with inflation</span></h2>
     <div class="field">
       <label for="f-haircut">Social Security haircut %</label>
       <div class="rangewrap">
@@ -167,7 +185,7 @@
   <section class="card">
     <h2>Work</h2>
     <div class="field"><label for="f-workUntil">Willing to work until age</label><input id="f-workUntil" type="number" data-path="work.untilAge"><div class="issue"></div></div>
-    <div class="footnote">The spending shock is stress-test-fixed (+20% — see the table); the solver's only variable is income over this window.</div>
+    <div class="footnote">Used for two things: 401(k) contributions stop at this age unless the account says otherwise, and the stress-test table shows how much extra income through this age would close the gap instead.</div>
   </section>
 
 </div>
@@ -178,20 +196,42 @@
     <div class="v-detail" id="verdictDetail"></div>
   </div>
 
+  <section class="card">
+    <h2>Recommended split <span class="hint" id="splitHint">for your money today</span></h2>
+    <div class="kpi kpi3">
+      <div class="box bucket-preservation"><div class="v" id="kpiPres"></div><div class="amt" id="kpiPresAmt"></div><div class="l">capital preservation</div></div>
+      <div class="box bucket-income"><div class="v" id="kpiInc"></div><div class="amt" id="kpiIncAmt"></div><div class="l">high income</div></div>
+      <div class="box bucket-equities"><div class="v" id="kpiEq"></div><div class="amt" id="kpiEqAmt"></div><div class="l">global equities</div></div>
+    </div>
+    <div id="splitBar" class="splitbar" aria-hidden="true"></div>
+    <div class="footnote" id="splitNote"></div>
+  </section>
+
   <div class="kpi">
-    <div class="box"><div class="v" id="kpiRunway"></div><div class="l">base runway (no extra income)</div></div>
-    <div class="box"><div class="v" id="kpiRequired"></div><div class="l" id="kpiRequiredLabel">required income</div></div>
-    <div class="box"><div class="v" id="kpiEndBal"></div><div class="l" id="kpiEndBalLabel">end balance (no extra income)</div></div>
-    <div class="box"><div class="v" id="kpiSpend"></div><div class="l">annual spend (excl. health/property)</div></div>
+    <div class="box"><div class="v" id="kpiGap"></div><div class="l" id="kpiGapLabel">gap today</div></div>
+    <div class="box"><div class="v" id="kpiTotal"></div><div class="l">invested today</div></div>
+    <div class="box"><div class="v" id="kpiEndBal"></div><div class="l" id="kpiEndBalLabel">end balance</div></div>
+    <div class="box"><div class="v" id="kpiRunway"></div><div class="l">money lasts until</div></div>
   </div>
 
+  <div id="flags" class="banner banner-warn hidden"></div>
+
   <section class="card">
-    <h2>Required income by stress test</h2>
+    <h2>How the split changes as you age <span class="hint">base case, rebalanced each year</span></h2>
     <table>
-      <thead><tr><th>Stress test</th><th>Runway</th><th id="thRequired">Required $/yr</th></tr></thead>
+      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
+      <tbody id="glideRows"></tbody>
+    </table>
+    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Money beyond what the plan needs sits in equities. Balances are in today's dollars.</div>
+  </section>
+
+  <section class="card">
+    <h2>Stress tests</h2>
+    <table>
+      <thead><tr><th>Stress test</th><th>Money lasts until</th><th class="num">Gap today</th><th class="num" id="thRequired">Or earn $/yr</th></tr></thead>
       <tbody id="scenarioRows"></tbody>
     </table>
-    <div class="footnote">Runway = first year the balance goes below $0. Required income = minimum net $/yr from now until your work-until age so the plan lands on the goal. Each row stresses the active plan a different way; switch plans in the scenario bar up top.</div>
+    <div class="footnote">Gap today = extra money you'd need invested now (today's dollars) to reach your goal. "Or earn" = the after-tax income from now until your work-until age that would close the same gap instead. The market crash hits your split today: equities −30%, high income −15%, capital preservation untouched, which is where a bigger safe bucket pays off.</div>
   </section>
 
   <section class="card">
@@ -225,20 +265,21 @@
 
   <section class="card">
     <details class="drill">
-      <summary>How the math works <span class="hint">exactly what goes into the number — click to expand</span></summary>
+      <summary>How the math works <span class="hint">exactly what goes into the numbers, click to expand</span></summary>
       <div class="math-doc">
-        <p>Everything is in <strong>today's dollars</strong>. Returns and growth are <strong>real</strong> — already adjusted for inflation — so a number you enter keeps its buying power over time unless you say it grows faster or slower.</p>
-        <p><strong>The core loop.</strong> Your portfolio starts at the current year with exactly the balance you entered. Each year the app (1) grows the balance by your real return, then (2) adds that year's net cash flow — so the value shown at a year is the portfolio at the start of that year, and it steps forward to your plan-to age.</p>
-        <p><strong>Net cash flow each year</strong> = income + Social Security + property cash flow + any sale proceeds − spending − healthcare.</p>
+        <p><strong>Dollars.</strong> You enter amounts in today's dollars. The engine then runs in actual future dollars: every cost and income rises at its own rate (or at inflation if you leave the rate blank), and returns are actual returns. Every result is converted back to today's dollars, so $1M at age 80 means what $1M buys today.</p>
+        <p><strong>Each year</strong>, in order: (1) the portfolio is split across the three buckets and earns the blended return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from the accounts.</p>
+        <p><strong>Cash flow each year</strong> = income + Social Security + property cash flow + sale proceeds − spending − healthcare. Social Security and healthcare rise with inflation. Mortgage payments are fixed dollar amounts and don't rise.</p>
+        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: years 1 through your capital preservation cutoff go to capital preservation, the next years through your high income cutoff go to high income, and the rest go to equities. Each withdrawal is valued at what it costs today, following the path its money takes (it waits in equities, then moves to high income, then to capital preservation). If you have more than the plan needs, the extra is long-term money and goes to equities. If you have less, every bucket is short by the same share, so the split stays the one your plan needs and the shortfall shows up as the gap. The split is redone every year.</p>
+        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth. Enough is taken to cover tax, so the after-tax amount pays the bills:</p>
         <ul>
-          <li><strong>Income</strong> — each stream (entered net of tax), counted only between its from/to years, growing at its real growth rate. A spouse's income is just more income lines.</li>
-          <li><strong>Social Security</strong> — starts at your start age, reduced by the haircut % (your hedge against the trust-fund shortfall). A spouse has their own, on their own age.</li>
-          <li><strong>Property</strong> — per rental: rent − costs − mortgage P&amp;I. Rent and costs can grow vs inflation; the mortgage payment is fixed in dollars, so it's held flat (slightly conservative). A sale books its net proceeds once, in the sale year; the mortgage stops after its payoff year.</li>
-          <li><strong>Spending</strong> — monthly categories × 12, each only within its start/end years and growing at its real rate; plus any dependent support costs over their window; plus healthcare (your pre-65 bridge once employer coverage ends, then Medicare at 65 — and your spouse's).</li>
+          <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time. A sale lowers the basis in proportion (average cost).</li>
+          <li><strong>Traditional IRA / 401(k)</strong>: ordinary income rate on the whole amount, plus a 10% penalty before age 59½.</li>
+          <li><strong>Roth</strong>: tax-free. (Withdrawals before 59½ are flagged but not penalized.)</li>
         </ul>
-        <p><strong>The verdict.</strong> First it runs the whole plan with no extra income. If the balance reaches your goal — die with zero, leave a bequest, or never dip below a floor — you're done. If not, it binary-searches the smallest net income you'd need each year, from now until your work-until age, to just reach the goal. That's your <strong>required income</strong>.</p>
-        <p><strong>Stress scenarios</strong> rerun the same plan under bad cases — a rental vacant plus a big repair plus a delayed sale, a 30% market drop now, spending 20% higher forever, and all at once — so you see how fragile or robust the answer is.</p>
-        <p class="dim"><strong>What it deliberately doesn't do:</strong> no full tax engine — income and property proceeds are entered net of tax, and an optional toggle taxes only the gains realized when the plan must sell investments to cover spending (no account types, brackets, or cost-basis tracking); no random market simulation (it's deterministic — one path per scenario), and no separate inflation input (inflation is baked into "real," and growth rates are relative to it). Every input is visible and every number here follows from them.</p>
+        <p><strong>Do I have enough?</strong> The plan runs once with what you have. If it reaches your goal (spend down to zero, leave an amount, or never drop below a floor) without the balance going negative, you have enough. If not, the <strong>gap</strong> is the smallest extra amount, invested today as new money in a taxable account, that reaches the goal. It's found by trying amounts until one just works.</p>
+        <p><strong>Stress tests</strong> rerun the same plan under bad cases: a rental vacancy plus a big repair plus a delayed sale, a market crash today, spending 20% higher, and all at once.</p>
+        <p class="dim"><strong>What it doesn't do (yet):</strong> no random market paths (every year earns the expected return; Monte Carlo is planned), no required minimum distributions (slightly optimistic), no tax brackets (one effective rate each), rebalancing is treated as tax-free, and all accounts hold the same mix. Every number here follows from the inputs you can see.</p>
       </div>
     </details>
   </section>
@@ -259,8 +300,35 @@
       <div class="field"><label>payoff yr</label><input type="number" data-key="payoffYear" placeholder="never"><div class="issue"></div></div>
       <div class="field"><label>sale yr</label><input type="number" data-key="saleYear" placeholder="empty = keep forever"><div class="issue"></div></div>
       <div class="field"><label>net proceeds $</label><input type="number" data-key="saleNetProceeds"><div class="issue"></div></div>
-      <div class="field"><label>rent real growth %/yr</label><input type="number" step="0.1" data-key="rentRealGrowthPct" placeholder="0"><div class="issue"></div></div>
-      <div class="field"><label>costs real growth %/yr</label><input type="number" step="0.1" data-key="costsRealGrowthPct" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>rent increase %/yr</label><input type="number" step="0.1" data-key="rentGrowthPct" placeholder="inflation"><div class="issue"></div></div>
+      <div class="field"><label>costs increase %/yr</label><input type="number" step="0.1" data-key="costsGrowthPct" placeholder="inflation"><div class="issue"></div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-account">
+  <div class="item account">
+    <div class="head">
+      <input type="text" data-key="name" placeholder="name" aria-label="account name">
+      <select data-key="type" aria-label="account type">
+        <option value="taxable">Taxable brokerage</option>
+        <option value="traditional_ira">Traditional IRA</option>
+        <option value="401k">401(k) (traditional)</option>
+        <option value="roth_ira">Roth IRA</option>
+      </select>
+      <button type="button" class="small danger remove" aria-label="remove account">✕</button>
+    </div>
+    <div class="issue"></div>
+    <div class="grid3">
+      <div class="field"><label>balance $</label><input type="number" data-key="balance"><div class="issue"></div></div>
+      <div class="field only-taxable"><label>cost basis $</label><input type="number" data-key="costBasis" placeholder="same as balance"><div class="issue"></div></div>
+      <div class="field only-taxable gainshare"><label>taxable gain today</label><div class="readout" data-readout="gainShare"></div></div>
+    </div>
+    <div class="grid2x2 contrib">
+      <div class="field"><label>your contribution $/yr</label><input type="number" data-key="contributionAnnual" placeholder="0"><div class="issue"></div></div>
+      <div class="field not-ira-match"><label>employer match $/yr</label><input type="number" data-key="employerMatchAnnual" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>contribute until age</label><input type="number" data-key="contributeUntilAge" placeholder="work-until age"><div class="issue"></div></div>
+      <div class="field"><label>contribution increase %/yr</label><input type="number" step="0.1" data-key="contributionGrowthPct" placeholder="inflation"><div class="issue"></div></div>
     </div>
   </div>
 </template>
@@ -273,12 +341,11 @@
     </div>
     <div class="issue"></div>
     <div class="grid2x2">
-      <div class="field"><label>net $/yr</label><input type="number" data-key="annual"><div class="issue"></div></div>
+      <div class="field"><label>after-tax $/yr</label><input type="number" data-key="annual"><div class="issue"></div></div>
       <div class="field"><label>from yr</label><input type="number" data-key="fromYear"><div class="issue"></div></div>
       <div class="field"><label>to yr</label><input type="number" data-key="toYear"><div class="issue"></div></div>
-      <div class="field"><label>real growth %/yr</label><input type="number" step="0.1" data-key="realGrowthPct" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>increase %/yr</label><input type="number" step="0.1" data-key="growthPct" placeholder="inflation"><div class="issue"></div></div>
     </div>
-    <div class="footnote">Real growth %/yr is vs inflation — blank/0 = grows with inflation (holds constant in today's $).</div>
   </div>
 </template>
 
@@ -293,9 +360,8 @@
       <div class="field"><label>$/mo</label><input type="number" data-key="monthly"><div class="issue"></div></div>
       <div class="field"><label>from yr</label><input type="number" data-key="fromYear" placeholder="from the start"><div class="issue"></div></div>
       <div class="field"><label>to yr</label><input type="number" data-key="toYear" placeholder="perpetual"><div class="issue"></div></div>
-      <div class="field"><label>real growth %/yr</label><input type="number" step="0.1" data-key="realGrowthPct" placeholder="0"><div class="issue"></div></div>
+      <div class="field"><label>increase %/yr</label><input type="number" step="0.1" data-key="growthPct" placeholder="inflation"><div class="issue"></div></div>
     </div>
-    <div class="footnote">Real growth %/yr is vs inflation — blank/0 = grows with inflation.</div>
   </div>
 </template>
 

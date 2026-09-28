@@ -17,7 +17,7 @@
 
 /** @typedef {import("../../src/model/schema.mjs").RunwayState} RunwayState */
 /** @typedef {import("../../src/model/schema.mjs").PersonRole} PersonRole */
-/** @typedef {"properties"|"incomes"|"spending"} ListKind */
+/** @typedef {"accounts"|"properties"|"incomes"|"spending"} ListKind */
 
 /**
  * Blank row per list kind — must mirror the schema factories (pinned by
@@ -26,15 +26,18 @@
  * @param {ListKind} kind @param {RunwayState} state
  */
 export function blankRow(kind, state) {
+  if (kind === "accounts") {
+    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null };
+  }
   if (kind === "properties") {
-    return { name: "new property", rentMonthly: 0, costsMonthly: 0, mortgageMonthly: 0, payoffYear: null, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 0, costsRealGrowthPct: 0 };
+    return { name: "new property", rentMonthly: 0, costsMonthly: 0, mortgageMonthly: 0, payoffYear: null, saleYear: null, saleNetProceeds: null, rentGrowthPct: null, costsGrowthPct: null };
   }
   if (kind === "incomes") {
     const y = state.profile.currentYear;
-    return { name: "new income", annual: 0, fromYear: y, toYear: y + 4, realGrowthPct: 0 };
+    return { name: "new income", annual: 0, fromYear: y, toYear: y + 4, growthPct: null };
   }
   if (kind === "spending") {
-    return { name: "new category", monthly: 0, fromYear: null, toYear: null, realGrowthPct: 0 };
+    return { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null };
   }
   throw new Error(`unknown list kind: ${kind}`);
 }
@@ -174,14 +177,44 @@ export function parseNumField(raw) {
   return t === "" ? null : Number(t);
 }
 
+/**
+ * Account fields where a blank box means $0 rather than "unknown". Keeps a
+ * cleared contribution box from turning into a validation error.
+ */
+export const ZERO_WHEN_BLANK = new Set(["contributionAnnual", "employerMatchAnnual"]);
+
+/**
+ * Parse one list-row field. Text and dropdown fields pass through; numbers go
+ * through parseNumField, except the ZERO_WHEN_BLANK account fields.
+ * @param {ListKind} kind @param {string} key @param {string} raw @param {boolean} isText
+ */
+export function parseRowField(kind, key, raw, isText) {
+  if (isText) return raw;
+  const v = parseNumField(raw);
+  return v === null && kind === "accounts" && ZERO_WHEN_BLANK.has(key) ? 0 : v;
+}
+
+/**
+ * The share of a taxable account that is gain today, for the account row's
+ * readout. null when it doesn't apply (not taxable, or no balance).
+ * @param {{type: string, balance: unknown, costBasis: unknown}} a
+ * @returns {number|null} 0..1
+ */
+export function gainShareOf(a) {
+  if (a.type !== "taxable" || typeof a.balance !== "number" || !(a.balance > 0)) return null;
+  const basis = typeof a.costBasis === "number" ? a.costBasis : a.balance;
+  return Math.max(0, 1 - basis / a.balance);
+}
+
 // ---------------------------------------------------------------------------
 // DOM builders (browser only — called from app.mjs, never at import time)
 // ---------------------------------------------------------------------------
 
 /**
  * Rebuild a row list from a <template>. Called only on initial build and on
- * add/remove — never while typing, so field focus is never lost. Inputs carry
- * data-key; values land via .value (user strings never touch innerHTML).
+ * add/remove — never while typing, so field focus is never lost. Inputs and
+ * dropdowns carry data-key; values land via .value (user strings never touch
+ * innerHTML). A dropdown commits on change and counts as text.
  * @param {Element} container
  * @param {HTMLTemplateElement} template
  * @param {Record<string, any>[]} items
@@ -194,12 +227,13 @@ export function renderRows(container, template, items, handlers) {
     const row = /** @type {Element} */ (
       /** @type {Element} */ (template.content.firstElementChild).cloneNode(true)
     );
-    for (const input of row.querySelectorAll("input[data-key]")) {
+    for (const input of row.querySelectorAll("input[data-key], select[data-key]")) {
       const field = /** @type {HTMLInputElement} */ (input);
       const key = /** @type {string} */ (field.dataset.key);
       const v = item[key];
       field.value = v === null || v === undefined ? "" : String(v);
-      field.addEventListener("input", () => handlers.onField(index, key, field.value, field.type === "text"));
+      const isText = field.type !== "number";
+      field.addEventListener(field.tagName === "SELECT" ? "change" : "input", () => handlers.onField(index, key, field.value, isText));
     }
     const remove = row.querySelector("button.remove");
     if (remove) remove.addEventListener("click", () => handlers.onRemove(index));

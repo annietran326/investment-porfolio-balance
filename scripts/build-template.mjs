@@ -16,8 +16,9 @@ import { fileURLToPath } from "node:url";
  *   nested household fields (e.g. "social.startAge")
  * @property {"text"|"number"} type
  * @property {boolean} [nullable] empty cell → null (meaningful), NEVER 0
- * @property {boolean} [emptyZero] empty cell → 0 (a growth rate; the default is
- *   "grows with inflation"). Distinct from nullable, where empty means "open".
+ * @property {boolean} [emptyZero] empty cell → 0 (e.g. a support cost or a
+ *   contribution). Distinct from nullable, where empty means "open" / "with inflation".
+ * @property {string[]} [choices] text column that must be one of these values
  * @property {boolean} [optional] column may be absent from an imported sheet
  * @property {"spouse"} [role] household column that applies only to this role;
  *   a dependent row leaves it blank
@@ -31,8 +32,8 @@ import { fileURLToPath } from "node:url";
  * @typedef {Object} TabDef
  * @property {"accounts"|"properties"|"income"|"spending"|"household"|"assumptions"} key
  * @property {string} name  sheet name (matched case-insensitively on import)
- * @property {"single"|"list"|"household"|"settings"} kind
- * @property {"properties"|"incomes"|"spending"} [section] state array for list tabs
+ * @property {"list"|"household"|"settings"} kind
+ * @property {"accounts"|"properties"|"incomes"|"spending"} [section] state array for list tabs
  * @property {ColumnDef[]} columns
  * @property {SettingDef[]} [settings]
  * @property {string} [note] comment row ("#" prefix — ignored by the parser)
@@ -44,10 +45,17 @@ export const TEMPLATE_DEF = {
     {
       key: "accounts",
       name: "Accounts",
-      kind: "single",
+      kind: "list",
+      section: "accounts",
       columns: [
+        { header: "Name", field: "name", type: "text" },
+        { header: "Type (taxable, traditional_ira, 401k, roth_ira)", field: "type", type: "text", choices: ["taxable", "traditional_ira", "401k", "roth_ira"] },
         { header: "Balance $", field: "balance", type: "number" },
-        { header: "Real return %/yr", field: "realReturnPct", type: "number" },
+        { header: "Cost basis $ (taxable only; blank = same as balance)", field: "costBasis", type: "number", nullable: true, optional: true },
+        { header: "Your contribution $/yr", field: "contributionAnnual", type: "number", emptyZero: true, optional: true },
+        { header: "Employer match $/yr", field: "employerMatchAnnual", type: "number", emptyZero: true, optional: true },
+        { header: "Contribute until age (blank = work-until age)", field: "contributeUntilAge", type: "number", nullable: true, optional: true },
+        { header: "Contribution increase %/yr (blank = inflation)", field: "contributionGrowthPct", type: "number", nullable: true, optional: true },
       ],
     },
     {
@@ -69,8 +77,8 @@ export const TEMPLATE_DEF = {
           zeroError: "0 is not a year — leave the cell empty to keep forever",
         },
         { header: "Net sale proceeds $", field: "saleNetProceeds", type: "number", nullable: true },
-        { header: "Rent real growth %/yr", field: "rentRealGrowthPct", type: "number", emptyZero: true, optional: true },
-        { header: "Costs real growth %/yr", field: "costsRealGrowthPct", type: "number", emptyZero: true, optional: true },
+        { header: "Rent increase %/yr (blank = inflation)", field: "rentGrowthPct", type: "number", nullable: true, optional: true },
+        { header: "Costs increase %/yr (blank = inflation)", field: "costsGrowthPct", type: "number", nullable: true, optional: true },
       ],
     },
     {
@@ -83,7 +91,7 @@ export const TEMPLATE_DEF = {
         { header: "Net $/yr", field: "annual", type: "number" },
         { header: "From year", field: "fromYear", type: "number" },
         { header: "To year", field: "toYear", type: "number" },
-        { header: "Real growth %/yr", field: "realGrowthPct", type: "number", emptyZero: true, optional: true },
+        { header: "Increase %/yr (blank = inflation)", field: "growthPct", type: "number", nullable: true, optional: true },
       ],
     },
     {
@@ -96,7 +104,7 @@ export const TEMPLATE_DEF = {
         { header: "$/mo (excl. property costs & healthcare)", field: "monthly", type: "number" },
         { header: "From year (blank = from start)", field: "fromYear", type: "number", nullable: true, optional: true },
         { header: "To year (blank = perpetual)", field: "toYear", type: "number", nullable: true, optional: true },
-        { header: "Real growth %/yr", field: "realGrowthPct", type: "number", emptyZero: true, optional: true },
+        { header: "Increase %/yr (blank = inflation)", field: "growthPct", type: "number", nullable: true, optional: true },
       ],
     },
     {
@@ -138,6 +146,14 @@ export const TEMPLATE_DEF = {
         { key: "profile.currentAge", type: "number", doc: "years" },
         { key: "profile.endAge", type: "number", doc: "plan-to age (years)" },
         { key: "profile.currentYear", type: "number", doc: "simulation clock origin (calendar year)" },
+        { key: "economy.inflationPct", type: "number", doc: "inflation %/yr (plain number, 2.5 = 2.5%)" },
+        { key: "buckets.preservationReturnPct", type: "number", doc: "capital preservation return %/yr, before inflation" },
+        { key: "buckets.incomeReturnPct", type: "number", doc: "high income return %/yr, before inflation" },
+        { key: "buckets.equitiesReturnPct", type: "number", doc: "global equities return %/yr, before inflation" },
+        { key: "buckets.preservationYears", type: "number", doc: "years of withdrawals held in capital preservation (years 1 to N)" },
+        { key: "buckets.incomeThroughYear", type: "number", doc: "high income holds years N+1 through this year; equities hold the rest" },
+        { key: "taxes.ordinaryIncomePct", type: "number", doc: "effective tax % on traditional IRA / 401(k) withdrawals (federal + state)" },
+        { key: "taxes.capitalGainsPct", type: "number", doc: "effective tax % on gains when selling in a taxable account (federal + state)" },
         { key: "social.startAge", type: "number", doc: "Social Security start age (years)" },
         { key: "social.monthly", type: "number", doc: "Social Security $/mo, today's dollars, pre-haircut" },
         { key: "social.haircutPct", type: "number", doc: "% cut applied to Social Security (plain number, 25 = 25%)" },
@@ -149,7 +165,7 @@ export const TEMPLATE_DEF = {
         { key: "endState.floor", type: "number", doc: "$ the balance never drops below (used when mode is floor)" },
         { key: "work.untilAge", type: "number", doc: "willing-to-work-until age (the solver's income window)" },
       ],
-      note: "# Inflation is NOT an input; returns are real (after inflation and tax)",
+      note: "# Amounts are in today's dollars; rates are actual (before inflation)",
     },
   ],
 };

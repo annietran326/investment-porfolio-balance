@@ -159,7 +159,7 @@ test("readoutAt: per-scenario balance at the year; scenarios without that year a
 });
 
 test("shortLabel: known scenario keys shorten; unknown keys fall back to the full label", () => {
-  assert.equal(shortLabel("drawdown", "Market −30% now"), "market −30%");
+  assert.equal(shortLabel("drawdown", "Market −30% now"), "crash now");
   assert.equal(shortLabel("custom-future", "My custom scenario"), "My custom scenario");
 });
 
@@ -312,21 +312,22 @@ test("DOM controllers load under plain Node without touching document", () => {
   assert.ok(STALE_LIST_COPY.includes("try again"));
 });
 
-// ---- v5: the cash-flow table's tax column reads r.tax from the engine rows ----
+// ---- the cash-flow table's tax column reads r.tax from the engine rows ----
 
-function taxDrawdownState(enabled) {
+/** A plan that draws down from year 0, with the taxable account at a given gain share. */
+function drawdownState(costBasis) {
   const s = placeholderState();
   s.incomes = [];
   s.properties = [];
-  s.portfolio.balance = 400_000; // small enough to draw down from year 0
-  s.tax = { enabled, effectiveGainsRatePct: 20, embeddedGainPct: 50 };
+  s.accounts = [{ ...s.accounts[0], balance: 400_000, costBasis }];
   return s;
 }
 
 test("cashflowView preserves the per-year tax the column renders", () => {
-  const shownOn = cashflowView(simulate(taxDrawdownState(true)).rows, true).shown;
-  const shownOff = cashflowView(simulate(taxDrawdownState(false)).rows, true).shown;
-  assert.ok(shownOn.every((r) => typeof r.tax === "number"), "every row carries a numeric tax");
-  assert.ok(shownOn.some((r) => r.tax > 0), "a drawdown year shows a positive tax when enabled");
-  assert.ok(shownOff.every((r) => r.tax === 0), "disabled → every tax cell is 0");
+  const withGain = cashflowView(simulate(drawdownState(100_000)).rows, true).shown;
+  const noGain = cashflowView(simulate(drawdownState(null)).rows, true).shown;
+  assert.ok(withGain.every((r) => typeof r.tax === "number"), "every row carries a numeric tax");
+  assert.ok(withGain.some((r) => r.tax > 0), "a drawdown from an account with gains shows a positive tax");
+  const total = (/** @type {any[]} */ rows) => rows.reduce((sum, r) => sum + r.tax, 0);
+  assert.ok(total(noGain) < total(withGain), "starting with no built-in gain means less tax");
 });

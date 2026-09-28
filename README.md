@@ -1,62 +1,40 @@
-# Runway
+# Runway: three-bucket edition
 
-A local-first runway / die-with-zero retirement calculator that answers one question:
+A local-first retirement calculator that answers two questions:
 
-> **Do I still need to work — and if so, how much must I earn per year, until when?**
+> **1. How should my money be split between capital preservation, high income, and global equities?**
+>
+> **2. Do I have enough to last the rest of my life? If not, how much more do I need today?**
 
-Most retirement calculators solve the forward direction: given a savings rate, when can you retire? Runway inverts it. Given what you already have — including rental real estate with mortgages and planned sales — it solves for the **required income**: the minimum net dollars per year, over a working window you choose, to land exactly on your chosen ending (die with zero, leave a bequest, or never drop below a floor).
+Adapted from [haiguan28/financial-runway-calculator](https://github.com/haiguan28/financial-runway-calculator) (MIT). The original answers "how much must I earn, until when?"; that answer is still here, in the stress-test table, but the headline is now the split and the gap.
 
 ## Quickstart
 
 ```bash
-git clone <this-repo>
-cd runway
 npm install
 npm start
 ```
 
-Open the printed `http://localhost:4207`. The app starts with obviously fake example data — nothing is saved until your first edit. Your data lives in `~/runway-data` (change with `--data-dir` or `RUNWAY_DATA_DIR`), never in this repo.
+Open the printed `http://localhost:4207`. The app starts with obviously fake example data, and nothing is saved until your first edit. Your data lives in `~/runway-data` (change with `--data-dir` or `RUNWAY_DATA_DIR`), never in this repo. A plan saved by the original app is converted automatically the first time this version opens it (a snapshot of the old version is kept).
 
 ## What it models
 
-- **Deterministic year-by-year simulation in today's dollars.** Returns are *real* (after inflation and tax on reinvested returns) — a single knob, no black-box Monte Carlo. Every assumption is visible and editable. Convention: growth applies to the prior balance, then the year's net cash flow lands (arrival-year cash earns no return).
-- **Real estate as a first-class asset**: per-property rent, costs, mortgage P&I, payoff year, optional sale year and net proceeds. An empty sale year means keep forever.
-- **A required-income solver**: bisection over annual income until the terminal balance hits your end-state target. Three-way answer: already met / earn $X per year until age Y / not achievable even at the cap.
-- **Named stress scenarios**: simultaneous vacancy + major repair + delayed sale; market −30%; spending +20%; everything at once. Runway and required income are reported per scenario.
-- **Household**: model a spouse (their own Social Security and healthcare, on their own age) and dependents. Dependents mainly drive time-boxed expenses — the tool has no death/survivor modeling.
-- **Per-line real growth**: rents, income, and expenses can grow faster or slower than inflation. A growth rate of 0 (the default) means "grows with inflation" — it holds constant in today's dollars, exactly the base behavior. Positive outpaces inflation, negative lags it; growth compounds from the current year. This keeps everything in today's dollars — no separate inflation input to double-count.
-- **Expense windows**: each spending line has optional start/end years. Perpetual costs (food) leave them blank; time-boxed costs (a dependent, a car loan, tuition) stop on schedule.
-- **Assumptions with sourced 2026 defaults** (all editable, all dated — see the in-app panel): Social Security haircut 25% (2026 Trustees Report projects a 22–28% cut at 2032 depletion), pre-65 healthcare $16,000/yr (unsubsidized ACA anchor, state-dependent), Medicare-age $7,500/yr, real return 3.5% (forward-looking capital-market assumptions for a balanced portfolio), plan-to-age presets 90/95/100.
-- **Optional tax on forced investment sales** (off by default): flip it on in the Portfolio panel and any year the plan must sell investments to cover a spending shortfall is charged an effective capital-gains rate on the gain portion of the sale, grossed-up so spending is still funded. Income and property proceeds stay net-of-tax (you enter net figures), and the real-return knob already nets tax on reinvested returns — this adds only the realized-gains tax the base model left out. Two knobs: the blended effective rate and the taxable-gain share of each withdrawal. It is an *effective-rate assumption, not a full tax engine* — account types (taxable/traditional/Roth), progressive brackets, RMDs, and cost-basis tracking are deliberately out of scope.
+- **Dollars.** You enter amounts in today's dollars. The engine runs in actual future dollars with one **inflation** input (default 2.5%), and shows every result back in today's dollars.
+- **Rates are actual rates, before inflation.** Each spending line, income stream, rent, and contribution can have its own yearly increase. Leave it blank to rise with inflation.
+- **Accounts, by tax treatment.** Taxable brokerage, traditional IRA, 401(k), and Roth IRA, each with a balance and optional yearly contributions plus employer match (for a 401(k) still being funded).
+- **Three investment buckets.** Default returns before inflation: capital preservation 2.5%, high income 5.5%, global equities 9.5% (about 0% / 3% / 7% after inflation). All editable.
+- **The split rule.** Withdrawals needed in years 1 through 8 sit in capital preservation, years 9 through 15 in high income, and everything after that in global equities (both cutoffs editable). Each future withdrawal is valued at what it costs today, following the path its money takes through the buckets. Money beyond what the plan needs is long-term money and goes to equities. If the plan is short, every bucket is short by the same share. The split is redone every year as withdrawals get closer.
+- **The gap.** If the plan doesn't reach your goal, the gap is the smallest extra amount, invested today in the recommended split, that would. It's in today's dollars.
+- **Taxes on withdrawals.** Money comes out of taxable first, then traditional IRA / 401(k), then Roth, grossed up so the after-tax cash covers spending:
+  - *Taxable:* capital-gains rate × the gain share of what's sold. The app tracks your **cost basis** in dollars: growth raises the value but not the basis, so the taxed share rises over time, and a sale lowers the basis in proportion (average cost). Inflation alone creates taxable gain, as it does in real life.
+  - *Traditional IRA / 401(k):* ordinary income rate on the whole withdrawal, plus a 10% penalty before age 59½ (flagged in the results).
+  - *Roth:* tax-free. Withdrawals before 59½ are flagged, not modeled.
+- **Everything else from the original:** rental properties (rent, costs, a fixed-dollar mortgage, payoff and sale), Social Security with a trust-fund haircut, pre- and post-65 healthcare, a spouse and dependents, spending windows, three end goals (die with zero, leave a bequest, never drop below a floor), stress tests, scenarios, snapshots, trends, and spreadsheet import/export.
 
-**A known, documented bias**: mortgage P&I is fixed in *nominal* dollars, but the simulation runs in *real* dollars, so late-year mortgage costs are overstated. The direction is conservative (the tool will tell you to earn slightly more, never less). See the engine's doc comments.
+### Known simplifications
 
-## How the withdrawal tax works
-
-When it's enabled, the tax models one thing the base model skips: the years your spending outruns your income, you sell investments to cover the gap — and selling realizes capital gains, which are taxed. The subtlety is that you have to sell enough to cover **both** the spending *and* the tax on the sale.
-
-Two knobs drive it (defaults 18% / 50%; the worked example below uses **20% rate × 50% gain** for clean arithmetic):
-
-- **effective capital-gains rate** `r` — your blended federal + state rate on realized gains
-- **taxable-gain share** `g` — how much of each withdrawn dollar is gain (vs. return of your original basis)
-
-Say a year is short **$90,000**. Selling exactly $90,000 doesn't work: half is gain ($45,000), taxed at 20% = $9,000, so you'd pocket only $81,000 — still short. So the model *grosses up* the sale:
-
-```
-combined gain-tax rate   k = g × r = 0.50 × 0.20 = 0.10   (10%)
-
-sell   W = shortfall / (1 − k) = $90,000 / 0.90 = $100,000
-tax      = W − shortfall       = $100,000 − $90,000 = $10,000
-```
-
-You sell $100,000, pay $10,000 in tax, keep $90,000 to live on — and the portfolio drops by the full $100,000. On a $1,000,000 portfolio at 0% real return spending $90,000/yr, that's the difference between draining $90k/yr (tax off) and $100k/yr (tax on) — about **$50,000 more depleted over 5 years**, which is why enabling it raises your required-income answer.
-
-**Two boundaries keep it honest:**
-
-- **You're only taxed on what you actually sell.** If the account holds $50,000 but the year needs $90,000, the sale is capped at $50,000 — tax is `$50,000 × 50% × 20% = $5,000`, not the tax on a $100,000 sale you couldn't make. You can't realize gains on assets you don't own.
-- **No double-counting with the return knob.** The real-return knob's "after tax" is the drag on *reinvested* returns; this layer is the tax on *realized gains from forced sales* — genuinely separate events. Income and property proceeds are entered net of tax, so they're never touched here.
-
-It's an *effective-rate assumption, not a full tax engine* — account types, progressive brackets, RMDs, and cost-basis tracking are deliberately out of scope (see "What it models" above).
+- **No random market paths yet.** Every year earns the expected return, so the model shows the *cost* of a bigger safe bucket but not its benefit. The "market crash now" stress test (equities −30%, high income −15%, capital preservation untouched) is the partial answer. The engine has a `returnsByYear` hook in `simulate()` ready for Monte Carlo.
+- **No required minimum distributions** (slightly optimistic). **No tax brackets**: one effective rate each. **Rebalancing is tax-free.** **All accounts hold the same mix.** Income and property proceeds are entered after tax.
 
 ## Privacy posture and threat model
 
@@ -69,7 +47,7 @@ It's an *effective-rate assumption, not a full tax engine* — account types, pr
 ## Development
 
 ```bash
-npm test          # node:test suites — engine/solver/store/API, the egress guard, and a headless-Chrome render smoke test
+npm test          # node:test suites: engine/solver/store/API, the egress guard, and a headless-Chrome render smoke test
 npm run typecheck # tsc --noEmit over JSDoc types in src/
 ```
 

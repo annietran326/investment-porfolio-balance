@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simulate } from "../src/engine/simulate.mjs";
-import { requiredIncome, goalMet, SOLVER_CAP, ROUND_TO } from "../src/engine/solver.mjs";
+import { requiredIncome, requiredSavings, goalMet, SOLVER_CAP, ROUND_TO, GAP_CAP, GAP_ROUND_TO } from "../src/engine/solver.mjs";
 import {
   SCENARIOS,
   STRESS_VACANCY_MONTHS,
@@ -12,23 +12,30 @@ import {
   SPEND_SHOCK_MULT,
 } from "../src/engine/scenarios.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
+import { newAccount } from "../src/model/schema.mjs";
+
+/** Replace a plan's accounts with one taxable account holding `balance` (basis = balance). */
+function withBalance(s, balance) {
+  s.accounts = [newAccount({ name: "Brokerage", type: "taxable", balance })];
+  return s;
+}
 
 const rich = () => {
   const s = placeholderState();
-  s.portfolio.balance = 20_000_000;
+  withBalance(s, 20_000_000);
   return s;
 };
 const lean = () => {
   const s = placeholderState();
-  s.portfolio.balance = 300_000;
+  withBalance(s, 300_000);
   s.incomes = [];
   s.properties = [];
   return s;
 };
 const hopeless = () => {
   const s = lean();
-  s.portfolio.balance = 0;
-  s.spending = [{ name: "impossible", monthly: 400_000 }]; // $4.8M/yr forever
+  withBalance(s, 0);
+  s.spending = [{ name: "impossible", monthly: 400_000, fromYear: null, toYear: null, growthPct: null }]; // $4.8M/yr forever
   s.work.untilAge = s.profile.currentAge + 1; // 2-year window
   return s;
 };
@@ -69,7 +76,7 @@ test("monotonicity with properties kept: a past sale is never resurrected by sal
   // window — one year back, so the stress overlay's 2-year saleDelayYears
   // would push it INSIDE the window (phantom rent + proceeds) if unguarded.
   const s = placeholderState();
-  s.portfolio.balance = 300_000;
+  withBalance(s, 300_000);
   s.incomes = [];
   s.properties.push({
     name: "Sold before the window",
@@ -112,7 +119,7 @@ test("monotonicity: a longer working window never requires more per year", () =>
 
 test("goalMet picks the amount for the ACTIVE mode only", () => {
   const s = lean();
-  s.portfolio.balance = 5_000_000;
+  withBalance(s, 5_000_000);
   s.endState = { mode: "zero", amounts: { bequest: 50_000_000, floor: 0 } };
   // huge bequest amount is ignored while mode is zero
   assert.ok(goalMet(s, simulate(s)));
@@ -142,75 +149,85 @@ test("scenario keys are unique and base is first", () => {
   assert.equal(keys[0], "base");
 });
 
-// ---- v5: tax flows through the solver + scenarios (no solver.mjs change) ----
+// ---- the gap solver (requiredSavings) ----
 
-const taxOn = { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 50 };
+test("gap: three-way contract, rounded, and tight at the boundary", () => {
+  assert.deepEqual(requiredSavings(rich()), { kind: "met" });
 
-test("solver precondition holds with tax on: end balance is monotone non-decreasing in extra income", () => {
   const s = lean();
-  s.tax = { ...taxOn };
+  const res = requiredSavings(s);
+  assert.equal(res.kind, "value");
+  if (res.kind === "value") {
+    assert.ok(res.amount > 0);
+    assert.equal(res.amount % GAP_ROUND_TO, 0, "rounds up to $1,000");
+    assert.ok(goalMet(s, simulate(s, {}, 0, res.amount)), "the gap closes the plan");
+    assert.ok(!goalMet(s, simulate(s, {}, 0, res.amount - 2000)), "and $2,000 less does not");
+  }
+  assert.deepEqual(requiredSavings(hopeless()), { kind: "unreachable", cap: GAP_CAP });
+});
+
+test("gap: adding exactly the gap to the accounts makes the plan 'met'", () => {
+  const s = lean();
+  const res = requiredSavings(s);
+  assert.equal(res.kind, "value");
+  if (res.kind !== "value") return;
+  const funded = structuredClone(s);
+  funded.accounts.push(newAccount({ name: "The gap", type: "taxable", balance: res.amount }));
+  assert.deepEqual(requiredSavings(funded), { kind: "met" });
+});
+
+test("gap solver precondition: end balance never falls as savings today rise (incl. taxes and the split)", () => {
+  const s = lean();
+  s.accounts = [newAccount({ name: "IRA", type: "traditional_ira", balance: 150_000 }), newAccount({ name: "Brk", type: "taxable", balance: 150_000, costBasis: 20_000 })];
+  s.taxes = { ordinaryIncomePct: 30, capitalGainsPct: 25 };
   let prev = -Infinity;
-  for (let inc = 0; inc <= 400_000; inc += 20_000) {
-    const end = simulate(s, {}, inc).endBal;
-    assert.ok(end >= prev - 1e-6, `endBal must not decrease as income rises (at ${inc})`);
+  for (let x = 0; x <= 3_000_000; x += 50_000) {
+    const end = simulate(s, {}, 0, x).endBal;
+    assert.ok(end >= prev - 1e-6, `endBal dropped as savings rose (at ${x})`);
     prev = end;
   }
 });
 
-test("enabling tax never lowers required income, and genuinely bites on a drawdown plan", () => {
-  const off = requiredIncome(lean());
-  const on = lean();
-  on.tax = { ...taxOn };
-  const onRes = requiredIncome(on);
-  assert.equal(off.kind, "value");
-  assert.equal(onRes.kind, "value");
-  assert.ok(perYearOf(onRes) >= perYearOf(off), "tax on requires >= tax off");
-  // Strict, rounding-proof check: the tax-OFF answer no longer meets the goal
-  // once tax is on — so more income is genuinely needed.
-  assert.ok(!goalMet(on, simulate(on, {}, perYearOf(off))), "tax-off income falls short once tax is on");
-});
-
-test("three-way contract survives with tax enabled — met / value / unreachable, never blank", () => {
-  const withTax = (mk) => {
-    const s = mk();
-    s.tax = { ...taxOn };
-    return s;
-  };
-  assert.equal(requiredIncome(withTax(rich)).kind, "met");
-  assert.equal(requiredIncome(withTax(lean)).kind, "value");
-  assert.deepEqual(requiredIncome(withTax(hopeless)), { kind: "unreachable", cap: SOLVER_CAP });
-});
-
-test("stress scenario × tax: spending +20% with tax on requires at least the same scenario with tax off", () => {
-  const off = lean();
-  const on = lean();
-  on.tax = { ...taxOn };
-  const spend = SCENARIOS.find((x) => x.key === "spend");
-  assert.ok(spend);
-  assert.ok(perYearOf(requiredIncome(on, spend.overlay)) >= perYearOf(requiredIncome(off, spend.overlay)));
-});
-
-test("regression: capped tax keeps end balance monotone across a balance zero-crossing (fine sweep)", () => {
-  // A 2-year plan where year 1 is a pure drawdown whose starting balance IS
-  // year 0's end balance — which crosses zero as extra income rises. An uncapped
-  // all-or-nothing withdrawal tax jumps endBal DOWN at that crossing (more income
-  // → lower endBal), breaking bisection. The capped tax is continuous, so a fine
-  // $1,000 sweep must never see endBal drop as income rises.
-  const s = placeholderState();
-  s.profile = { currentAge: 40, endAge: 42, currentYear: 2026 };
-  s.portfolio = { balance: 120_000, realReturnPct: 0 };
-  s.properties = [];
-  s.incomes = [];
-  s.spending = [{ name: "spend", monthly: 10_000, fromYear: null, toYear: null, realGrowthPct: 0 }];
-  s.social = { startAge: 67, monthly: 0, haircutPct: 25 };
-  s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 40 };
-  s.household = { people: [] };
-  s.work = { untilAge: 40 }; // solver income applies to year 0 only
-  s.tax = { enabled: true, effectiveGainsRatePct: 40, embeddedGainPct: 100 }; // sharp g·r = 0.4
+test("income solver precondition: end balance never falls as extra income rises", () => {
+  const s = lean();
+  s.taxes = { ordinaryIncomePct: 30, capitalGainsPct: 25 };
+  s.accounts = [newAccount({ name: "Brk", type: "taxable", balance: 300_000, costBasis: 50_000 })];
   let prev = -Infinity;
-  for (let inc = 0; inc <= 240_000; inc += 1000) {
+  for (let inc = 0; inc <= 400_000; inc += 10_000) {
     const end = simulate(s, {}, inc).endBal;
-    assert.ok(end >= prev - 1e-6, `endBal dropped as income rose (at income ${inc})`);
+    assert.ok(end >= prev - 1e-6, `endBal dropped as income rose (at ${inc})`);
     prev = end;
   }
+});
+
+test("gap monotonicity: every stress scenario needs at least the base gap; bigger safe buckets cost more", () => {
+  const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
+  const s = lean();
+  const base = gapOf(requiredSavings(s));
+  for (const sc of SCENARIOS) {
+    assert.ok(gapOf(requiredSavings(s, sc.overlay)) >= base, `${sc.key} gap >= base`);
+  }
+  // Holding more years in 0%-real capital preservation lowers expected returns,
+  // so with no crashes in the simple model it can only raise the gap.
+  const cautious = lean();
+  cautious.buckets = { ...cautious.buckets, preservationYears: 12, incomeThroughYear: 20 };
+  const bold = lean();
+  bold.buckets = { ...bold.buckets, preservationYears: 2, incomeThroughYear: 10 };
+  assert.ok(gapOf(requiredSavings(cautious)) >= gapOf(requiredSavings(s)));
+  assert.ok(gapOf(requiredSavings(s)) >= gapOf(requiredSavings(bold)));
+});
+
+test("higher taxes never shrink the gap; a traditional IRA needs more than the same money in a Roth", () => {
+  const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
+  const roth = lean();
+  roth.accounts = [newAccount({ name: "Roth", type: "roth_ira", balance: 300_000 })];
+  const trad = lean();
+  trad.accounts = [newAccount({ name: "IRA", type: "traditional_ira", balance: 300_000 })];
+  assert.ok(gapOf(requiredSavings(trad)) > gapOf(requiredSavings(roth)), "ordinary tax (and the early penalty) cost real money");
+  const hiTax = lean();
+  hiTax.taxes = { ordinaryIncomePct: 40, capitalGainsPct: 30 };
+  hiTax.accounts = [newAccount({ name: "Brk", type: "taxable", balance: 300_000, costBasis: 100_000 })];
+  const loTax = structuredClone(hiTax);
+  loTax.taxes = { ordinaryIncomePct: 10, capitalGainsPct: 5 };
+  assert.ok(gapOf(requiredSavings(hiTax)) >= gapOf(requiredSavings(loTax)));
 });

@@ -52,9 +52,11 @@ function makeStore(dir, iso = "2026-07-10T10:00:00.000Z") {
   return { store, clockRef, opts };
 }
 
+// One taxable account holding `balance`, so the trend row's totalBalance
+// (the sum of all accounts) equals the marker value.
 function stateWithBalance(balance) {
   const s = placeholderState();
-  s.portfolio.balance = balance;
+  s.accounts = [{ ...s.accounts[0], balance, costBasis: null }];
   return s;
 }
 
@@ -141,7 +143,7 @@ test("first save of a date: current + one snapshot + one trend row; 20 same-day 
   assert.equal(current.workspaceVersion, WORKSPACE_VERSION);
   const active = current.scenarios.find((s) => s.id === current.activeId);
   assert.equal(active.name, "Base plan");
-  assert.equal(active.state.portfolio.balance, 1_000_018, "current.json still updates every save");
+  assert.equal(active.state.accounts[0].balance, 1_000_018, "current.json still updates every save");
 
   const row = JSON.parse(trendLines(dir)[0]);
   assert.equal(row.v, 2, "trend rows are v2 now");
@@ -150,7 +152,7 @@ test("first save of a date: current + one snapshot + one trend row; 20 same-day 
   assert.equal(row.rev, 1);
   assert.equal(row.scenario, "Base plan", "trend row carries the active scenario name");
   assert.equal(row.totalBalance, 1_000_000);
-  assert.equal(row.monthlySpend, 3500 + 2500 + 1200 + 1500); // placeholder incl. active dependent line
+  assert.equal(row.monthlySpend, 3500 + 3000 + 1200); // the placeholder's spending lines
   assert.ok(["met", "value", "unreachable"].includes(row.requiredBase.kind));
   assert.ok(["met", "value", "unreachable"].includes(row.requiredWorst.kind));
   assert.ok(!("rev" in current), "rev is server-owned, never inside current.json");
@@ -311,8 +313,8 @@ test("restore skips the pre-restore snapshot in corrupt-recovery (no current.jso
   const result = store.restore(snap.file, { baseRev: 1 });
   assert.equal(result.rev, 2);
   assert.ok(!store.listSnapshots().some((s) => s.source === "restore"), "no pre-snapshot when current was already gone");
-  assert.equal(activeState(result.workspace).portfolio.balance, 42);
-  assert.equal(activeStateOnDisk(dir).portfolio.balance, 42);
+  assert.equal(activeState(result.workspace).accounts[0].balance, 42);
+  assert.equal(activeStateOnDisk(dir).accounts[0].balance, 42);
 });
 
 test("snapshot with missing schemaVersion refuses to restore", () => {
@@ -326,7 +328,7 @@ test("snapshot with missing schemaVersion refuses to restore", () => {
     () => store.restore("2026-07-01T00-00-00-000Z-edit.json", { baseRev: 1 }),
     SnapshotCorruptError
   );
-  assert.equal(activeStateOnDisk(dir).portfolio.balance, 7);
+  assert.equal(activeStateOnDisk(dir).accounts[0].balance, 7);
   assert.equal(store.rev(), 1);
 });
 
@@ -347,7 +349,7 @@ test("reset: snapshots current, deletes it, bumps rev, returns to unseeded; rev-
   const newest = store.listSnapshots()[0];
   const preserved = JSON.parse(readFileSync(join(dir, "snapshots", newest.file), "utf8"));
   const preservedActive = preserved.scenarios.find((s) => s.id === preserved.activeId);
-  assert.equal(preservedActive.state.portfolio.balance, 777_000, "snapshot carries the pre-reset state");
+  assert.equal(preservedActive.state.accounts[0].balance, 777_000, "snapshot carries the pre-reset state");
   assert.deepEqual(store.load(), { seeded: false }, "store is unseeded again — placeholder stays in memory");
 });
 
@@ -415,7 +417,7 @@ test("bare pre-workspace state file is wrapped to a Base-plan workspace on load 
   assert.equal(result.seeded, true);
   assert.equal(result.migrated, true, "wrapping a bare state is a migration");
   assert.equal(result.rev, before + 1, "the wrap rewrite bumps the rev");
-  assert.equal(activeState(result.workspace).portfolio.balance, 1_250_000);
+  assert.equal(activeState(result.workspace).accounts[0].balance, 1_250_000);
   assert.equal(result.workspace.scenarios.length, 1);
   assert.equal(result.workspace.scenarios[0].name, "Base plan");
 
@@ -423,7 +425,7 @@ test("bare pre-workspace state file is wrapped to a Base-plan workspace on load 
   const onDisk = JSON.parse(readFileSync(join(dir, "current.json"), "utf8"));
   assert.equal(onDisk.workspaceVersion, WORKSPACE_VERSION);
   assert.ok(Array.isArray(onDisk.scenarios));
-  assert.equal(activeStateOnDisk(dir).portfolio.balance, 1_250_000);
+  assert.equal(activeStateOnDisk(dir).accounts[0].balance, 1_250_000);
 
   // …and the pre-migration bytes are preserved as a "migration" snapshot.
   const migSnap = store.listSnapshots().find((s) => s.source === "migration");
@@ -470,8 +472,8 @@ test("an older-version workspace migrates each scenario's state on load", () => 
     assert.equal(sc.state.schemaVersion, SCHEMA_VERSION, "each scenario migrated to current schema");
     assert.ok(Array.isArray(sc.state.household.people), "v4 household present after ladder");
   }
-  assert.equal(result.workspace.scenarios[0].state.portfolio.balance, 100);
-  assert.equal(result.workspace.scenarios[1].state.portfolio.balance, 200);
+  assert.equal(result.workspace.scenarios[0].state.accounts[0].balance, 100);
+  assert.equal(result.workspace.scenarios[1].state.accounts[0].balance, 200);
 
   // On-disk is now the migrated workspace, and the pre-migration bytes snapshotted.
   assert.equal(activeStateOnDisk(dir).schemaVersion, SCHEMA_VERSION);
@@ -495,7 +497,7 @@ test("manifest rev/schemaVersion are advisory — the file's own schemaVersion g
   const result = store2.load(); // no FutureVersionError from the manifest's 99
   assert.equal(result.seeded, true);
   assert.equal(result.migrated, false, "already-current workspace is not re-migrated on load");
-  assert.equal(activeState(result.workspace).portfolio.balance, 999);
+  assert.equal(activeState(result.workspace).accounts[0].balance, 999);
   assert.equal(store2.rev(), 999, "rev restored from manifest");
   assert.equal(store2.identity(), manifest.identity, "identity survives");
 });
@@ -550,7 +552,7 @@ test("ordering invariant: crash after current-commit leaves no phantom trend row
   clockRef.t = new Date("2026-07-11T09:00:00.000Z"); // a new day WOULD snapshot+trend
   opts._failAfter = "current-write";
   assert.throws(() => store.save(wsWith(2)), /injected failure/);
-  assert.equal(activeStateOnDisk(dir).portfolio.balance, 2, "current committed");
+  assert.equal(activeStateOnDisk(dir).accounts[0].balance, 2, "current committed");
   assert.equal(trendLines(dir).length, 1, "no phantom trend row");
   assert.equal(snapFiles(dir).length, 1, "no snapshot either");
   assert.equal(store.rev(), 1, "rev bump never happened");
@@ -572,7 +574,7 @@ test("temp-write failure: save throws, prior current.json intact and parseable",
   } finally {
     chmodSync(dir, 0o755);
   }
-  assert.equal(activeStateOnDisk(dir).portfolio.balance, 777);
+  assert.equal(activeStateOnDisk(dir).accounts[0].balance, 777);
 });
 
 test("save rejects invalid state with ValidationError carrying issues", () => {

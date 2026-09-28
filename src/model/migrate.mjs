@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty, newTax } from "./schema.mjs";
+import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty, newAccount, newBuckets, newEconomy, newTaxes } from "./schema.mjs";
 
 export class MissingVersionError extends Error {
   constructor() {
@@ -50,7 +50,7 @@ function migrateV0(v0) {
     },
     portfolio: {
       balance: num(v0?.portfolio?.balance, 0),
-      realReturnPct: num(v0?.portfolio?.realReturnPct, d.portfolio.realReturnPct),
+      realReturnPct: num(v0?.portfolio?.realReturnPct, 3.5),
     },
     properties: arr(v0?.properties).map((p) => ({
       name: str(p?.name, "property"),
@@ -107,9 +107,11 @@ function migrateV1(v1) {
   return {
     ...v1,
     schemaVersion: 2,
-    properties: arr(v1.properties).map((p) => newProperty(p)),
-    incomes: arr(v1.incomes).map((inc) => newIncome(inc)),
-    spending: arr(v1.spending).map((c) => newSpendingCategory(c)),
+    // v2 shapes, written literally: the factories now build v6 rows, and the
+    // v5 -> v6 rung below is what converts the real-growth fields.
+    properties: arr(v1.properties).map((p) => ({ ...p, rentRealGrowthPct: p.rentRealGrowthPct ?? 0, costsRealGrowthPct: p.costsRealGrowthPct ?? 0 })),
+    incomes: arr(v1.incomes).map((inc) => ({ ...inc, realGrowthPct: inc.realGrowthPct ?? 0 })),
+    spending: arr(v1.spending).map((c) => ({ fromYear: null, toYear: null, ...c, realGrowthPct: c.realGrowthPct ?? 0 })),
     household: { people: [] },
   };
 }
@@ -166,7 +168,66 @@ function migrateV3(v3) {
  * @returns {import("./schema.mjs").RunwayState}
  */
 function migrateV4(v4) {
-  return { ...v4, schemaVersion: 5, tax: newTax() };
+  return { ...v4, schemaVersion: 5, tax: { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 } };
+}
+
+// The inflation rate assumed when converting old "real" (after-inflation)
+// growth rates into the actual rates v6 stores. Matches newEconomy().
+const MIGRATION_INFLATION_PCT = 2.5;
+
+/**
+ * Old real growth (vs inflation) -> v6 actual growth. 0 meant "moves with
+ * inflation", which v6 spells as null; anything else is compounded with
+ * inflation, e.g. +1% real -> 3.53% actual.
+ * @param {unknown} real
+ * @returns {number|null}
+ */
+function realToActualGrowth(real) {
+  if (typeof real !== "number" || Number.isNaN(real) || real === 0) return null;
+  const actual = ((1 + real / 100) * (1 + MIGRATION_INFLATION_PCT / 100) - 1) * 100;
+  return Math.round(actual * 100) / 100;
+}
+
+/**
+ * v5 -> v6: the multi-account, three-bucket model.
+ *   - The single portfolio balance becomes one taxable account. Its cost basis
+ *     comes from the old "taxable-gain share" (50% gain share -> basis is half
+ *     the balance), which was the old model's only notion of basis.
+ *   - The old single real return is dropped: returns now come from the three
+ *     bucket assumptions and the time-based split.
+ *   - The old withdrawal-tax section becomes the taxes section (its capital
+ *     gains rate carries over).
+ *   - Every real growth rate becomes an actual rate (null = with inflation).
+ * @param {any} v5
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV5(v5) {
+  const { portfolio, tax, ...rest } = v5;
+  const balance = num(portfolio?.balance, 0);
+  const gainShare = Math.min(100, Math.max(0, num(tax?.embeddedGainPct, 50)));
+  const accounts = balance > 0
+    ? [newAccount({ name: "Portfolio (from the old app)", type: "taxable", balance, costBasis: Math.round(balance * (1 - gainShare / 100)) })]
+    : [];
+  return {
+    ...rest,
+    schemaVersion: 6,
+    economy: newEconomy(),
+    accounts,
+    buckets: newBuckets(),
+    taxes: { ...newTaxes(), capitalGainsPct: num(tax?.effectiveGainsRatePct, newTaxes().capitalGainsPct) },
+    properties: arr(v5.properties).map((/** @type {any} */ p) => {
+      const { rentRealGrowthPct, costsRealGrowthPct, ...pr } = p;
+      return newProperty({ ...pr, rentGrowthPct: realToActualGrowth(rentRealGrowthPct), costsGrowthPct: realToActualGrowth(costsRealGrowthPct) });
+    }),
+    incomes: arr(v5.incomes).map((/** @type {any} */ inc) => {
+      const { realGrowthPct, ...ir } = inc;
+      return newIncome({ ...ir, growthPct: realToActualGrowth(realGrowthPct) });
+    }),
+    spending: arr(v5.spending).map((/** @type {any} */ c) => {
+      const { realGrowthPct, ...cr } = c;
+      return newSpendingCategory({ ...cr, growthPct: realToActualGrowth(realGrowthPct) });
+    }),
+  };
 }
 
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
@@ -176,6 +237,7 @@ const RUNGS = {
   2: migrateV2,
   3: migrateV3,
   4: migrateV4,
+  5: migrateV5,
 };
 
 /**

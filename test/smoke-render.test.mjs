@@ -147,7 +147,9 @@ test("the app renders in a real browser (boot runs, verdict + rows paint, no fai
     const presetButtons = await ev('document.querySelectorAll("#agePresets button").length');
     const verdict = await ev('document.getElementById("verdictHeadline")?.textContent ?? ""');
     const scenarioRows = await ev('document.querySelectorAll("#scenarioRows > tr").length');
-    const balance = await ev('document.getElementById("f-balance")?.value ?? ""');
+    const balance = await ev('document.querySelector("#accountList input[data-key=balance]")?.value ?? ""');
+    const split = await ev('document.getElementById("kpiEq")?.textContent ?? ""');
+    const glideRows = await ev('document.querySelectorAll("#glideRows > tr").length');
 
     // favicon 404 is benign (not part of the module graph) — everything else must load.
     const realErrors = errors.filter((e) => !/favicon\.ico/.test(e));
@@ -156,7 +158,9 @@ test("the app renders in a real browser (boot runs, verdict + rows paint, no fai
     assert.equal(presetButtons, 3, "boot did not run (age-preset buttons never appended)");
     assert.ok(verdict.length > 0, "verdict headline is blank — results never rendered");
     assert.equal(scenarioRows, 5, "scenario table did not populate");
-    assert.ok(balance.length > 0, "balance field never populated from state");
+    assert.ok(balance.length > 0, "account balance field never populated from state");
+    assert.match(split, /%$/, "recommended split never rendered");
+    assert.ok(glideRows > 0, "the split-over-time table did not populate");
   } finally {
     client?.close();
     // Wait for Chrome to ACTUALLY exit before deleting its profile dir. kill()

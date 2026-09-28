@@ -1,7 +1,7 @@
 {
   "name": "runway",
   "version": "0.1.0",
-  "description": "Local-first runway / die-with-zero retirement calculator. Answers: do I still need to work — and if so, how much per year, until when?",
+  "description": "Local-first retirement calculator: how to split money across capital preservation, high income, and global equities, and whether it lasts (and if not, the gap in today's dollars).",
   "type": "module",
   "license": "MIT",
   "engines": {

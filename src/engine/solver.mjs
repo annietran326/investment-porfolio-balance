@@ -1,8 +1,9 @@
-// The required-income solver — the inversion that is this app's reason to
-// exist. Given a state and a scenario, find the minimum net annual income
-// (earned from now through work.untilAge) that lands the plan on its chosen
-// end state. Bisection: end balance is monotone in extra income, so the
-// search is sound.
+// The two solvers. Both invert the simulation by bisection (the end balance
+// only ever rises as the variable rises, so the search is sound):
+//   - requiredSavings: the GAP. How much more money, invested today, the plan
+//     needs to land on its chosen end state. This is the headline answer.
+//   - requiredIncome: how much after-tax income, earned from now through
+//     work.untilAge, would close the same gap instead.
 import { simulate } from "./simulate.mjs";
 
 // Explicit, named, visible. If a plan genuinely needs more than $2M/yr of
@@ -53,4 +54,37 @@ export function requiredIncome(s, overlay = {}) {
     else lo = mid;
   }
   return { kind: "value", perYear: Math.ceil(hi / ROUND_TO) * ROUND_TO, untilAge: s.work.untilAge };
+}
+
+// The gap solver's ceiling: a plan more than $50M short is "unreachable".
+export const GAP_CAP = 50_000_000;
+// Gap answers round UP to the nearest $1,000.
+export const GAP_ROUND_TO = 1000;
+const GAP_PRECISION = 500;
+
+/**
+ * Three-way gap outcome.
+ * @typedef {{kind: "met"}
+ *   | {kind: "value", amount: number}
+ *   | {kind: "unreachable", cap: number}} GapResult
+ */
+
+/**
+ * The gap: the smallest extra amount (today's $), added to the taxable account
+ * today and invested in the recommended split, that lands the end state.
+ * @param {import("../model/schema.mjs").RunwayState} s validated state
+ * @param {import("./simulate.mjs").ScenarioOverlay} [overlay]
+ * @returns {GapResult}
+ */
+export function requiredSavings(s, overlay = {}) {
+  if (goalMet(s, simulate(s, overlay, 0, 0))) return { kind: "met" };
+  if (!goalMet(s, simulate(s, overlay, 0, GAP_CAP))) return { kind: "unreachable", cap: GAP_CAP };
+  let lo = 0;
+  let hi = GAP_CAP;
+  while (hi - lo > GAP_PRECISION) {
+    const mid = (lo + hi) / 2;
+    if (goalMet(s, simulate(s, overlay, 0, mid))) hi = mid;
+    else lo = mid;
+  }
+  return { kind: "value", amount: Math.ceil(hi / GAP_ROUND_TO) * GAP_ROUND_TO };
 }

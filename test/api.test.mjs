@@ -72,26 +72,26 @@ test("GET /api/state unseeded returns the placeholder, seeded:false, rev 0, one 
 
 test("PUT /api/state with baseRev saves and increments rev", async () => {
   const state = placeholderState();
-  state.portfolio.balance = 1_234_567;
+  state.accounts[0].balance = 1_234_567;
   const { status, body } = await sendJson("PUT", "/api/state", { state, baseRev: 0 });
   assert.equal(status, 200);
   assert.equal(body.rev, 1);
   assert.deepEqual(body.warnings, []);
   const after1 = await getJson("/api/state");
   assert.equal(after1.body.seeded, true);
-  assert.equal(after1.body.state.portfolio.balance, 1_234_567);
+  assert.equal(after1.body.state.accounts[0].balance, 1_234_567);
 });
 
 test("stale baseRev → 409 with current rev; disk unchanged", async () => {
   const state = placeholderState();
-  state.portfolio.balance = 55;
+  state.accounts[0].balance = 55;
   const { status, body } = await sendJson("PUT", "/api/state", { state, baseRev: 0 });
   assert.equal(status, 409);
   assert.equal(body.rev, 1);
   // current.json is a workspace — read the active scenario's state.
   const onDisk = JSON.parse(readFileSync(join(dir, "current.json"), "utf8"));
   const onDiskState = onDisk.scenarios.find((s) => s.id === onDisk.activeId).state;
-  assert.equal(onDiskState.portfolio.balance, 1_234_567, "stale write never lands");
+  assert.equal(onDiskState.accounts[0].balance, 1_234_567, "stale write never lands");
 });
 
 test("PUT with text in a numeric field → 400 naming the path", async () => {
@@ -115,7 +115,7 @@ test("restore endpoint: 409 on stale rev, 404 on unknown file, 200 round-trip", 
   // Make current differ from the day's first-save snapshot.
   const rev = await currentRev();
   const changed = placeholderState();
-  changed.portfolio.balance = 42;
+  changed.accounts[0].balance = 42;
   await sendJson("PUT", "/api/state", { state: changed, baseRev: rev });
 
   const snaps = (await getJson("/api/snapshots")).body.snapshots;
@@ -137,7 +137,7 @@ test("restore endpoint: 409 on stale rev, 404 on unknown file, 200 round-trip", 
   assert.equal(ok.status, 200);
   assert.equal(ok.body.rev, rev + 2);
   const state = (await getJson("/api/state")).body.state;
-  assert.equal(state.portfolio.balance, 1_234_567, "snapshot content restored");
+  assert.equal(state.accounts[0].balance, 1_234_567, "snapshot content restored");
 });
 
 test("GET /api/trends parses rows and skips a hand-planted torn line", async () => {
@@ -216,7 +216,7 @@ test("POST /api/reset snapshots current, returns to unseeded placeholder; 409 on
 test("POST /api/scenarios/create mode:copy duplicates the active scenario's state and makes it active", async () => {
   // Re-seed the active scenario with a recognizable balance.
   const seed = placeholderState();
-  seed.portfolio.balance = 2_222_222;
+  seed.accounts[0].balance = 2_222_222;
   const seeded = await sendJson("PUT", "/api/state", { state: seed, baseRev: await currentRev() });
   assert.equal(seeded.status, 200);
 
@@ -230,13 +230,13 @@ test("POST /api/scenarios/create mode:copy duplicates the active scenario's stat
   assert.equal(res.body.scenarios.length, 2, "scenario list grows");
   assert.equal(res.body.scenarios[1].name, "Copy plan");
   assert.equal(res.body.activeId, res.body.scenarios[1].id, "the new scenario becomes active");
-  assert.equal(res.body.state.portfolio.balance, 2_222_222, "copy duplicates the active state");
+  assert.equal(res.body.state.accounts[0].balance, 2_222_222, "copy duplicates the active state");
 
   // GET reflects the new active scenario and the two-entry bar.
   const state = await getJson("/api/state");
   assert.equal(state.body.activeId, res.body.activeId);
   assert.equal(state.body.scenarios.length, 2);
-  assert.equal(state.body.state.portfolio.balance, 2_222_222);
+  assert.equal(state.body.state.accounts[0].balance, 2_222_222);
 });
 
 test("POST /api/scenarios/create mode:scratch adds a fresh empty-default plan (not a copy), made active", async () => {
@@ -248,7 +248,7 @@ test("POST /api/scenarios/create mode:scratch adds a fresh empty-default plan (n
   assert.equal(res.body.activeId, res.body.scenarios[2].id, "scratch scenario becomes active");
   // Fresh default is an empty plan (balance 0, no properties), NOT a copy of the
   // 2,222,222 active state.
-  assert.equal(res.body.state.portfolio.balance, 0, "scratch is a fresh default, not a copy");
+  assert.equal(res.body.state.accounts.length, 0, "scratch is a fresh default (no accounts), not a copy");
   assert.equal(res.body.state.properties.length, 0);
 });
 
@@ -271,7 +271,7 @@ test("POST /api/scenarios/switch changes the active state; 404 unknown; 409 stal
   assert.equal(ok.status, 200);
   assert.equal(ok.body.rev, rev + 1);
   assert.equal(ok.body.activeId, copyId);
-  assert.equal(ok.body.state.portfolio.balance, 2_222_222, "active state follows the pointer");
+  assert.equal(ok.body.state.accounts[0].balance, 2_222_222, "active state follows the pointer");
   assert.equal((await getJson("/api/state")).body.activeId, copyId);
 });
 

@@ -78,7 +78,7 @@ async function healthRev() {
 
 function putBody(balance, baseRev) {
   const state = placeholderState();
-  state.portfolio.balance = balance;
+  state.accounts[0].balance = balance;
   return JSON.stringify({ state, baseRev });
 }
 

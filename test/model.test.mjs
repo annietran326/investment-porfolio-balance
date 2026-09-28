@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, newTax, reanchorYears } from "../src/model/schema.mjs";
+import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, newBuckets, newTaxes, newEconomy, reanchorYears } from "../src/model/schema.mjs";
 import { migrate, MissingVersionError, FutureVersionError } from "../src/model/migrate.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 
@@ -50,19 +50,19 @@ test("text in a numeric field is an error naming the path", () => {
 
 test("saleYear null is keep-forever (valid); 0 is an error; number is valid", () => {
   const s = placeholderState();
-  s.properties[1].saleYear = null;
+  s.properties[0].saleYear = null;
   assert.deepEqual(validate(s).errors, []);
-  s.properties[1].saleYear = 0;
-  assert.ok(validate(s).errors.some((e) => e.path === "properties[1].saleYear"));
+  s.properties[0].saleYear = 0;
+  assert.ok(validate(s).errors.some((e) => e.path === "properties[0].saleYear"));
 });
 
 test("sale year set without proceeds warns", () => {
   const s = placeholderState();
-  s.properties[1].saleYear = 2030;
-  s.properties[1].saleNetProceeds = null;
+  s.properties[0].saleYear = 2030;
+  s.properties[0].saleNetProceeds = null;
   const { errors, warnings } = validate(s);
   assert.deepEqual(errors, []);
-  assert.ok(warnings.some((w) => w.path === "properties[1].saleNetProceeds"));
+  assert.ok(warnings.some((w) => w.path === "properties[0].saleNetProceeds"));
 });
 
 test("income window and end-age ordering rules", () => {
@@ -144,21 +144,23 @@ test("v1 → current migration is additive: preserves values, adds safe defaults
   assert.equal(migrated, true);
   assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.deepEqual(validate(state).errors, []);
-  // every v1 value preserved
-  assert.equal(state.portfolio.balance, 900000);
+  // every v1 value preserved (the single balance became one taxable account)
+  assert.equal(state.accounts.length, 1);
+  assert.equal(state.accounts[0].type, "taxable");
+  assert.equal(state.accounts[0].balance, 900000);
   assert.equal(state.incomes[0].annual, 150000);
   assert.equal(state.incomes[0].toYear, 2028);
   assert.equal(state.spending[0].monthly, 4000);
   assert.equal(state.endState.amounts.bequest, 100000);
   assert.equal(state.properties[0].payoffYear, 2040);
   assert.equal(state.properties[0].saleYear, null);
-  // new fields default to "no change"
+  // new fields default to "no change": open windows, rates that follow inflation
   assert.equal(state.spending[0].fromYear, null);
   assert.equal(state.spending[0].toYear, null);
-  assert.equal(state.spending[0].realGrowthPct, 0);
-  assert.equal(state.incomes[0].realGrowthPct, 0);
-  assert.equal(state.properties[0].rentRealGrowthPct, 0);
-  assert.equal(state.properties[0].costsRealGrowthPct, 0);
+  assert.equal(state.spending[0].growthPct, null);
+  assert.equal(state.incomes[0].growthPct, null);
+  assert.equal(state.properties[0].rentGrowthPct, null);
+  assert.equal(state.properties[0].costsGrowthPct, null);
   assert.deepEqual(state.household, { people: [] });
 });
 
@@ -174,7 +176,8 @@ test("v0 → … → current chains through every rung", () => {
   assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.deepEqual(validate(state).errors, []);
   assert.deepEqual(state.household, { people: [] });
-  assert.equal(state.spending[0].realGrowthPct, 0);
+  assert.equal(state.spending[0].growthPct, null);
+  assert.equal(state.accounts[0].balance, 1500000);
 });
 
 test("v2 → current migration adds dependent support fields; v3 lump sum becomes a one-year window", () => {
@@ -210,19 +213,19 @@ test("reanchorYears shifts every year field by the delta and preserves nulls", (
   const s = placeholderState(); // BASE_YEAR 2026
   const moved = reanchorYears(s, 2030); // +4
   assert.equal(moved.profile.currentYear, 2030);
-  assert.equal(moved.properties[0].saleYear, s.properties[0].saleYear + 4);
-  assert.equal(moved.properties[1].saleYear, null); // keep-forever stays null
+  assert.equal(moved.properties[0].payoffYear, s.properties[0].payoffYear + 4);
+  assert.equal(moved.properties[0].saleYear, null); // keep-forever stays null
   assert.equal(moved.incomes[0].fromYear, s.incomes[0].fromYear + 4);
   assert.equal(moved.incomes[0].toYear, s.incomes[0].toYear + 4);
-  assert.equal(moved.spending.find((c) => c.toYear !== null)?.toYear, 2038 + 4);
-  assert.equal(moved.household.people[1].toYear, 2044 + 4);
+  assert.equal(moved.spending[0].toYear, null); // perpetual stays null
+  assert.equal(moved.household.people[1].toYear, 2040 + 4);
   // delta 0 is identity
   assert.equal(reanchorYears(s, s.profile.currentYear), s);
   // original untouched (pure)
   assert.equal(s.profile.currentYear, 2026);
 });
 
-test("v2 validation: spending window ordering, growth type, and extreme-growth warning", () => {
+test("spending validation: window ordering, growth type, and extreme-growth warning", () => {
   const s = placeholderState();
   s.spending[1].fromYear = 2030;
   s.spending[1].toYear = 2025;
@@ -230,12 +233,16 @@ test("v2 validation: spending window ordering, growth type, and extreme-growth w
 
   const s2 = placeholderState();
   // @ts-expect-error deliberate wrong type
-  s2.spending[0].realGrowthPct = "3%";
-  assert.ok(validate(s2).errors.some((e) => e.path === "spending[0].realGrowthPct"));
+  s2.spending[0].growthPct = "3%";
+  assert.ok(validate(s2).errors.some((e) => e.path === "spending[0].growthPct"));
 
   const s3 = placeholderState();
-  s3.spending[0].realGrowthPct = 25; // extreme real growth → warn (likely nominal)
-  assert.ok(validate(s3).warnings.some((w) => w.path === "spending[0].realGrowthPct"));
+  s3.spending[0].growthPct = 40; // extreme → warn (likely a typo)
+  assert.ok(validate(s3).warnings.some((w) => w.path === "spending[0].growthPct"));
+
+  const s3b = placeholderState();
+  s3b.spending[0].growthPct = null; // blank = with inflation, valid
+  assert.deepEqual(validate(s3b).errors, []);
 
   const s4 = placeholderState();
   s4.spending[0].toYear = 2000; // ended in the past
@@ -264,59 +271,119 @@ test("v2 validation: household people and spouse sub-objects", () => {
   assert.ok(validate(badRole).errors.some((e) => e.path === "household.people[1].role"));
 });
 
-// ---- v5 (optional effective-rate withdrawal tax) ----
+// ---- v6: accounts, buckets, taxes, inflation ----
 
-test("default and placeholder states carry a disabled tax section that validates clean", () => {
+test("default and placeholder states carry v6 sections that validate clean", () => {
   for (const s of [defaultState(), placeholderState()]) {
-    assert.equal(s.tax.enabled, false, "ships disabled");
-    assert.equal(typeof s.tax.effectiveGainsRatePct, "number");
-    assert.equal(typeof s.tax.embeddedGainPct, "number");
+    assert.deepEqual(s.economy, newEconomy());
+    assert.deepEqual(s.buckets, newBuckets());
+    assert.deepEqual(s.taxes, newTaxes());
     const { errors, warnings } = validate(s);
     assert.deepEqual(errors, []);
     assert.deepEqual(warnings, []);
   }
+  assert.deepEqual(newBuckets(), { preservationReturnPct: 2.5, incomeReturnPct: 5.5, equitiesReturnPct: 9.5, preservationYears: 8, incomeThroughYear: 15 });
+  assert.equal(newEconomy().inflationPct, 2.5);
 });
 
-test("tax validation: enabled must be boolean, rates must be numbers, section required", () => {
-  const badEnabled = placeholderState();
-  // @ts-expect-error deliberate wrong type
-  badEnabled.tax.enabled = "yes";
-  assert.ok(validate(badEnabled).errors.some((e) => e.path === "tax.enabled"));
+test("account validation: type, numbers, negative balance, basis and match sanity", () => {
+  const badType = placeholderState();
+  // @ts-expect-error deliberate bad type
+  badType.accounts[0].type = "hsa";
+  assert.ok(validate(badType).errors.some((e) => e.path === "accounts[0].type"));
 
-  const badRate = placeholderState();
+  const neg = placeholderState();
+  neg.accounts[1].balance = -5;
+  assert.ok(validate(neg).errors.some((e) => e.path === "accounts[1].balance"));
+
+  const text = placeholderState();
   // @ts-expect-error deliberate wrong type
-  badRate.tax.effectiveGainsRatePct = "18";
-  assert.ok(validate(badRate).errors.some((e) => e.path === "tax.effectiveGainsRatePct"));
+  text.accounts[0].costBasis = "380k";
+  assert.ok(validate(text).errors.some((e) => e.path === "accounts[0].costBasis"));
+
+  const loss = placeholderState();
+  loss.accounts[0].costBasis = loss.accounts[0].balance + 1; // unrealized loss: fine, but flagged
+  const lossResult = validate(loss);
+  assert.deepEqual(lossResult.errors, []);
+  assert.ok(lossResult.warnings.some((w) => w.path === "accounts[0].costBasis"));
+
+  const rothMatch = placeholderState();
+  rothMatch.accounts[3].employerMatchAnnual = 1000;
+  assert.ok(validate(rothMatch).warnings.some((w) => w.path === "accounts[3].employerMatchAnnual"));
+});
+
+test("bucket validation: cutoffs ordered, returns numeric, odd return order warns", () => {
+  const order = placeholderState();
+  order.buckets.incomeThroughYear = 5; // before preservation's 8
+  assert.ok(validate(order).errors.some((e) => e.path === "buckets.incomeThroughYear"));
+
+  const neg = placeholderState();
+  neg.buckets.preservationYears = -1;
+  assert.ok(validate(neg).errors.some((e) => e.path === "buckets.preservationYears"));
+
+  const zero = placeholderState();
+  zero.buckets.preservationYears = 0; // no capital preservation bucket at all: allowed
+  assert.deepEqual(validate(zero).errors, []);
+
+  const flipped = placeholderState();
+  flipped.buckets.equitiesReturnPct = 1;
+  const r = validate(flipped);
+  assert.deepEqual(r.errors, []);
+  assert.ok(r.warnings.some((w) => w.path === "buckets.equitiesReturnPct"));
 
   const missing = placeholderState();
   // @ts-expect-error deliberate missing section
-  delete missing.tax;
-  assert.ok(validate(missing).errors.some((e) => e.path === "tax" && /missing section/.test(e.message)));
+  delete missing.buckets;
+  assert.ok(validate(missing).errors.some((e) => e.path === "buckets" && /missing section/.test(e.message)));
 });
 
-test("tax rates outside expected bands warn but do not reject", () => {
+test("tax rates and inflation outside expected bands warn but do not reject", () => {
   const hot = placeholderState();
-  hot.tax.enabled = true;
-  hot.tax.effectiveGainsRatePct = 80; // absurd LTCG rate
-  hot.tax.embeddedGainPct = 150; // >100% of a dollar
+  hot.taxes.ordinaryIncomePct = 80;
+  hot.economy.inflationPct = 30;
   const { errors, warnings } = validate(hot);
-  assert.deepEqual(errors, [], "out-of-band rates still simulate");
-  assert.ok(warnings.some((w) => w.path === "tax.effectiveGainsRatePct"));
-  assert.ok(warnings.some((w) => w.path === "tax.embeddedGainPct"));
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.path === "taxes.ordinaryIncomePct"));
+  assert.ok(warnings.some((w) => w.path === "economy.inflationPct"));
 });
 
-test("v4 → v5 migration is additive: adds a disabled tax section, preserves everything else, validates", () => {
-  const { tax, ...v4 } = placeholderState(); // strip tax to synthesize a v4-shaped state
-  void tax;
-  v4.schemaVersion = 4;
-  const { state, fromVersion, migrated } = migrate(v4);
-  assert.equal(fromVersion, 4);
-  assert.equal(migrated, true);
+test("v5 → v6: balance becomes a taxable account with basis from the old gain share; real growth becomes actual", () => {
+  const v5 = {
+    schemaVersion: 5,
+    profile: { currentAge: 40, endAge: 95, currentYear: 2026 },
+    portfolio: { balance: 1_000_000, realReturnPct: 3.5 },
+    tax: { enabled: true, effectiveGainsRatePct: 20, embeddedGainPct: 40 },
+    properties: [{ name: "Rental", rentMonthly: 2000, costsMonthly: 500, mortgageMonthly: 1000, payoffYear: 2040, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 1, costsRealGrowthPct: 0 }],
+    incomes: [{ name: "Job", annual: 100_000, fromYear: 2026, toYear: 2030, realGrowthPct: 0 }],
+    spending: [{ name: "living", monthly: 4000, fromYear: null, toYear: null, realGrowthPct: -1 }],
+    social: { startAge: 67, monthly: 2000, haircutPct: 25 },
+    health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 50 },
+    household: { people: [] },
+    endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },
+    work: { untilAge: 50 },
+  };
+  const { state, fromVersion } = migrate(v5);
+  assert.equal(fromVersion, 5);
   assert.equal(state.schemaVersion, SCHEMA_VERSION);
-  assert.deepEqual(state.tax, newTax(), "tax added from the factory, disabled");
-  assert.equal(state.tax.enabled, false);
-  // everything else preserved
-  assert.equal(state.portfolio.balance, v4.portfolio.balance);
-  assert.equal(state.properties.length, v4.properties.length);
+  assert.deepEqual(validate(state).errors, []);
+  assert.ok(!("portfolio" in state) && !("tax" in state), "old sections are gone");
+  assert.equal(state.accounts.length, 1);
+  assert.equal(state.accounts[0].type, "taxable");
+  assert.equal(state.accounts[0].balance, 1_000_000);
+  assert.equal(state.accounts[0].costBasis, 600_000, "40% gain share → basis is 60% of the balance");
+  assert.equal(state.taxes.capitalGainsPct, 20, "the old gains rate carries over");
+  assert.equal(state.properties[0].rentGrowthPct, 3.53, "+1% real at 2.5% inflation → 3.53% actual");
+  assert.equal(state.properties[0].costsGrowthPct, null, "0 real → with inflation");
+  assert.equal(state.incomes[0].growthPct, null);
+  assert.equal(state.spending[0].growthPct, 1.47, "−1% real → 1.47% actual (0.99 × 1.025)");
+  assert.ok(!("realGrowthPct" in state.spending[0]));
+});
+
+test("v5 → v6 with no balance makes no account", () => {
+  const { tax, ...rest } = /** @type {any} */ ({ ...migrate(V1_FIXTURE).state });
+  void tax;
+  const v5 = { ...rest, schemaVersion: 5, portfolio: { balance: 0, realReturnPct: 3.5 } };
+  const { state } = migrate(v5);
+  assert.deepEqual(state.accounts, []);
   assert.deepEqual(validate(state).errors, []);
 });

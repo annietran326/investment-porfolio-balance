@@ -1,20 +1,23 @@
 // The domain model: every entity, every default, and validation.
 // Conventions that are load-bearing across the app:
-//   - All amounts are in TODAY'S dollars. Returns are real (after inflation and tax).
+//   - Amounts are ENTERED in today's dollars. The engine runs in actual
+//     (nominal) dollars using one inflation assumption, then reports results
+//     back in today's dollars so they are easy to judge.
+//   - Every rate is an ACTUAL rate (before inflation): bucket returns, spending
+//     and income increases, rent growth. A growth rate left blank (null) means
+//     "rises with inflation".
+//   - Money lives in accounts (taxable, traditional IRA, 401(k), Roth IRA). The
+//     account type decides how withdrawals are taxed. All accounts share one
+//     household-level mix of the three investment buckets.
 //   - `saleYear: null` means "keep this property forever". Empty is meaningful;
 //     0 is an error, never coerced. Import parsers must preserve this distinction.
-//   - `realGrowthPct` on a line is REAL growth vs inflation: 0 = grows with
-//     inflation (holds constant in today's dollars, the default), +1.5 = outpaces
-//     inflation by 1.5%/yr, −2 = lags it. Compounds from `profile.currentYear`.
-//   - Spending lines carry an optional [fromYear, toYear] window (null = open):
-//     perpetual costs leave both blank; time-boxed costs (a dependent, a loan) end.
+//   - Spending lines carry an optional [fromYear, toYear] window (null = open).
 //   - The household is self (profile/social/health) plus `household.people` for a
-//     spouse and dependents. A spouse can carry their own Social Security and
-//     healthcare; dependents mainly drive time-boxed spending. No death modeling.
-//   - Defaults live HERE, once. No `||`-style fallbacks at use sites — code either
+//     spouse and dependents. No death modeling.
+//   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -25,50 +28,67 @@ export const BASE_YEAR = 2026;
  * @typedef {Object} Profile
  * @property {number} currentAge
  * @property {number} endAge     plan-to age (presets 90/95/100)
- * @property {number} currentYear simulation clock origin — the engine never reads Date
+ * @property {number} currentYear simulation clock origin; the engine never reads Date
  *
- * @typedef {Object} Portfolio
- * @property {number} balance        liquid + invested, single bucket
- * @property {number} realReturnPct  real (after inflation and tax on reinvested returns) %/yr
+ * @typedef {Object} Economy
+ * @property {number} inflationPct the one inflation assumption, %/yr
  *
- * @typedef {Object} Tax
- * Optional effective-rate tax on FORCED portfolio drawdowns — the one taxable
- * event the base model omits. Income and property proceeds stay net-of-tax by
- * convention (entered net), so this layer touches only the gains realized when
- * the plan must sell investments to cover a spending shortfall. Off by default:
- * enabled=false reproduces the pre-v5 simulation exactly.
- * @property {boolean} enabled              apply the withdrawal tax at all
- * @property {number} effectiveGainsRatePct blended fed+state LTCG rate on realized gains
- * @property {number} embeddedGainPct       share of a withdrawn dollar that is taxable gain (vs return-of-basis)
+ * @typedef {"taxable"|"traditional_ira"|"401k"|"roth_ira"} AccountType
+ * @typedef {Object} Account
+ * @property {string} name
+ * @property {AccountType} type
+ * @property {number} balance              current value, $
+ * @property {number|null} costBasis       taxable only: what you paid in total. null = same as balance (no gain yet)
+ * @property {number} contributionAnnual   your own contribution, $/yr in today's dollars (payroll for a 401(k))
+ * @property {number} employerMatchAnnual  employer match, $/yr in today's dollars
+ * @property {number|null} contributeUntilAge last age contributions are made; null = until the work-until age
+ * @property {number|null} contributionGrowthPct how fast contributions rise, %/yr; null = with inflation
+ *
+ * @typedef {Object} Buckets
+ * The three investment buckets and the time-based rule that splits money
+ * between them. Money needed in the next `preservationYears` years sits in
+ * capital preservation; money needed through year `incomeThroughYear` sits in
+ * high income; everything further out sits in global equities.
+ * @property {number} preservationReturnPct capital preservation return, %/yr (before inflation)
+ * @property {number} incomeReturnPct       high income return, %/yr (before inflation)
+ * @property {number} equitiesReturnPct     global equities return, %/yr (before inflation)
+ * @property {number} preservationYears     years 1..N of withdrawals held in capital preservation
+ * @property {number} incomeThroughYear     years N+1..M held in high income
+ *
+ * @typedef {Object} Taxes
+ * Effective (average) rates, federal plus state, applied to money taken out of
+ * accounts. Income streams and property proceeds are entered after tax.
+ * @property {number} ordinaryIncomePct  on traditional IRA / 401(k) withdrawals
+ * @property {number} capitalGainsPct    on the gain portion of taxable-account sales
  *
  * @typedef {Object} Property
  * @property {string} name
- * @property {number} rentMonthly
- * @property {number} costsMonthly   tax/insurance/HOA/maintenance, excl. mortgage
- * @property {number} mortgageMonthly P&I; fixed NOMINAL — real cost overstated late (documented bias)
+ * @property {number} rentMonthly     today's $
+ * @property {number} costsMonthly    today's $: tax/insurance/HOA/maintenance, excl. mortgage
+ * @property {number} mortgageMonthly P&I, a fixed dollar payment (it does not rise with inflation)
  * @property {number|null} payoffYear mortgage ends after this year; null = never (interest-only/none)
  * @property {number|null} saleYear   null = keep forever
- * @property {number|null} saleNetProceeds net cash after payoff, costs, taxes
- * @property {number} rentRealGrowthPct  real growth vs inflation on rent (default 0)
- * @property {number} costsRealGrowthPct real growth vs inflation on costs (default 0)
+ * @property {number|null} saleNetProceeds net cash after payoff, costs, taxes, in today's $
+ * @property {number|null} rentGrowthPct  %/yr; null = with inflation
+ * @property {number|null} costsGrowthPct %/yr; null = with inflation
  *
  * @typedef {Object} Income
  * @property {string} name
- * @property {number} annual   net of tax, today's $
+ * @property {number} annual   after tax (and after any 401(k) payroll deduction), today's $
  * @property {number} fromYear
  * @property {number} toYear   inclusive
- * @property {number} realGrowthPct real growth vs inflation (default 0)
+ * @property {number|null} growthPct %/yr; null = with inflation
  *
  * @typedef {Object} SpendingCategory
  * @property {string} name
- * @property {number} monthly  excl. property costs and healthcare (modeled separately)
+ * @property {number} monthly  today's $, excl. property costs and healthcare (modeled separately)
  * @property {number|null} fromYear first year this cost applies; null = from the start
  * @property {number|null} toYear   last year this cost applies; null = perpetual
- * @property {number} realGrowthPct real growth vs inflation (default 0)
+ * @property {number|null} growthPct %/yr increase; null = with inflation
  *
  * @typedef {Object} Social
  * @property {number} startAge
- * @property {number} monthly    today's $, pre-haircut
+ * @property {number} monthly    today's $, pre-haircut (rises with inflation, like the real COLA)
  * @property {number} haircutPct trust-fund-depletion discount (2026 default: 25)
  *
  * @typedef {Object} Health
@@ -81,7 +101,7 @@ export const BASE_YEAR = 2026;
  * @property {string} name
  * @property {PersonRole} role
  * @property {number|null} currentAge  needed for a spouse's SS/healthcare timing
- * @property {number} annualCost   ongoing support cost (today's $/yr) — raising a kid, supporting a parent. 0 = none
+ * @property {number} annualCost   ongoing support cost (today's $/yr). 0 = none
  * @property {number|null} fromYear  first year the cost applies; null = from the start
  * @property {number|null} toYear    last year the cost applies; null = for the whole plan
  * @property {Social} [social]  a spouse's own Social Security (absent = none)
@@ -93,16 +113,18 @@ export const BASE_YEAR = 2026;
  * @typedef {"zero"|"bequest"|"floor"} EndStateMode
  * @typedef {Object} EndState
  * @property {EndStateMode} mode
- * @property {{bequest: number, floor: number}} amounts amount per mode, preserved across switches
+ * @property {{bequest: number, floor: number}} amounts today's $, preserved across switches
  *
  * @typedef {Object} Work
- * @property {number} untilAge willing-to-work-until age — the solver's income window
+ * @property {number} untilAge willing-to-work-until age: the required-income window
  *
  * @typedef {Object} RunwayState
  * @property {number} schemaVersion
  * @property {Profile} profile
- * @property {Portfolio} portfolio
- * @property {Tax} tax
+ * @property {Economy} economy
+ * @property {Account[]} accounts
+ * @property {Buckets} buckets
+ * @property {Taxes} taxes
  * @property {Property[]} properties
  * @property {Income[]} incomes
  * @property {SpendingCategory[]} spending
@@ -113,31 +135,54 @@ export const BASE_YEAR = 2026;
  * @property {Work} work
  */
 
-// A real growth rate this far from 0 is almost certainly a nominal figure typed
-// by mistake (e.g. 25 instead of ~2 real) — warn, don't reject.
-const GROWTH_SANITY_ABS = 15;
+// A growth or return rate this far out is almost certainly a typo.
+const RATE_SANITY_ABS = 25;
+
+export const ACCOUNT_TYPES = /** @type {AccountType[]} */ (["taxable", "traditional_ira", "401k", "roth_ira"]);
+export const ACCOUNT_TYPE_LABELS = {
+  taxable: "Taxable brokerage",
+  traditional_ira: "Traditional IRA",
+  "401k": "401(k) (traditional)",
+  roth_ira: "Roth IRA",
+};
 
 // ---- Factories: the single source of per-item defaults (UI + migration share) ----
 
 /** @param {Partial<SpendingCategory>} [o] @returns {SpendingCategory} */
 export function newSpendingCategory(o = {}) {
-  return { name: o.name ?? "", monthly: o.monthly ?? 0, fromYear: o.fromYear ?? null, toYear: o.toYear ?? null, realGrowthPct: o.realGrowthPct ?? 0 };
+  return { name: o.name ?? "", monthly: o.monthly ?? 0, fromYear: o.fromYear ?? null, toYear: o.toYear ?? null, growthPct: o.growthPct ?? null };
 }
 /** @param {Partial<Income>} [o] @returns {Income} */
 export function newIncome(o = {}) {
-  return { name: o.name ?? "", annual: o.annual ?? 0, fromYear: o.fromYear ?? 0, toYear: o.toYear ?? 0, realGrowthPct: o.realGrowthPct ?? 0 };
+  return { name: o.name ?? "", annual: o.annual ?? 0, fromYear: o.fromYear ?? 0, toYear: o.toYear ?? 0, growthPct: o.growthPct ?? null };
 }
 /** @param {Partial<Property>} [o] @returns {Property} */
 export function newProperty(o = {}) {
   return {
     name: o.name ?? "", rentMonthly: o.rentMonthly ?? 0, costsMonthly: o.costsMonthly ?? 0, mortgageMonthly: o.mortgageMonthly ?? 0,
     payoffYear: o.payoffYear ?? null, saleYear: o.saleYear ?? null, saleNetProceeds: o.saleNetProceeds ?? null,
-    rentRealGrowthPct: o.rentRealGrowthPct ?? 0, costsRealGrowthPct: o.costsRealGrowthPct ?? 0,
+    rentGrowthPct: o.rentGrowthPct ?? null, costsGrowthPct: o.costsGrowthPct ?? null,
   };
 }
-/** @returns {Tax} */
-export function newTax() {
-  return { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 };
+/** @param {Partial<Account>} [o] @returns {Account} */
+export function newAccount(o = {}) {
+  return {
+    name: o.name ?? "", type: o.type ?? "taxable", balance: o.balance ?? 0, costBasis: o.costBasis ?? null,
+    contributionAnnual: o.contributionAnnual ?? 0, employerMatchAnnual: o.employerMatchAnnual ?? 0,
+    contributeUntilAge: o.contributeUntilAge ?? null, contributionGrowthPct: o.contributionGrowthPct ?? null,
+  };
+}
+/** @returns {Buckets} */
+export function newBuckets() {
+  return { preservationReturnPct: 2.5, incomeReturnPct: 5.5, equitiesReturnPct: 9.5, preservationYears: 8, incomeThroughYear: 15 };
+}
+/** @returns {Taxes} */
+export function newTaxes() {
+  return { ordinaryIncomePct: 22, capitalGainsPct: 15 };
+}
+/** @returns {Economy} */
+export function newEconomy() {
+  return { inflationPct: 2.5 };
 }
 /** @returns {Social} */
 export function newSocial() {
@@ -165,16 +210,19 @@ export function newPerson(role, o = {}) {
   return p;
 }
 
-// Research-grounded 2026 defaults (all user-editable; vintage documented in README):
-// SS haircut 25% (Trustees Report: 22–28% cut at 2032), pre-65 healthcare $16K/yr
-// (unsubsidized ACA anchor), Medicare-age $7,500/yr, real return 3.5%.
+// 2026 defaults (all user-editable): inflation 2.5%; bucket returns 2.5 / 5.5 /
+// 9.5% before inflation (about 0 / 3 / 7% after); bucket cutoffs 8 and 15
+// years; SS haircut 25% (Trustees Report: 22–28% cut at 2032); pre-65
+// healthcare $16K/yr (unsubsidized ACA anchor); Medicare-age $7,500/yr.
 /** @returns {RunwayState} */
 export function defaultState() {
   return {
     schemaVersion: SCHEMA_VERSION,
     profile: { currentAge: 40, endAge: 95, currentYear: 2026 },
-    portfolio: { balance: 0, realReturnPct: 3.5 },
-    tax: { enabled: false, effectiveGainsRatePct: 18, embeddedGainPct: 50 },
+    economy: newEconomy(),
+    accounts: [],
+    buckets: newBuckets(),
+    taxes: newTaxes(),
     properties: [],
     incomes: [],
     spending: [],
@@ -186,13 +234,16 @@ export function defaultState() {
   };
 }
 
+/** Total of every account balance. @param {RunwayState} s */
+export function totalBalance(s) {
+  return s.accounts.reduce((sum, a) => sum + (typeof a.balance === "number" ? a.balance : 0), 0);
+}
+
 /**
  * Re-anchor a state to a target current year, shifting every year-bearing field
- * by the delta so relative timing (a sale next year, a lump sum in 18 years) is
- * preserved. PURE — the caller supplies the target year (the server reads the
- * clock; the model never does). Used to stamp fresh/placeholder state with the
- * real current year so the app stays correct in future years, without touching
- * a user's already-saved plan.
+ * by the delta so relative timing (a sale next year, a cost ending in 18 years)
+ * is preserved. PURE: the caller supplies the target year (the server reads the
+ * clock; the model never does).
  * @param {RunwayState} state
  * @param {number} targetYear
  * @returns {RunwayState}
@@ -242,7 +293,7 @@ function add(list, path, message) {
  */
 function requireNumber(errors, v, path) {
   if (typeof v !== "number" || Number.isNaN(v)) {
-    add(errors, path, `must be a number, got ${v === null ? "null" : typeof v}`);
+    add(errors, path, `must be a number, got ${v === null ? "empty" : typeof v}`);
     return false;
   }
   return true;
@@ -257,6 +308,13 @@ function requireNumberOrNull(errors, v, path) {
   return requireNumber(errors, v, path);
 }
 
+/** @param {Issue[]} warnings @param {unknown} g @param {string} path */
+function warnIfExtremeRate(warnings, g, path) {
+  if (typeof g === "number" && Math.abs(g) > RATE_SANITY_ABS) {
+    add(warnings, path, `${g}% a year is extreme. Is that a typo?`);
+  }
+}
+
 /** @param {Issue[]} errors @param {Issue[]} warnings @param {any} social @param {string} path */
 function validateSocial(errors, warnings, social, path) {
   if (!social || typeof social !== "object") {
@@ -268,29 +326,6 @@ function validateSocial(errors, warnings, social, path) {
   requireNumber(errors, social.haircutPct, `${path}.haircutPct`);
 }
 
-/**
- * Tax section: enabled must be a boolean; rates must be numbers. Out-of-band
- * rates warn (don't reject), matching the growth-sanity posture — a plan with a
- * fat-fingered rate still simulates. The engine caps the gross-up denominator
- * regardless, so validation is legibility, not a safety gate.
- * @param {Issue[]} errors @param {Issue[]} warnings @param {any} tax @param {string} path
- */
-function validateTax(errors, warnings, tax, path) {
-  if (!tax || typeof tax !== "object") {
-    add(errors, path, "missing section");
-    return;
-  }
-  if (typeof tax.enabled !== "boolean") add(errors, `${path}.enabled`, `must be true or false, got ${typeof tax.enabled}`);
-  const rateOk = requireNumber(errors, tax.effectiveGainsRatePct, `${path}.effectiveGainsRatePct`);
-  const gainOk = requireNumber(errors, tax.embeddedGainPct, `${path}.embeddedGainPct`);
-  if (rateOk && (tax.effectiveGainsRatePct < 0 || tax.effectiveGainsRatePct > 50)) {
-    add(warnings, `${path}.effectiveGainsRatePct`, `${tax.effectiveGainsRatePct}% is outside the expected 0–50% capital-gains range`);
-  }
-  if (gainOk && (tax.embeddedGainPct < 0 || tax.embeddedGainPct > 100)) {
-    add(warnings, `${path}.embeddedGainPct`, `${tax.embeddedGainPct}% is outside 0–100% — it is a share of each withdrawn dollar`);
-  }
-}
-
 /** @param {Issue[]} errors @param {any} health @param {string} path */
 function validateHealth(errors, health, path) {
   if (!health || typeof health !== "object") {
@@ -300,13 +335,6 @@ function validateHealth(errors, health, path) {
   requireNumber(errors, health.preMedicareAnnual, `${path}.preMedicareAnnual`);
   requireNumber(errors, health.postMedicareAnnual, `${path}.postMedicareAnnual`);
   requireNumber(errors, health.employerCoverageUntilAge, `${path}.employerCoverageUntilAge`);
-}
-
-/** @param {Issue[]} warnings @param {unknown} g @param {string} path */
-function warnIfNominalGrowth(warnings, g, path) {
-  if (typeof g === "number" && Math.abs(g) > GROWTH_SANITY_ABS) {
-    add(warnings, path, `real growth of ${g}% is extreme — did you mean a nominal rate? this is growth ABOVE inflation`);
-  }
 }
 
 /**
@@ -327,10 +355,10 @@ export function validate(s) {
     add(errors, "schemaVersion", `expected ${SCHEMA_VERSION}, got ${s.schemaVersion}`);
   }
 
-  for (const key of /** @type {const} */ (["profile", "portfolio", "tax", "social", "health", "household", "endState", "work"])) {
+  for (const key of /** @type {const} */ (["profile", "economy", "buckets", "taxes", "social", "health", "household", "endState", "work"])) {
     if (!s[key] || typeof s[key] !== "object") add(errors, key, "missing section");
   }
-  for (const key of /** @type {const} */ (["properties", "incomes", "spending"])) {
+  for (const key of /** @type {const} */ (["accounts", "properties", "incomes", "spending"])) {
     if (!Array.isArray(s[key])) add(errors, key, "must be an array");
   }
   if (errors.length) return { errors, warnings };
@@ -347,10 +375,59 @@ export function validate(s) {
     add(errors, "profile.endAge", "plan-to age must be greater than current age");
   }
 
-  requireNumber(errors, s.portfolio.balance, "portfolio.balance");
-  requireNumber(errors, s.portfolio.realReturnPct, "portfolio.realReturnPct");
+  if (requireNumber(errors, s.economy.inflationPct, "economy.inflationPct")) {
+    if (s.economy.inflationPct < -5 || s.economy.inflationPct > 15) {
+      add(warnings, "economy.inflationPct", `${s.economy.inflationPct}% inflation is far outside the usual 1–5% range`);
+    }
+  }
 
-  validateTax(errors, warnings, s.tax, "tax");
+  // Buckets: three returns plus the two year cutoffs.
+  const b = s.buckets;
+  for (const k of /** @type {const} */ (["preservationReturnPct", "incomeReturnPct", "equitiesReturnPct"])) {
+    if (requireNumber(errors, b[k], `buckets.${k}`)) warnIfExtremeRate(warnings, b[k], `buckets.${k}`);
+  }
+  const pyOk = requireNumber(errors, b.preservationYears, "buckets.preservationYears");
+  const iyOk = requireNumber(errors, b.incomeThroughYear, "buckets.incomeThroughYear");
+  if (pyOk && b.preservationYears < 0) add(errors, "buckets.preservationYears", "can't be negative (0 = no capital preservation bucket)");
+  if (pyOk && iyOk && b.incomeThroughYear < b.preservationYears) {
+    add(errors, "buckets.incomeThroughYear", `must be at least the capital preservation years (${b.preservationYears})`);
+  }
+  if (
+    typeof b.preservationReturnPct === "number" && typeof b.incomeReturnPct === "number" && typeof b.equitiesReturnPct === "number" &&
+    !(b.preservationReturnPct <= b.incomeReturnPct && b.incomeReturnPct <= b.equitiesReturnPct)
+  ) {
+    add(warnings, "buckets.equitiesReturnPct", "returns usually rise from capital preservation to high income to equities. Check the order.");
+  }
+
+  // Taxes: effective rates, warned (not rejected) outside a plausible band.
+  for (const k of /** @type {const} */ (["ordinaryIncomePct", "capitalGainsPct"])) {
+    if (requireNumber(errors, s.taxes[k], `taxes.${k}`) && (s.taxes[k] < 0 || s.taxes[k] > 60)) {
+      add(warnings, `taxes.${k}`, `${s.taxes[k]}% is outside the expected 0–60% range`);
+    }
+  }
+
+  s.accounts.forEach((a, i) => {
+    const at = `accounts[${i}]`;
+    if (typeof a.name !== "string" || !a.name.trim()) add(errors, `${at}.name`, "name required");
+    if (!ACCOUNT_TYPES.includes(a.type)) add(errors, `${at}.type`, `must be one of ${ACCOUNT_TYPES.join(", ")}`);
+    requireNumber(errors, a.balance, `${at}.balance`);
+    requireNumberOrNull(errors, a.costBasis, `${at}.costBasis`);
+    requireNumber(errors, a.contributionAnnual, `${at}.contributionAnnual`);
+    requireNumber(errors, a.employerMatchAnnual, `${at}.employerMatchAnnual`);
+    requireNumberOrNull(errors, a.contributeUntilAge, `${at}.contributeUntilAge`);
+    requireNumberOrNull(errors, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
+    warnIfExtremeRate(warnings, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
+    if (typeof a.balance === "number" && a.balance < 0) add(errors, `${at}.balance`, "balance can't be negative");
+    if (a.type === "taxable" && typeof a.costBasis === "number") {
+      if (a.costBasis < 0) add(errors, `${at}.costBasis`, "cost basis can't be negative");
+      else if (typeof a.balance === "number" && a.costBasis > a.balance) {
+        add(warnings, `${at}.costBasis`, "cost basis is above the balance (an unrealized loss). That's fine, just double-check it.");
+      }
+    }
+    if (a.type === "roth_ira" && typeof a.employerMatchAnnual === "number" && a.employerMatchAnnual > 0) {
+      add(warnings, `${at}.employerMatchAnnual`, "IRAs don't get an employer match. Did you mean the 401(k)?");
+    }
+  });
 
   s.properties.forEach((p, i) => {
     const at = `properties[${i}]`;
@@ -361,21 +438,21 @@ export function validate(s) {
     requireNumberOrNull(errors, p.payoffYear, `${at}.payoffYear`);
     requireNumberOrNull(errors, p.saleYear, `${at}.saleYear`);
     requireNumberOrNull(errors, p.saleNetProceeds, `${at}.saleNetProceeds`);
-    requireNumber(errors, p.rentRealGrowthPct, `${at}.rentRealGrowthPct`);
-    requireNumber(errors, p.costsRealGrowthPct, `${at}.costsRealGrowthPct`);
-    warnIfNominalGrowth(warnings, p.rentRealGrowthPct, `${at}.rentRealGrowthPct`);
-    warnIfNominalGrowth(warnings, p.costsRealGrowthPct, `${at}.costsRealGrowthPct`);
-    if (p.saleYear === 0) add(errors, `${at}.saleYear`, "0 is not a year — leave empty (null) to keep forever");
+    requireNumberOrNull(errors, p.rentGrowthPct, `${at}.rentGrowthPct`);
+    requireNumberOrNull(errors, p.costsGrowthPct, `${at}.costsGrowthPct`);
+    warnIfExtremeRate(warnings, p.rentGrowthPct, `${at}.rentGrowthPct`);
+    warnIfExtremeRate(warnings, p.costsGrowthPct, `${at}.costsGrowthPct`);
+    if (p.saleYear === 0) add(errors, `${at}.saleYear`, "0 is not a year. Leave it empty to keep forever");
     if (typeof p.saleYear === "number" && p.saleYear !== 0) {
       if (p.saleYear < currentYear) {
-        add(warnings, `${at}.saleYear`, `sale year ${p.saleYear} is in the past — proceeds will never be counted`);
+        add(warnings, `${at}.saleYear`, `sale year ${p.saleYear} is in the past, so proceeds will never be counted`);
       }
       if (p.saleNetProceeds === null) {
-        add(warnings, `${at}.saleNetProceeds`, "sale year set but net proceeds empty — sale will add $0");
+        add(warnings, `${at}.saleNetProceeds`, "sale year set but net proceeds empty, so the sale adds $0");
       }
     }
     if (typeof p.payoffYear === "number" && p.payoffYear < currentYear) {
-      add(warnings, `${at}.payoffYear`, `payoff year ${p.payoffYear} is in the past — treating mortgage as already paid off`);
+      add(warnings, `${at}.payoffYear`, `payoff year ${p.payoffYear} is in the past, so the mortgage is treated as paid off`);
     }
   });
 
@@ -385,8 +462,8 @@ export function validate(s) {
     requireNumber(errors, inc.annual, `${at}.annual`);
     requireNumber(errors, inc.fromYear, `${at}.fromYear`);
     requireNumber(errors, inc.toYear, `${at}.toYear`);
-    requireNumber(errors, inc.realGrowthPct, `${at}.realGrowthPct`);
-    warnIfNominalGrowth(warnings, inc.realGrowthPct, `${at}.realGrowthPct`);
+    requireNumberOrNull(errors, inc.growthPct, `${at}.growthPct`);
+    warnIfExtremeRate(warnings, inc.growthPct, `${at}.growthPct`);
     if (typeof inc.fromYear === "number" && typeof inc.toYear === "number" && inc.toYear < inc.fromYear) {
       add(errors, `${at}.toYear`, `to-year ${inc.toYear} is before from-year ${inc.fromYear}`);
     }
@@ -398,13 +475,13 @@ export function validate(s) {
     requireNumber(errors, c.monthly, `${at}.monthly`);
     requireNumberOrNull(errors, c.fromYear, `${at}.fromYear`);
     requireNumberOrNull(errors, c.toYear, `${at}.toYear`);
-    requireNumber(errors, c.realGrowthPct, `${at}.realGrowthPct`);
-    warnIfNominalGrowth(warnings, c.realGrowthPct, `${at}.realGrowthPct`);
+    requireNumberOrNull(errors, c.growthPct, `${at}.growthPct`);
+    warnIfExtremeRate(warnings, c.growthPct, `${at}.growthPct`);
     if (typeof c.fromYear === "number" && typeof c.toYear === "number" && c.toYear < c.fromYear) {
       add(errors, `${at}.toYear`, `to-year ${c.toYear} is before from-year ${c.fromYear}`);
     }
     if (typeof c.toYear === "number" && c.toYear < currentYear) {
-      add(warnings, `${at}.toYear`, `end year ${c.toYear} is in the past — this cost will never apply`);
+      add(warnings, `${at}.toYear`, `end year ${c.toYear} is in the past, so this cost will never apply`);
     }
   });
 
@@ -424,7 +501,7 @@ export function validate(s) {
       add(errors, `${at}.toYear`, `to-year ${person.toYear} is before from-year ${person.fromYear}`);
     }
     if (typeof person.toYear === "number" && person.toYear < currentYear) {
-      add(warnings, `${at}.toYear`, `end year ${person.toYear} is in the past — this cost will never apply`);
+      add(warnings, `${at}.toYear`, `end year ${person.toYear} is in the past, so this cost will never apply`);
     }
     if (person.role === "spouse") {
       spouseCount++;
@@ -433,7 +510,7 @@ export function validate(s) {
       if (person.health !== undefined) validateHealth(errors, person.health, `${at}.health`);
     }
   });
-  if (spouseCount > 1) add(warnings, "household.people", "more than one spouse is unusual — all are modeled");
+  if (spouseCount > 1) add(warnings, "household.people", "more than one spouse is unusual, but all are modeled");
 
   if (!END_STATE_MODES.includes(s.endState.mode)) {
     add(errors, "endState.mode", `must be one of ${END_STATE_MODES.join(", ")}`);
@@ -447,7 +524,7 @@ export function validate(s) {
 
   requireNumber(errors, s.work.untilAge, "work.untilAge");
   if (typeof s.work.untilAge === "number" && typeof s.profile.currentAge === "number" && s.work.untilAge < s.profile.currentAge) {
-    add(warnings, "work.untilAge", "work-until age is below current age — the income window is empty");
+    add(warnings, "work.untilAge", "work-until age is below current age, so the income window is empty");
   }
 
   return { errors, warnings };

@@ -142,14 +142,21 @@ test("v4 round-trip: spouse + dependent (w/ ongoing support cost + window) + gro
   // over a [fromYear, toYear] window.
   const state = defaultState();
   state.properties = [
-    { name: "Rental (rent +1.5%, costs -0.5% real)", rentMonthly: 3000, costsMonthly: 850, mortgageMonthly: 2100, payoffYear: 2048, saleYear: null, saleNetProceeds: null, rentRealGrowthPct: 1.5, costsRealGrowthPct: -0.5 },
+    { name: "Rental (rent +4%, costs 2%)", rentMonthly: 3000, costsMonthly: 850, mortgageMonthly: 2100, payoffYear: 2048, saleYear: null, saleNetProceeds: null, rentGrowthPct: 4, costsGrowthPct: 2 },
   ];
-  state.incomes = [{ name: "Consulting (grows 2% real)", annual: 60_000, fromYear: 2026, toYear: 2035, realGrowthPct: 2 }];
+  state.incomes = [{ name: "Consulting (grows 4.5%)", annual: 60_000, fromYear: 2026, toYear: 2035, growthPct: 4.5 }];
   state.spending = [
-    { name: "living", monthly: 3000, fromYear: null, toYear: null, realGrowthPct: 0 }, // perpetual
-    { name: "childcare (ends 2032)", monthly: 1800, fromYear: 2026, toYear: 2032, realGrowthPct: 0 }, // time-boxed
-    { name: "hobby (starts 2030, +1% real)", monthly: 400, fromYear: 2030, toYear: null, realGrowthPct: 1 }, // open-ended from a future year
+    { name: "living", monthly: 3000, fromYear: null, toYear: null, growthPct: null }, // perpetual, with inflation
+    { name: "childcare (ends 2032)", monthly: 1800, fromYear: 2026, toYear: 2032, growthPct: null }, // time-boxed
+    { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5 }, // open-ended from a future year
   ];
+  state.accounts = [
+    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
+    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeUntilAge: 55, contributionGrowthPct: 2 },
+    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
+  ];
+  state.economy.inflationPct = 3;
+  state.buckets.preservationYears = 5;
   state.household = {
     people: [
       // Spouse: SS + healthcare, and (per the UI) no support cost → 0/null/null.
@@ -179,9 +186,13 @@ test("v4 round-trip: spouse + dependent (w/ ongoing support cost + window) + gro
   assert.deepEqual(validate(applied).errors, [], "the reimported state is valid v4");
 
   // Spot-check the load-bearing new fields specifically.
-  assert.equal(applied.properties[0].rentRealGrowthPct, 1.5);
-  assert.equal(applied.properties[0].costsRealGrowthPct, -0.5);
-  assert.equal(applied.incomes[0].realGrowthPct, 2);
+  assert.equal(applied.properties[0].rentGrowthPct, 4);
+  assert.equal(applied.properties[0].costsGrowthPct, 2);
+  assert.equal(applied.incomes[0].growthPct, 4.5);
+  assert.equal(applied.spending[0].growthPct, null, "a blank increase stays 'with inflation' (null), never 0");
+  assert.deepEqual(applied.accounts, state.accounts, "accounts round-trip, incl. cost basis and contributions");
+  assert.equal(applied.economy.inflationPct, 3);
+  assert.equal(applied.buckets.preservationYears, 5);
   assert.equal(applied.spending[0].toYear, null, "perpetual line keeps toYear null (not 0)");
   assert.deepEqual([applied.spending[1].fromYear, applied.spending[1].toYear], [2026, 2032], "time-boxed window survives");
   assert.deepEqual([applied.spending[2].fromYear, applied.spending[2].toYear], [2030, null], "open-ended-from-future survives");
@@ -199,7 +210,7 @@ test("Household tab: absent → people untouched; present → replaces; bad role
   const state = placeholderState(); // ships with a spouse + a dependent
 
   // (1) Absent Household tab: importing other tabs leaves people untouched.
-  const noHousehold = parseTemplate(wbBuffer({ Accounts: [HEADERS.Accounts, [500000, 3]] }));
+  const noHousehold = parseTemplate(wbBuffer({ Accounts: [HEADERS.Accounts, ["Brokerage", "taxable", 500000]] }));
   assert.ok(noHousehold.tabsMissing.includes("household"));
   const afterNoTab = applyTabs(state, noHousehold, ["accounts"]);
   assert.deepEqual(afterNoTab.household, state.household, "no Household tab does NOT wipe existing people");
@@ -273,7 +284,7 @@ test("Household tab: absent → people untouched; present → replaces; bad role
 
 test("missing Income tab → section unchanged; present tabs replace theirs", () => {
   const buf = wbBuffer({
-    Accounts: [HEADERS.Accounts, [500000, 3]],
+    Accounts: [HEADERS.Accounts, ["Brokerage", "taxable", 500000]],
     Spending: [HEADERS.Spending, ["food", 900]],
   });
   const parsed = parseTemplate(buf);
@@ -292,8 +303,10 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   assert.deepEqual(applied.properties, state.properties, "absent tab leaves properties untouched");
   assert.deepEqual(applied.household, state.household, "absent Household tab leaves people untouched");
   // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
-  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, realGrowthPct: 0 }]);
-  assert.deepEqual(applied.portfolio, { balance: 500000, realReturnPct: 3 });
+  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null }]);
+  assert.deepEqual(applied.accounts, [
+    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: null },
+  ]);
 });
 
 test("text in a rent cell → cell-addressed error; tab blocked; other tabs still applicable", () => {
@@ -318,7 +331,7 @@ test("text in a rent cell → cell-addressed error; tab blocked; other tabs stil
   assert.equal(pv.tabs.find((t) => t.key === "income").status, "ready");
 
   const applied = applyTabs(placeholderState(), parsed, ["income"]);
-  assert.deepEqual(applied.incomes, [{ name: "W2", annual: 90000, fromYear: 2026, toYear: 2030, realGrowthPct: 0 }]);
+  assert.deepEqual(applied.incomes, [{ name: "W2", annual: 90000, fromYear: 2026, toYear: 2030, growthPct: null }]);
   assert.throws(() => applyTabs(placeholderState(), parsed, ["properties"]), /not applicable/);
 });
 
@@ -343,23 +356,27 @@ test("empty sale-year cell → null (keep forever), NEVER 0; explicit 0 → erro
 test('coercion: "$1,200" → 1200, "25%" → 25, "1,200" → 1200, Excel percent format → plain number', () => {
   const parsed = parseTemplate(
     wbBuffer({
-      Accounts: [HEADERS.Accounts, ["$1,200", "25%"]],
+      Accounts: [HEADERS.Accounts, ["IRA", "Traditional_IRA", "$1,200", null, "1,000", null, null, "25%"]],
       Spending: [HEADERS.Spending, ["food", "1,200"]],
     })
   );
   assert.deepEqual(parsed.perTab.accounts.errors, []);
-  assert.deepEqual(parsed.perTab.accounts.rows[0], { balance: 1200, realReturnPct: 25 });
-  // Blank window cells → null; blank growth cell → 0.
-  assert.deepEqual(parsed.perTab.spending.rows[0], { name: "food", monthly: 1200, fromYear: null, toYear: null, realGrowthPct: 0 });
+  // Type is case-insensitive; blank contribution-style cells → 0; blank basis/age/increase → null.
+  assert.deepEqual(parsed.perTab.accounts.rows[0], {
+    name: "IRA", type: "traditional_ira", balance: 1200, costBasis: null, contributionAnnual: 1000,
+    employerMatchAnnual: 0, contributeUntilAge: null, contributionGrowthPct: 25,
+  });
+  // Blank window cells → null; blank increase cell → null (with inflation).
+  assert.deepEqual(parsed.perTab.spending.rows[0], { name: "food", monthly: 1200, fromYear: null, toYear: null, growthPct: null });
 
   // A percent-FORMATTED numeric cell stores 3.5% as 0.035 — the parser
   // surfaces the number the user saw in Excel.
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([HEADERS.Accounts, [500000, 0.035]]);
-  ws.B2.z = "0.0%";
-  XLSX.utils.book_append_sheet(wb, ws, "Accounts");
+  const ws = XLSX.utils.aoa_to_sheet([HEADERS.Income, ["W2", 90000, 2026, 2030, 0.035]]);
+  ws.E2.z = "0.0%";
+  XLSX.utils.book_append_sheet(wb, ws, "Income");
   const pctParsed = parseTemplate(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
-  assert.deepEqual(pctParsed.perTab.accounts.rows[0], { balance: 500000, realReturnPct: 3.5 });
+  assert.equal(pctParsed.perTab.income.rows[0].growthPct, 3.5);
 });
 
 test("income to-year before from-year is caught at the cell, not at apply time", () => {
@@ -375,7 +392,7 @@ test("assumptions: note row ignored, unknown/duplicate keys error, bad mode erro
     wbBuffer({
       Assumptions: [
         A,
-        ["# Inflation is NOT an input; returns are real (after inflation and tax)"],
+        ["# Amounts are in today's dollars; rates are actual (before inflation)"],
         ["profile.currentAge", 55],
         ["endState.mode", "bequest"],
         ["endState.bequest", 250000],
@@ -416,8 +433,8 @@ test("tab and header matching is case/whitespace-insensitive", () => {
   );
   assert.deepEqual(parsed.tabsFound, ["income"]);
   assert.deepEqual(parsed.perTab.income.errors, []);
-  // The optional growth column is absent here → defaults to 0 (grows with inflation).
-  assert.deepEqual(parsed.perTab.income.rows[0], { name: "W2", annual: 1, fromYear: 2026, toYear: 2027, realGrowthPct: 0 });
+  // The optional increase column is absent here → null (rises with inflation).
+  assert.deepEqual(parsed.perTab.income.rows[0], { name: "W2", annual: 1, fromYear: 2026, toYear: 2027, growthPct: null });
 });
 
 test("a sheet with more rows than the 10k read cap is blocked, not silently truncated", () => {
@@ -434,7 +451,7 @@ test("a sheet with more rows than the 10k read cap is blocked, not silently trun
 test("exported text cells are inert strings; guarded round-trip restores the original", () => {
   const state = placeholderState();
   state.properties[0].name = "=cmd|'/c calc'!A0";
-  state.properties[1].name = "-2+3+cmd";
+  state.accounts[1].name = "-2+3+cmd";
   state.incomes[0].name = '+HYPERLINK("http://evil.example","click")';
   state.spending[0].name = "@SUM(A1:A9)";
   const buf = buildTemplateWorkbook(state);
@@ -445,7 +462,7 @@ test("exported text cells are inert strings; guarded round-trip restores the ori
   const cellAt = (sheet, r, c) => wb.Sheets[sheet]["!data"][r][c];
   for (const [sheet, r, original] of [
     ["Properties", 1, state.properties[0].name],
-    ["Properties", 2, state.properties[1].name],
+    ["Accounts", 2, state.accounts[1].name],
     ["Income", 1, state.incomes[0].name],
     ["Spending", 1, state.spending[0].name],
   ]) {
@@ -589,13 +606,14 @@ test("GET /api/export/template: xlsx attachment with the expected tabs", async (
 test("preview → apply: threads rev, 409 stale, 410 expired token, 400 invalid tabs, snapshot provenance", async () => {
   // Seed real data so the import has something to replace (and snapshot).
   const seeded = placeholderState();
-  seeded.portfolio.balance = 777_000;
+  // One account, so the preview's total-balance headline equals the marker value.
+  seeded.accounts = [{ ...seeded.accounts[0], balance: 777_000, costBasis: null }];
   const put = await sendJson("PUT", "/api/state", { state: seeded, baseRev: await currentRev() });
   assert.equal(put.status, 200);
 
   const next = placeholderState();
-  next.portfolio.balance = 900_000;
-  next.spending.push({ name: "boats", monthly: 500, fromYear: null, toYear: null, realGrowthPct: 0 });
+  next.accounts = [{ ...next.accounts[0], balance: 900_000, costBasis: null }];
+  next.spending.push({ name: "boats", monthly: 500, fromYear: null, toYear: null, growthPct: null });
   const buf = buildTemplateWorkbook(next);
 
   const pv = await sendOctet("/api/import/template/preview?filename=runway-export.local.xlsx", buf);
@@ -726,6 +744,6 @@ test("blocked tab via API: preview marks it, apply of the blocked tab 400s, vali
   });
   assert.equal(okApply.status, 200);
   const state = (await getJson("/api/state")).body.state;
-  assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650, fromYear: null, toYear: null, realGrowthPct: 0 }]);
+  assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650, fromYear: null, toYear: null, growthPct: null }]);
   assert.ok(state.properties.length > 0, "properties section untouched by the blocked tab");
 });

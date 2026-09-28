@@ -57,7 +57,7 @@ test("makeWorkspace: single scenario, active, default name Base plan", () => {
   assert.equal(ws.scenarios.length, 1);
   assert.equal(ws.scenarios[0].id, "s1");
   assert.equal(ws.scenarios[0].name, "Base plan");
-  assert.equal(ws.scenarios[0].state.portfolio.balance, st().portfolio.balance);
+  assert.equal(ws.scenarios[0].state.accounts[0].balance, st().accounts[0].balance);
   assert.equal(validateWorkspace(ws).errors.length, 0, "a fresh workspace is valid");
 
   const named = makeWorkspace({ id: "x", name: "Aggressive", state: st() });
@@ -68,7 +68,7 @@ test("makeWorkspace: single scenario, active, default name Base plan", () => {
 
 test("migrateWorkspace wraps a bare (pre-workspace) state as the sole Base plan (wrapped:true)", () => {
   const bare = st();
-  bare.portfolio.balance = 1_250_000;
+  bare.accounts[0].balance = 1_250_000;
   const makeId = idGen();
   const { workspace, wrapped } = migrateWorkspace(bare, { makeId });
 
@@ -78,7 +78,7 @@ test("migrateWorkspace wraps a bare (pre-workspace) state as the sole Base plan 
   assert.equal(workspace.scenarios[0].name, "Base plan");
   assert.equal(workspace.scenarios[0].id, "id-0", "the wrapped scenario gets a fresh injected id");
   assert.equal(workspace.activeId, "id-0", "the wrapped scenario is active");
-  assert.equal(activeState(workspace).portfolio.balance, 1_250_000, "state carried through");
+  assert.equal(activeState(workspace).accounts[0].balance, 1_250_000, "state carried through");
   assert.equal(activeState(workspace).schemaVersion, SCHEMA_VERSION);
 });
 
@@ -87,7 +87,7 @@ test("migrateWorkspace ladders a bare OLD-version state up to the current schema
   assert.equal(wrapped, true);
   assert.equal(activeState(workspace).schemaVersion, SCHEMA_VERSION, "wrapped state laddered to current");
   assert.ok(Array.isArray(activeState(workspace).household.people), "v4 household present after ladder");
-  assert.equal(activeState(workspace).portfolio.balance, 9);
+  assert.equal(activeState(workspace).accounts[0].balance, 9);
 });
 
 // --- migrateWorkspace: workspace passthrough --------------------------------
@@ -111,8 +111,8 @@ test("migrateWorkspace passes a workspace through, migrating each scenario's sta
     assert.equal(sc.state.schemaVersion, SCHEMA_VERSION, "each scenario migrated");
     assert.ok(Array.isArray(sc.state.household.people), "each scenario has v4 household");
   }
-  assert.equal(workspace.scenarios[0].state.portfolio.balance, 100);
-  assert.equal(workspace.scenarios[1].state.portfolio.balance, 200);
+  assert.equal(workspace.scenarios[0].state.accounts[0].balance, 100);
+  assert.equal(workspace.scenarios[1].state.accounts[0].balance, 200);
 });
 
 test("migrateWorkspace repairs a dangling activeId to the first scenario", () => {
@@ -214,13 +214,13 @@ test("validateWorkspace flags an activeId that references no scenario", () => {
 
 test("validateWorkspace path-prefixes an invalid scenario state (scenarios[i].state.…)", () => {
   const bad = st();
-  bad.portfolio.balance = /** @type {any} */ ("abc");
+  bad.accounts[0].balance = /** @type {any} */ ("abc");
   const errs = validateWorkspace({
     workspaceVersion: WORKSPACE_VERSION,
     activeId: "a",
     scenarios: [{ id: "a", name: "A", state: bad }],
   }).errors;
-  assert.ok(errs.some((e) => e.path === "scenarios[0].state.portfolio.balance"));
+  assert.ok(errs.some((e) => e.path === "scenarios[0].state.accounts[0].balance"));
 });
 
 test("validateWorkspace passes a clean multi-scenario workspace", () => {
@@ -232,11 +232,11 @@ test("validateWorkspace passes a clean multi-scenario workspace", () => {
 
 test("activeScenario / activeState resolve the active pointer; scenarioList is the id+name projection", () => {
   const alt = st();
-  alt.portfolio.balance = 42;
+  alt.accounts[0].balance = 42;
   const ws = addScenario(makeWorkspace({ id: "a", state: st() }), { id: "b", name: "Alt", state: alt });
   // addScenario makes the new scenario active.
   assert.equal(activeScenario(ws).id, "b");
-  assert.equal(activeState(ws).portfolio.balance, 42);
+  assert.equal(activeState(ws).accounts[0].balance, 42);
   assert.deepEqual(scenarioList(ws), [
     { id: "a", name: "Base plan" },
     { id: "b", name: "Alt" },
@@ -258,12 +258,12 @@ test("addScenario appends, makes the new one active, and does not mutate the inp
 test("withActiveState replaces only the active scenario's state, immutably", () => {
   const ws = addScenario(makeWorkspace({ id: "a", state: st() }), { id: "b", name: "Alt", state: st() });
   const bumped = st();
-  bumped.portfolio.balance = 777;
+  bumped.accounts[0].balance = 777;
   const next = withActiveState(ws, bumped);
   assert.notEqual(next, ws);
-  assert.equal(activeState(next).portfolio.balance, 777, "active state replaced");
-  assert.equal(next.scenarios.find((s) => s.id === "a").state.portfolio.balance, st().portfolio.balance, "non-active untouched");
-  assert.equal(activeState(ws).portfolio.balance, st().portfolio.balance, "input untouched");
+  assert.equal(activeState(next).accounts[0].balance, 777, "active state replaced");
+  assert.equal(next.scenarios.find((s) => s.id === "a").state.accounts[0].balance, st().accounts[0].balance, "non-active untouched");
+  assert.equal(activeState(ws).accounts[0].balance, st().accounts[0].balance, "input untouched");
 });
 
 test("renameScenario renames by id, immutably, leaving others alone", () => {

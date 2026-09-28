@@ -6,6 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   verdictCopy,
+  gapCell,
+  fmtPct,
   goalText,
   fmtMoney,
   fmtCompact,
@@ -23,6 +25,8 @@ import {
   setEndStateAmount,
   endStateAmountValue,
   parseNumField,
+  parseRowField,
+  gainShareOf,
   addPerson,
   removePerson,
   setPersonField,
@@ -118,9 +122,9 @@ function makePipeline({ server, initialRev = 0 } = {}) {
 
 test("verdictCopy: distinct non-empty copy for met / value / unreachable", () => {
   const s = placeholderState();
-  const met = verdictCopy({ kind: "met" }, s);
-  const value = verdictCopy({ kind: "value", perYear: 85_500, untilAge: 50 }, s);
-  const unreach = verdictCopy({ kind: "unreachable", cap: 2_000_000 }, s);
+  const met = verdictCopy({ kind: "met" }, { kind: "met" }, s, 1_000_000);
+  const value = verdictCopy({ kind: "value", amount: 250_000 }, { kind: "value", perYear: 30_000, untilAge: 55 }, s, -5);
+  const unreach = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, { kind: "unreachable", cap: 2_000_000 }, s, -5);
   for (const c of [met, value, unreach]) {
     assert.ok(c.headline.length > 0, "headline never blank");
     assert.ok(c.detail.length > 0, "detail never blank");
@@ -129,28 +133,37 @@ test("verdictCopy: distinct non-empty copy for met / value / unreachable", () =>
   assert.equal(new Set([met.headline, value.headline, unreach.headline]).size, 3, "pairwise distinct");
 });
 
-test("verdictCopy met: good tone, names the goal", () => {
-  const c = verdictCopy({ kind: "met" }, placeholderState());
+test("verdictCopy met: good tone, names the goal and the end balance", () => {
+  const c = verdictCopy({ kind: "met" }, { kind: "met" }, placeholderState(), 1_234_000);
   assert.equal(c.tone, "good");
-  assert.match(c.headline, /^No — /);
+  assert.match(c.headline, /^Yes, you have enough/);
   assert.match(c.detail, /die with zero/);
-  assert.match(c.detail, /no additional income/);
+  assert.match(c.detail, /\$1,234,000/);
 });
 
-test("verdictCopy value: names $/yr and the work-until age", () => {
-  const c = verdictCopy({ kind: "value", perYear: 85_500, untilAge: 52 }, placeholderState());
+test("verdictCopy value: names the gap in today's dollars and the income alternative", () => {
+  const c = verdictCopy({ kind: "value", amount: 250_000 }, { kind: "value", perYear: 30_000, untilAge: 55 }, placeholderState(), -5);
   assert.equal(c.tone, "bad");
-  assert.match(c.headline, /^Yes — /);
-  assert.match(c.headline, /\$85,500\/yr/);
-  assert.match(c.headline, /age 52/);
-  assert.match(c.headline, /then never again/);
+  assert.match(c.headline, /gap is \$250,000 in today's dollars/);
+  assert.match(c.detail, /\$30,000\/yr after tax until age 55/);
 });
 
-test("verdictCopy unreachable: names the $2M cap", () => {
-  const c = verdictCopy({ kind: "unreachable", cap: 2_000_000 }, placeholderState());
+test("verdictCopy unreachable: names the cap", () => {
+  const c = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, { kind: "unreachable", cap: 2_000_000 }, placeholderState(), -5);
   assert.equal(c.tone, "bad");
-  assert.match(c.headline, /\$2,000,000\/yr/);
-  assert.match(c.headline, /extend the window or cut spending/);
+  assert.match(c.headline, /\$50,000,000/);
+});
+
+test("gapCell: never blank; colour per kind", () => {
+  assert.deepEqual(gapCell({ kind: "met" }), { text: "none", cls: "pos" });
+  assert.deepEqual(gapCell({ kind: "value", amount: 120_000 }), { text: "$120,000", cls: "warn" });
+  assert.equal(gapCell({ kind: "unreachable", cap: 50_000_000 }).cls, "neg");
+});
+
+test("fmtPct rounds to whole percents", () => {
+  assert.equal(fmtPct(0.3412), "34%");
+  assert.equal(fmtPct(0), "0%");
+  assert.equal(fmtPct(1), "100%");
 });
 
 test("goalText follows the end-state mode and its own amount", () => {
@@ -163,7 +176,7 @@ test("goalText follows the end-state mode and its own amount", () => {
 });
 
 test("requiredCell: never blank; unreachable is red and names the cap", () => {
-  assert.deepEqual(requiredCell({ kind: "met" }), { text: "none", cls: "pos" });
+  assert.deepEqual(requiredCell({ kind: "met" }), { text: "none needed", cls: "pos" });
   assert.deepEqual(requiredCell({ kind: "value", perYear: 42_000, untilAge: 50 }), { text: "$42,000", cls: "warn" });
   const u = requiredCell({ kind: "unreachable", cap: 2_000_000 });
   assert.equal(u.cls, "neg");
@@ -174,7 +187,7 @@ test("runwayCell: finite breach year is red with years-from-now; never is green"
   // Consumes firstBreachYear (below $0, or below the floor in floor mode) —
   // NOT firstNegYear, so floor-mode runway respects the floor.
   assert.deepEqual(runwayCell({ firstBreachYear: 2043, startYear: 2026 }), { text: "2043 (17 yrs)", cls: "neg" });
-  assert.deepEqual(runwayCell({ firstBreachYear: null, startYear: 2026 }), { text: "never", cls: "pos" });
+  assert.deepEqual(runwayCell({ firstBreachYear: null, startYear: 2026 }), { text: "never runs out", cls: "pos" });
 });
 
 // ---------------------------------------------------------------------------
@@ -401,13 +414,13 @@ test("addRow: appends a valid blank row for each kind without mutating input", (
     payoffYear: null,
     saleYear: null,
     saleNetProceeds: null,
-    rentRealGrowthPct: 0,
-    costsRealGrowthPct: 0,
+    rentGrowthPct: null,
+    costsGrowthPct: null,
   });
   const withIncome = addRow(s, "incomes");
-  assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030, realGrowthPct: 0 });
+  assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030, growthPct: null });
   const withSpend = addRow(s, "spending");
-  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0, fromYear: null, toYear: null, realGrowthPct: 0 });
+  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null });
   for (const next of [withProp, withIncome, withSpend]) {
     assert.deepEqual(validate(next).errors, [], "blank rows validate cleanly");
   }
@@ -417,9 +430,9 @@ test("addRow: appends a valid blank row for each kind without mutating input", (
 test("removeRow: removes exactly the indexed row without mutating input", () => {
   const s = placeholderState();
   const before = structuredClone(s);
-  const next = removeRow(s, "incomes", 0);
-  assert.equal(next.incomes.length, s.incomes.length - 1);
-  assert.equal(next.incomes[0].name, s.incomes[1].name, "the right row was removed");
+  const next = removeRow(s, "spending", 0);
+  assert.equal(next.spending.length, s.spending.length - 1);
+  assert.equal(next.spending[0].name, s.spending[1].name, "the right row was removed");
   assert.deepEqual(s, before);
 });
 
@@ -430,7 +443,7 @@ test("setRowValue / setValueAtPath: immutable single-field updates", () => {
   assert.equal(a.properties[0].saleYear, null);
   const b = setValueAtPath(s, "profile.endAge", 100);
   assert.equal(b.profile.endAge, 100);
-  assert.equal(b.portfolio.balance, s.portfolio.balance, "unrelated fields untouched");
+  assert.equal(b.accounts[0].balance, s.accounts[0].balance, "unrelated fields untouched");
   assert.deepEqual(s, before, "input state never mutated");
 });
 
@@ -520,17 +533,17 @@ test("setPersonField: currentAge empty→null is a clean spouse-age warning, not
   );
 });
 
-test("spending row: fromYear ''→null and growth ''→0 round-trip and validate", () => {
+test("spending row: fromYear ''→null and increase ''→null (with inflation) round-trip and validate", () => {
   const s = defaultState();
   let next = addRow(s, "spending");
   const i = next.spending.length - 1;
   next = setRowValue(next, "spending", i, "name", "loan");
   next = setRowValue(next, "spending", i, "monthly", 500);
   next = setRowValue(next, "spending", i, "fromYear", parseNumField("")); // "" → null
-  next = setRowValue(next, "spending", i, "realGrowthPct", 0); // growth "" → 0 upstream
+  next = setRowValue(next, "spending", i, "growthPct", parseNumField("")); // "" → null = with inflation
   const row = next.spending[i];
   assert.equal(row.fromYear, null, "empty from-year stays null (not 0)");
-  assert.equal(row.realGrowthPct, 0, "growth is 0, not null");
+  assert.equal(row.growthPct, null, "blank increase means 'with inflation', stored as null");
   assert.deepEqual(validate(next).errors, [], "row validates");
 });
 
@@ -559,24 +572,39 @@ test("yearDelta: year plus years-from-now, singular/plural", () => {
   assert.equal(yearDelta(2027, 2026), "2027 (1 yr)");
 });
 
-// ---- v5: tax controls (pure transforms behind the assumptions toggle) ----
+// ---- v6: accounts, buckets, taxes (pure transforms behind the inputs) ----
 
-test("tax.enabled toggles immutably via setValueAtPath", () => {
+test("account rows: add, change type, blank contributions read as $0", () => {
   const s = placeholderState();
-  assert.equal(s.tax.enabled, false);
-  const on = setValueAtPath(s, "tax.enabled", true);
-  assert.equal(on.tax.enabled, true);
-  assert.equal(s.tax.enabled, false, "original state is not mutated");
-  const off = setValueAtPath(on, "tax.enabled", false);
-  assert.equal(off.tax.enabled, false);
+  let next = addRow(s, "accounts");
+  const i = next.accounts.length - 1;
+  assert.equal(next.accounts[i].type, "taxable", "a new account starts as taxable");
+  next = setRowValue(next, "accounts", i, "type", parseRowField("accounts", "type", "roth_ira", true));
+  next = setRowValue(next, "accounts", i, "contributionAnnual", parseRowField("accounts", "contributionAnnual", "", false));
+  next = setRowValue(next, "accounts", i, "costBasis", parseRowField("accounts", "costBasis", "", false));
+  assert.equal(next.accounts[i].type, "roth_ira");
+  assert.equal(next.accounts[i].contributionAnnual, 0, "a cleared contribution is $0, not an error");
+  assert.equal(next.accounts[i].costBasis, null, "a cleared cost basis means 'same as balance'");
+  assert.deepEqual(validate(next).errors, []);
+  assert.equal(s.accounts.length, placeholderState().accounts.length, "input never mutated");
 });
 
-test("tax knobs write through and keep the state valid", () => {
+test("gainShareOf: taxable only; blank basis means no gain", () => {
+  assert.equal(gainShareOf({ type: "taxable", balance: 100_000, costBasis: 60_000 }), 0.4);
+  assert.equal(gainShareOf({ type: "taxable", balance: 100_000, costBasis: null }), 0);
+  assert.equal(gainShareOf({ type: "taxable", balance: 100_000, costBasis: 120_000 }), 0, "a loss is 0% gain, never negative");
+  assert.equal(gainShareOf({ type: "roth_ira", balance: 100_000, costBasis: null }), null);
+});
+
+test("bucket and tax inputs write through and keep the state valid", () => {
   let s = placeholderState();
-  s = setValueAtPath(s, "tax.enabled", true);
-  s = setValueAtPath(s, "tax.effectiveGainsRatePct", parseNumField("23"));
-  s = setValueAtPath(s, "tax.embeddedGainPct", parseNumField("60"));
-  assert.equal(s.tax.effectiveGainsRatePct, 23);
-  assert.equal(s.tax.embeddedGainPct, 60);
+  s = setValueAtPath(s, "economy.inflationPct", parseNumField("3"));
+  s = setValueAtPath(s, "buckets.preservationYears", parseNumField("5"));
+  s = setValueAtPath(s, "buckets.incomeThroughYear", parseNumField("12"));
+  s = setValueAtPath(s, "taxes.ordinaryIncomePct", parseNumField("24"));
+  assert.equal(s.economy.inflationPct, 3);
+  assert.equal(s.buckets.preservationYears, 5);
   assert.deepEqual(validate(s).errors, []);
+  const bad = setValueAtPath(s, "buckets.incomeThroughYear", 3);
+  assert.ok(validate(bad).errors.some((e) => e.path === "buckets.incomeThroughYear"), "high income can't end before capital preservation");
 });

@@ -48,31 +48,55 @@ export function goalText(state) {
 }
 
 /**
- * The three-way answer, as copy. Distinct tone + headline + detail per kind.
- * @param {SolverResult} result base-case requiredIncome(state, {})
+ * Whole-percent share: 0.3412 -> "34%".
+ * @param {number} share 0..1
+ */
+export function fmtPct(share) {
+  if (!Number.isFinite(share)) return "—";
+  return `${Math.round(share * 100)}%`;
+}
+
+/**
+ * The headline answer, as copy: do I have enough, and if not, the gap.
+ * @param {import("../../src/engine/solver.mjs").GapResult} gap base-case requiredSavings(state, {})
+ * @param {SolverResult} income base-case requiredIncome(state, {})
  * @param {RunwayState} state
+ * @param {number} endBal base-case end balance, today's $
  * @returns {{tone: "good"|"bad", headline: string, detail: string}}
  */
-export function verdictCopy(result, state) {
-  if (result.kind === "met") {
+export function verdictCopy(gap, income, state, endBal) {
+  const goal = goalText(state);
+  if (gap.kind === "met") {
     return {
       tone: "good",
-      headline: "No — you don't need to work.",
-      detail: `Goal (${goalText(state)}) is met with no additional income.`,
+      headline: "Yes, you have enough.",
+      detail: `With what you have today, the plan reaches your goal (${goal}) at age ${state.profile.endAge}, ending with ${fmtMoney(endBal)} in today's dollars.`,
     };
   }
-  if (result.kind === "value") {
+  if (gap.kind === "value") {
+    const orEarn = income.kind === "value" ? ` Or, instead, earn ${fmtMoney(income.perYear)}/yr after tax until age ${income.untilAge}.` : "";
     return {
       tone: "bad",
-      headline: `Yes — earn ${fmtMoney(result.perYear)}/yr (net) from now until age ${result.untilAge}, then never again.`,
-      detail: `The minimum net income to ${goalText(state)}, earned from now through age ${result.untilAge}.`,
+      headline: `Not yet. The gap is ${fmtMoney(gap.amount)} in today's dollars.`,
+      detail: `That's how much more you'd need invested today, in the recommended split, to ${goal} by age ${state.profile.endAge}.${orEarn}`,
     };
   }
   return {
     tone: "bad",
-    headline: `Not achievable even at ${fmtMoney(result.cap)}/yr until age ${state.work.untilAge} — extend the window or cut spending.`,
-    detail: `No income up to ${fmtMoney(result.cap)}/yr lands the goal (${goalText(state)}). Raise the work-until age, reduce spending, or change the end state.`,
+    headline: `Not reachable even with ${fmtMoney(gap.cap)} more today.`,
+    detail: `Something in the plan outruns any realistic amount of savings. Check spending, the plan-to age, and the goal (${goal}).`,
   };
+}
+
+/**
+ * Gap table/KPI cell: never blank, color class per kind.
+ * @param {import("../../src/engine/solver.mjs").GapResult} gap
+ * @returns {{text: string, cls: "pos"|"warn"|"neg"}}
+ */
+export function gapCell(gap) {
+  if (gap.kind === "met") return { text: "none", cls: "pos" };
+  if (gap.kind === "value") return { text: fmtMoney(gap.amount), cls: "warn" };
+  return { text: `over ${fmtCompact(gap.cap)}`, cls: "neg" };
 }
 
 /**
@@ -81,7 +105,7 @@ export function verdictCopy(result, state) {
  * @returns {{text: string, cls: "pos"|"warn"|"neg"}}
  */
 export function requiredCell(result) {
-  if (result.kind === "met") return { text: "none", cls: "pos" };
+  if (result.kind === "met") return { text: "none needed", cls: "pos" };
   if (result.kind === "value") return { text: fmtMoney(result.perYear), cls: "warn" };
   return { text: `not achievable even at ${fmtCompact(result.cap)}/yr`, cls: "neg" };
 }
@@ -93,7 +117,7 @@ export function requiredCell(result) {
  * @returns {{text: string, cls: "pos"|"neg"}}
  */
 export function runwayCell(sim) {
-  if (sim.firstBreachYear === null) return { text: "never", cls: "pos" };
+  if (sim.firstBreachYear === null) return { text: "never runs out", cls: "pos" };
   return { text: yearDelta(sim.firstBreachYear, sim.startYear), cls: "neg" };
 }
 
