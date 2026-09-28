@@ -43,7 +43,7 @@
 // entered after tax.
 import { propertyCashflowYear } from "./property.mjs";
 import { grownValue, effectiveGrowthPct } from "./growth.mjs";
-import { bucketReturns, bucketTargets, allocate, pvFactor, shares } from "./buckets.mjs";
+import { bucketReturns, bucketTargets, allocate, pvFactor, shares, surplusShares } from "./buckets.mjs";
 
 const MEDICARE_AGE = 65;
 // Withdrawals from traditional IRAs / 401(k)s before 59 1/2 carry a 10% penalty.
@@ -274,7 +274,7 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
   const splitAt = (/** @type {number} */ i) => {
     const targets = bucketTargets(needs, i, factors, b);
     targets.equities = Math.max(0, targets.equities - Math.max(0, sumOf(true)));
-    return allocate(sumOf(false), targets);
+    return allocate(sumOf(false), targets, surplusShares(years - i, b));
   };
 
   // Market drop now: equities fall drawdownPct, high income half that (on

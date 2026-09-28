@@ -321,11 +321,11 @@ function renderSplit(base) {
     note = "Add your accounts to see a recommended split.";
   } else if (base.gap.kind === "value") {
     const funded = simulate(state, {}, base.gap.amount).startMix;
-    note = `You're short, so every bucket holds less than the plan needs, by the same share. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
+    note = `You're short. The buckets fill in order (capital preservation first), so the later buckets hold less than the plan needs. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
   } else if (dollars.preservation === 0 && dollars.income === 0) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {
-    note = "Each bucket holds its share of your future withdrawals: the next years in capital preservation, the middle years in high income, and the later years in global equities. Money beyond what the plan needs is spread in the same proportions.";
+    note = "Capital preservation holds your next years of withdrawals and high income the years after that. Everything else is long-term money in global equities, until fewer years remain than the high income cutoff.";
   }
   if (own > 0) {
     note += ` Not included: ${fmtMoney(own)} in accounts held in their own fund. That money is counted as long-term money, so it lowers how much the plan needs in equities.`;

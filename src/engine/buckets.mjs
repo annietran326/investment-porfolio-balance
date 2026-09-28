@@ -16,12 +16,17 @@
 // out with cutoffs 8/15 spends 5 years in equities, 7 in high income, and 8 in
 // capital preservation.)
 //
-// The split always follows those targets' proportions, whatever the portfolio
-// size: with more money than the withdrawals need, every bucket gets the same
-// extra share; with less, every bucket is short by the same share. So late in
-// life, when only a few years remain, nearly everything sits in capital
-// preservation, and a shortfall shows up as the gap rather than a lopsided mix.
-// Only with no withdrawals ahead at all does money default to equities.
+// Filling order, by years left in the plan:
+//   - more than `incomeThroughYear` years left: capital preservation gets the
+//     next `preservationYears` of withdrawals, high income gets the years after
+//     that through `incomeThroughYear`, and everything else goes to equities;
+//   - between `preservationYears` and `incomeThroughYear` years left: capital
+//     preservation gets its years, everything else goes to high income;
+//   - `preservationYears` or fewer left: everything is in capital preservation.
+// So capital preservation is a fixed cushion (like an advisor's "8 years of
+// spending in cash-like assets"), never a share of the total. A portfolio
+// short of the full need is short in the later buckets first, and the gap
+// shows how much more would fill them.
 
 export const BUCKET_KEYS = /** @type {const} */ (["preservation", "income", "equities"]);
 export const BUCKET_LABELS = {
@@ -93,17 +98,37 @@ export function bucketTargets(needs, fromIdx, factors, b) {
 }
 
 /**
- * Split a portfolio across the buckets in proportion to their targets.
+ * Where money beyond the withdrawal targets goes, given the years left in the
+ * plan: equities with more than `incomeThroughYear` left, high income with
+ * more than `preservationYears` left, otherwise capital preservation.
+ * @param {number} yearsLeft @param {import("../model/schema.mjs").Buckets} b
+ * @returns {BucketAmounts} shares (one bucket gets 1)
+ */
+export function surplusShares(yearsLeft, b) {
+  const to = bucketFor(yearsLeft, b);
+  return { preservation: to === "preservation" ? 1 : 0, income: to === "income" ? 1 : 0, equities: to === "equities" ? 1 : 0 };
+}
+
+/**
+ * Split a portfolio across the buckets: fill capital preservation's target,
+ * then high income's, then equities'; anything beyond the total need goes
+ * where `extraShares` says (see surplusShares).
  * @param {number} total portfolio value (<= 0 means nothing to split)
  * @param {BucketAmounts} targets
+ * @param {BucketAmounts} [extraShares] defaults to all equities
  * @returns {BucketAmounts} dollars per bucket, summing to max(total, 0)
  */
-export function allocate(total, targets) {
+export function allocate(total, targets, extraShares = { preservation: 0, income: 0, equities: 1 }) {
   if (!(total > 0)) return { preservation: 0, income: 0, equities: 0 };
-  const need = targets.preservation + targets.income + targets.equities;
-  if (!(need > 0)) return { preservation: 0, income: 0, equities: total };
-  const k = total / need;
-  return { preservation: targets.preservation * k, income: targets.income * k, equities: targets.equities * k };
+  const preservation = Math.min(total, targets.preservation);
+  const income = Math.min(total - preservation, targets.income);
+  const equities = Math.min(total - preservation - income, targets.equities);
+  const extra = total - preservation - income - equities;
+  return {
+    preservation: preservation + extra * extraShares.preservation,
+    income: income + extra * extraShares.income,
+    equities: equities + extra * extraShares.equities,
+  };
 }
 
 /**

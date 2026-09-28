@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { simulate, EARLY_WITHDRAWAL_START_AGE } from "../src/engine/simulate.mjs";
 import { propertyCashflowYear, SALE_YEAR_OWNED_MONTHS } from "../src/engine/property.mjs";
-import { pvFactor, bucketTargets, allocate, bucketFor, shares } from "../src/engine/buckets.mjs";
+import { pvFactor, bucketTargets, allocate, bucketFor, shares, surplusShares } from "../src/engine/buckets.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 import { newAccount, newBuckets, newTaxes, validate } from "../src/model/schema.mjs";
 
@@ -247,9 +247,10 @@ test("own-fund money counts as long-term: it reduces the equities target first",
   s.buckets = { preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
   assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 });
   // Add $12k in an own fund: it covers the equities need, so the bucket plan's
-  // targets become 12k / 12k / 0 and its $36k is spread in those proportions.
+  // targets become 12k / 12k / 0, and its extra $12k follows the glide: with
+  // 3 years left (more than the 2-year cutoff) extra money is all equities.
   s.accounts.push(newAccount({ name: "401k", type: "401k", balance: 12_000, invest: "own", ownReturnPct: 0 }));
-  assert.deepEqual(simulate(s).startMix, { preservation: 18_000, income: 18_000, equities: 0 });
+  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 });
   s.accounts[0].balance = 24_000;
   assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 0 });
 });
@@ -291,35 +292,64 @@ test("bucketFor and pvFactor follow the time-based rule (hand-computed)", () => 
   near(pvFactor(20, b, r), 1 / (1.025 ** 8 * 1.055 ** 7 * 1.095 ** 5), "20 years out: 5 in equities, 7 in high income, 8 in preservation", 1e-12);
 });
 
-test("allocate: the split keeps the targets' proportions, whether there's extra money or a shortfall", () => {
+test("allocate: safe buckets hold exactly their targets; extra money follows the glide; a shortfall scales every bucket", () => {
   // Cutoffs 2 / 4, all returns 0 → each bucket's target is just the sum of its needs.
   const b = { ...newBuckets(), preservationYears: 2, incomeThroughYear: 4 };
   const needs = [10, 10, 10, 10, 10, 10].map((x) => x * 1000);
   const factors = [0, 1, 1, 1, 1, 1, 1];
   const targets = bucketTargets(needs, 0, factors, b);
   assert.deepEqual(targets, { preservation: 20_000, income: 20_000, equities: 20_000 });
-  assert.deepEqual(allocate(90_000, targets), { preservation: 30_000, income: 30_000, equities: 30_000 }, "extra money spread the same way");
-  assert.deepEqual(allocate(30_000, targets), { preservation: 10_000, income: 10_000, equities: 10_000 });
+  assert.deepEqual(allocate(90_000, targets), { preservation: 20_000, income: 20_000, equities: 50_000 }, "extra money defaults to equities");
+  assert.deepEqual(allocate(90_000, targets, { preservation: 0.5, income: 0.5, equities: 0 }), { preservation: 35_000, income: 35_000, equities: 20_000 }, "or follows the shares given");
   assert.deepEqual(allocate(0, targets), { preservation: 0, income: 0, equities: 0 });
   assert.deepEqual(allocate(5_000, { preservation: 0, income: 0, equities: 0 }), { preservation: 0, income: 0, equities: 5_000 }, "no withdrawals ahead → all equities");
   // Standing at year 3, only years 3..5 remain: 20k preservation, 10k income.
   assert.deepEqual(bucketTargets(needs, 3, factors, b), { preservation: 20_000, income: 10_000, equities: 0 });
 });
 
+test("surplusShares: extra money goes to equities with >15 years left, high income with 9–15, capital preservation with 8 or fewer", () => {
+  const b = newBuckets(); // 8 / 15
+  assert.deepEqual(surplusShares(30, b), { preservation: 0, income: 0, equities: 1 });
+  assert.deepEqual(surplusShares(16, b), { preservation: 0, income: 0, equities: 1 });
+  assert.deepEqual(surplusShares(15, b), { preservation: 0, income: 1, equities: 0 });
+  assert.deepEqual(surplusShares(9, b), { preservation: 0, income: 1, equities: 0 });
+  assert.deepEqual(surplusShares(8, b), { preservation: 1, income: 0, equities: 0 });
+  assert.deepEqual(surplusShares(1, b), { preservation: 1, income: 0, equities: 0 });
+});
+
+test("allocate fills in order: capital preservation, then high income, then equities", () => {
+  const targets = { preservation: 20_000, income: 20_000, equities: 20_000 };
+  assert.deepEqual(allocate(30_000, targets), { preservation: 20_000, income: 10_000, equities: 0 }, "short: later buckets are short first");
+  assert.deepEqual(allocate(15_000, targets), { preservation: 15_000, income: 0, equities: 0 });
+});
+
+test("a well-funded plan keeps capital preservation at its fixed cushion, and moves out of equities near the end", () => {
+  // Retired at 60 with far more than needed: capital preservation holds the
+  // next 8 years of withdrawals only (a modest share), equities hold the rest,
+  // and equities reach 0% in the final 8 years.
+  const s = flat({ age: 60, years: 35, returnPct: 5, spendMonthly: 4000, accounts: [newAccount({ name: "b", type: "taxable", balance: 5_000_000 })] });
+  const sim = simulate(s);
+  const first = sim.rows[0].mix;
+  near(sim.startMix.preservation, 48_000 * (1 / 1.05 + 1 / 1.05 ** 2 + 1 / 1.05 ** 3 + 1 / 1.05 ** 4 + 1 / 1.05 ** 5 + 1 / 1.05 ** 6 + 1 / 1.05 ** 7 + 1 / 1.05 ** 8), "exactly 8 years of withdrawals", 1e-6);
+  assert.ok(first.preservation < 0.1 && first.equities > 0.8, "a small cushion; the rest is long-term money");
+  const last8 = sim.rows.filter((r) => r.age >= 60 + 35 - 8);
+  assert.ok(last8.every((r) => r.mix.equities < 1e-9), "no equities in the final 8 years");
+  assert.ok(last8.every((r) => r.mix.preservation > 1 - 1e-9), "the final 8 years are all capital preservation");
+  const mid = sim.rows.filter((r) => r.age >= 60 + 35 - 15 && r.age < 60 + 35 - 8);
+  assert.ok(mid.every((r) => r.mix.equities < 1e-9 && r.mix.income > 0.5), "with 9–15 years left: no equities, the rest in high income");
+});
+
 test("the year's return is the split-weighted blend of the bucket returns", () => {
   // Returns 0% / 5% / 10%; cutoffs 1 / 2; $12k/yr spending for 3 years.
   // Targets: year 1 → 12k preservation; year 2 → 12k/1.05 income; year 3 →
-  // 12k/(1.1 × 1.05) equities. The $1M is spread in those proportions.
+  // 12k/(1.1 × 1.05) equities. 3 years left ≥ the 2-year cutoff, so the
+  // extra money is all equities.
   const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 1_000_000 })] });
   s.buckets = { preservationReturnPct: 0, incomeReturnPct: 5, equitiesReturnPct: 10, preservationYears: 1, incomeThroughYear: 2 };
   const sim = simulate(s);
-  const tp = 12_000;
-  const ti = 12_000 / 1.05;
-  const te = 12_000 / (1.1 * 1.05);
-  const k = 1_000_000 / (tp + ti + te);
-  const pres = tp * k;
-  const inc = ti * k;
-  const eq = te * k;
+  const pres = 12_000;
+  const inc = 12_000 / 1.05;
+  const eq = 1_000_000 - pres - inc;
   near(sim.startMix.preservation, pres);
   near(sim.startMix.income, inc);
   near(sim.startMix.equities, eq);
