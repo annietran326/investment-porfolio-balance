@@ -1,47 +1,59 @@
-// The deterministic year-by-year simulation. Pure: no clock (currentYear is
-// state), no filesystem, no globals.
+// The year-by-year simulation. Pure: no clock (currentYear is state), no
+// filesystem, no globals.
+//
+// It runs in two modes that share every rule:
+//   - the EXPECTED-RETURN plan: every year earns exactly the bucket returns
+//     you entered (used for the recommended split, the by-age table, and the
+//     year-by-year cash flow);
+//   - a SIMULATED future (Monte Carlo): each year's returns are drawn at
+//     random around those expectations (see montecarlo.mjs), passed in as
+//     `shocks`.
 //
 // Money model:
 //   - The engine runs in ACTUAL (nominal) dollars with one inflation input.
 //     Inputs are entered in today's dollars and grow at their own rates (blank
 //     = inflation). Every number it RETURNS is converted back to today's
-//     dollars, so results are easy to judge.
+//     dollars.
 //   - Accounts are grouped into "holdings" by how they're taxed (taxable,
 //     which tracks cost basis; tax-deferred, i.e. traditional IRA + 401(k);
 //     and Roth) and by how they're invested:
-//       * accounts in the three-bucket plan share one household-level mix and
-//         earn the blended bucket return. Each year that money is re-split
-//         across the buckets by the time-based rule in buckets.mjs.
-//         Rebalancing is treated as tax-free (a small simplification).
-//       * an account in its OWN fund (e.g. a target-date 401(k) you leave
-//         alone) earns its own return and is not part of the split. It's
-//         treated as long-term money: it reduces how much the bucket plan
-//         needs to hold in equities.
+//       * bucket-plan accounts share three real bucket balances: capital
+//         preservation, high income, global equities (the rules for sizing
+//         them are in buckets.mjs);
+//       * an own-fund account (e.g. a target-date 401(k) you leave alone)
+//         earns its own return, isn't part of the split, and counts as
+//         long-term money (it lowers the bucket plan's equities target).
 //
-// Lifespans: you and a spouse each live to the same plan-to age. The plan runs
-// until the younger of you reaches it. Each person's Social Security and
-// healthcare stop after they pass it; the survivor keeps the larger of the two
-// Social Security checks (the survivor-benefit rule, from age 60). Household
-// spending is unchanged after a death (conservative).
+// Each year, in order (pinned by tests):
+//   1. Every bucket and own fund earns its return for the year.
+//   2. Contributions land.
+//   3. The year's net cash flow lands: a surplus is saved to the taxable
+//      account; a shortfall is withdrawn from accounts (taxable, then
+//      tax-deferred, then Roth; bucket-plan money before own-fund money),
+//      grossed up for tax. On the bucket side, withdrawals come out of
+//      capital preservation first, then high income, then equities.
+//   4. Refill: after a year equities went UP (or didn't fall), the buckets
+//      are reset to their targets for next year. After a year equities FELL,
+//      nothing is sold to refill: the plan keeps spending from capital
+//      preservation and high income and lets equities recover. (With
+//      expected returns every year is an up year, so the plan rebalances
+//      yearly.) Rebalancing is treated as tax-free.
 //
-// Within a year (pinned by tests): growth applies to the balance at the START
-// of the year, then contributions and the year's net cash flow land at the
-// end. Cash arriving during a year earns no return until the next year.
-//
-// Withdrawal order when spending outruns income: taxable, then tax-deferred,
-// then Roth (within each, bucket-plan money before own-fund money). Each
-// withdrawal is grossed up for tax so the after-tax cash covers the shortfall:
-//   - taxable: tax = capital-gains rate x the gain share of what's sold, where
+// Withdrawal taxes:
+//   - taxable: capital-gains rate x the gain share of what's sold, where
 //     gain share = (value - basis) / value at that moment. Growth raises value
-//     but not basis, so the taxed share rises over time; a sale reduces basis
-//     in proportion (average-cost method).
+//     but not basis; a sale reduces basis in proportion (average cost).
 //   - tax-deferred: ordinary income rate on the whole withdrawal, plus a 10%
 //     penalty before age 59 1/2.
 //   - Roth: tax-free (withdrawals before 59 1/2 are flagged, not penalized).
+//
+// Lifespans: you and a spouse each live to the plan-to age; the plan runs
+// until the younger of you reaches it. Each person's Social Security and
+// healthcare stop after that age; the survivor keeps the larger Social
+// Security check (from age 60). Household spending is unchanged after a death.
+//
 // Not modeled: required minimum distributions (slightly optimistic), Roth
-// early-withdrawal rules, tax brackets. Income and property proceeds are
-// entered after tax.
-import { propertyCashflowYear } from "./property.mjs";
+// early-withdrawal rules, tax brackets. Income is entered after tax.
 import { grownValue, effectiveGrowthPct } from "./growth.mjs";
 import { bucketReturns, bucketTargets, allocate, pvFactor, shares, surplusShares } from "./buckets.mjs";
 
@@ -52,8 +64,6 @@ export const EARLY_WITHDRAWAL_START_AGE = 59;
 export const EARLY_WITHDRAWAL_PENALTY_PCT = 10;
 // A surviving spouse can collect the late spouse's Social Security from age 60.
 export const SURVIVOR_MIN_AGE = 60;
-// In the market-drop stress, high income falls by this share of the equity drop.
-export const INCOME_DROP_SHARE = 0.5;
 
 /**
  * Annual healthcare cost for one person at a given age (today's $): $0 while
@@ -72,20 +82,16 @@ function ssAnnualOf(social) {
 }
 
 /**
- * A scenario overlay: the full set of stress knobs. All optional; `{}` is the base case.
+ * A scenario overlay. `{}` is the base case.
  * @typedef {Object} ScenarioOverlay
- * @property {number} [spendMult]         multiplies category spending (not healthcare)
- * @property {number} [drawdownPct]       market drop NOW: equities fall this %, high income half as much, capital preservation not at all
- * @property {number} [oneTimeCost]       a single shock expense, today's $ (major repair)
- * @property {number} [oneTimeCostYearIdx] which simulation year (0-based) the shock lands in
- * @property {number} [vacancyMonths]     see property.mjs
- * @property {number} [vacancyYears]
- * @property {number} [saleDelayYears]
- * @property {{preservation: number, income: number, equities: number, own?: number}[]} [returnsByYear]
- *   Monte Carlo hook: actual returns (decimals) per simulation year. A missing
- *   year uses the bucket assumptions; a missing `own` uses each own-fund
- *   account's own return. The split itself always plans with the assumptions
- *   (you plan with expected returns, then live with actual ones).
+ * @property {number} [spendMult] multiplies category spending (not healthcare)
+ */
+
+/**
+ * One simulated future's returns: for each year, the actual return of each
+ * bucket and a return for each own-fund account (by own-fund index, in
+ * account order). Built by montecarlo.mjs.
+ * @typedef {{preservation: Float64Array, income: Float64Array, equities: Float64Array, own: Float64Array[]}} ReturnPath
  */
 
 /**
@@ -93,13 +99,11 @@ function ssAnnualOf(social) {
  *
  * @typedef {Object} YearRow  every $ figure in today's dollars
  * @property {number} year
- * @property {number} age
- * @property {number} income   income streams + the solver's extra income
+ * @property {number} age      your age (the plan can run past it when a spouse is younger)
+ * @property {number} income   income streams
  * @property {number} ss       social security (post-haircut)
- * @property {number} propCF   property cash flow (rent − costs − mortgage)
- * @property {number} proceeds sale proceeds landing this year
  * @property {number} health   healthcare cost this year
- * @property {number} spend    category spending + health + one-time shocks
+ * @property {number} spend    category spending + health
  * @property {number} contrib  contributions into accounts (incl. employer match)
  * @property {number} withdrawn gross amount taken out of accounts (before tax)
  * @property {number} tax      tax + penalties on those withdrawals
@@ -122,46 +126,42 @@ function ssAnnualOf(social) {
  * @property {number[]} earlyRothYears    years the Roth was tapped before 59 1/2 (flag only)
  */
 
+/** @typedef {{pool: "taxable"|"deferred"|"roth", own: boolean, v: number, basis: number, ownRate: number, ownVol: number, ownIdx: number}} Holding */
+const POOL_ORDER = /** @type {const} */ (["taxable", "deferred", "roth"]);
+
+/** @param {import("../model/schema.mjs").AccountType} type @returns {"taxable"|"deferred"|"roth"} */
+function poolOf(type) {
+  if (type === "taxable") return "taxable";
+  if (type === "roth_ira") return "roth";
+  return "deferred";
+}
+
 /**
- * Run the simulation.
- *
+ * Everything about a plan that doesn't depend on market returns: each year's
+ * cash flows, withdrawal needs, bucket targets, and contributions. Computed
+ * once and shared by every simulated future (that's what makes 1,000 runs fast).
  * @param {import("../model/schema.mjs").RunwayState} s validated state
  * @param {ScenarioOverlay} [overlay]
- * @param {number} [extraSavingsToday] the gap solver's variable: extra $ added to the taxable account today (as fresh cash: basis = amount)
- * @returns {SimResult}
  */
-export function simulate(s, overlay = {}, extraSavingsToday = 0) {
+export function prepare(s, overlay = {}) {
   const startYear = s.profile.currentYear;
   const endAge = s.profile.endAge;
   const inflPct = s.economy.inflationPct;
   const infl = inflPct / 100;
-  const deflator = (/** @type {number} */ i) => (1 + infl) ** i; // today's $ -> year-i $
   const spendMult = overlay.spendMult ?? 1;
   const b = s.buckets;
   const planReturns = bucketReturns(b);
-  const ordinaryRate = s.taxes.ordinaryIncomePct / 100;
-  const gainsRate = s.taxes.capitalGainsPct / 100;
   const ssAnnualSelf = ssAnnualOf(s.social);
-  // Spouses with their own age contribute Social Security and a healthcare load
-  // on their own age trajectory.
   const spouses = (s.household?.people ?? []).filter((p) => p.role === "spouse" && typeof p.currentAge === "number");
   // The plan runs until the youngest of you reaches the plan-to age.
   const years = Math.max(0, endAge - s.profile.currentAge, ...spouses.map((sp) => endAge - /** @type {number} */ (sp.currentAge)));
-  const propOverlay = {
-    startYear,
-    inflationPct: inflPct,
-    saleDelayYears: overlay.saleDelayYears,
-    vacancyMonths: overlay.vacancyMonths,
-    vacancyYears: overlay.vacancyYears,
-  };
-  const breachThreshold = s.endState.mode === "floor" ? s.endState.amounts.floor : 0;
+  const deflators = Array.from({ length: years + 1 }, (_, i) => (1 + infl) ** i); // today's $ -> year-i $
 
-  // ---- Pass 1: every year's cash flows in actual dollars, independent of the portfolio ----
   const flows = [];
   for (let i = 0; i < years; i++) {
     const year = startYear + i;
     const age = s.profile.currentAge + i;
-    const d = deflator(i);
+    const d = deflators[i];
 
     let income = 0;
     for (const inc of s.incomes) {
@@ -180,7 +180,7 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
       const spBenefit = sp.social ? ssAnnualOf(sp.social) : 0;
       const spOwn = spAlive && sp.social && spAge >= sp.social.startAge ? spBenefit : 0;
       if (k !== 0) {
-        ss += spOwn; // survivor rule applies to the first spouse only
+        ss += spOwn; // the survivor rule applies to the first spouse only
         return;
       }
       if (selfAlive && !spAlive && age >= SURVIVOR_MIN_AGE) ss = Math.max(selfOwn, spBenefit);
@@ -188,14 +188,6 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
       else ss += spOwn;
     });
     ss *= d;
-
-    let propCF = 0;
-    let proceeds = 0;
-    for (const p of s.properties) {
-      const res = propertyCashflowYear(p, year, propOverlay);
-      propCF += res.cf;
-      proceeds += res.proceeds;
-    }
 
     // Healthcare rises with inflation; each person's stops after they pass the plan-to age.
     let health = selfAlive ? healthCostAt(s.health, age) : 0;
@@ -217,26 +209,32 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
         categorySpend += person.annualCost * d;
       }
     }
-    let spend = categorySpend * spendMult + health;
-    if (overlay.oneTimeCost && i === (overlay.oneTimeCostYearIdx ?? 0)) spend += overlay.oneTimeCost * d;
-
-    flows.push({ year, age, income, ss, propCF, proceeds, health, spend, net: income + ss + propCF + proceeds - spend });
+    const spend = categorySpend * spendMult + health;
+    flows.push({ year, age, income, ss, health, spend, net: income + ss - spend });
   }
 
-  // ---- Holdings: bucket-plan money pooled by tax type, plus one per own-fund account ----
+  // What the portfolio must supply at the end of each year, before tax, and
+  // what each bucket needs today to cover it (from each year's vantage point).
+  const needs = flows.map((f) => Math.max(0, -f.net));
+  const factors = [0];
+  for (let t = 1; t <= years; t++) factors.push(pvFactor(t, b, planReturns));
+  const targetsByYear = Array.from({ length: years + 1 }, (_, i) => bucketTargets(needs, i, factors, b));
+  const surplusByYear = Array.from({ length: years + 1 }, (_, i) => surplusShares(years - i, b));
+
+  // Holdings template (copied per run): bucket-plan money pooled by tax type,
+  // then one holding per own-fund account.
   /** @type {Holding[]} */
   const holdings = [
-    { pool: "taxable", own: false, v: 0, basis: 0, ownRate: 0 },
-    { pool: "deferred", own: false, v: 0, basis: 0, ownRate: 0 },
-    { pool: "roth", own: false, v: 0, basis: 0, ownRate: 0 },
+    { pool: "taxable", own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 },
+    { pool: "deferred", own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 },
+    { pool: "roth", own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 },
   ];
-  const managedTaxable = holdings[0];
-  /** @type {number[]} holding index for each account */
+  let ownCount = 0;
   const holdingOf = s.accounts.map((a) => {
     const pool = poolOf(a.type);
     const basis = pool === "taxable" ? a.costBasis ?? a.balance : 0;
     if (a.invest === "own") {
-      holdings.push({ pool, own: true, v: a.balance, basis, ownRate: a.ownReturnPct / 100 });
+      holdings.push({ pool, own: true, v: a.balance, basis, ownRate: a.ownReturnPct / 100, ownVol: (a.ownVolPct ?? 0) / 100, ownIdx: ownCount++ });
       return holdings.length - 1;
     }
     const h = holdings[POOL_ORDER.indexOf(pool)];
@@ -244,16 +242,9 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
     h.basis += basis;
     return POOL_ORDER.indexOf(pool);
   });
-  if (extraSavingsToday) {
-    managedTaxable.v += extraSavingsToday;
-    managedTaxable.basis += extraSavingsToday;
-  }
-  // Taxable first, then tax-deferred, then Roth; bucket-plan money before own-fund money.
   const withdrawOrder = holdings
     .map((h, idx) => idx)
     .sort((x, y) => POOL_ORDER.indexOf(holdings[x].pool) - POOL_ORDER.indexOf(holdings[y].pool) || Number(holdings[x].own) - Number(holdings[y].own) || x - y);
-
-  // Contributions per holding, per year (actual $).
   const contribs = flows.map((f, i) => {
     const out = holdings.map(() => 0);
     s.accounts.forEach((a, k) => {
@@ -264,38 +255,97 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
     return out;
   });
 
-  // What the portfolio must supply at the end of each year, before tax.
-  const needs = flows.map((f) => Math.max(0, -f.net));
-  const factors = [0];
-  for (let t = 1; t <= years; t++) factors.push(pvFactor(t, b, planReturns));
+  return {
+    s,
+    startYear,
+    years,
+    deflators,
+    flows,
+    needs,
+    targetsByYear,
+    surplusByYear,
+    holdings,
+    withdrawOrder,
+    contribs,
+    ownCount,
+    planReturns,
+    ordinaryRate: s.taxes.ordinaryIncomePct / 100,
+    gainsRate: s.taxes.capitalGainsPct / 100,
+    breachThreshold: s.endState.mode === "floor" ? s.endState.amounts.floor : 0,
+  };
+}
 
-  const sumOf = (/** @type {boolean} */ own) => holdings.reduce((sum, h) => (h.own === own ? sum + h.v : sum), 0);
-  /** The split of the bucket-plan money at year i, with own-fund money counted as long-term (equities) money. */
-  const splitAt = (/** @type {number} */ i) => {
-    const targets = bucketTargets(needs, i, factors, b);
-    targets.equities = Math.max(0, targets.equities - Math.max(0, sumOf(true)));
-    return allocate(sumOf(false), targets, surplusShares(years - i, b));
+/** @typedef {ReturnType<typeof prepare>} Prepared */
+
+/**
+ * Take `amount` out of the buckets: capital preservation first, then high
+ * income, then equities.
+ * @param {Mix} B @param {number} amount
+ */
+function drawFromBuckets(B, amount) {
+  for (const k of /** @type {const} */ (["preservation", "income", "equities"])) {
+    if (amount <= 0) return;
+    const take = Math.min(B[k], amount);
+    B[k] -= take;
+    amount -= take;
+  }
+}
+
+/**
+ * Add `amount` to the buckets, topping up toward `targets` in order
+ * (capital preservation, then high income), with the rest in equities.
+ * @param {Mix} B @param {number} amount @param {Mix} targets
+ */
+function addToBuckets(B, amount, targets) {
+  for (const k of /** @type {const} */ (["preservation", "income"])) {
+    if (amount <= 0) return;
+    const room = Math.max(0, targets[k] - B[k]);
+    const put = Math.min(room, amount);
+    B[k] += put;
+    amount -= put;
+  }
+  if (amount > 0) B.equities += amount;
+}
+
+/**
+ * Run one future (expected returns when `path` is omitted).
+ * @param {Prepared} P
+ * @param {{path?: ReturnPath|null, extraSavingsToday?: number, detail?: boolean}} [opts]
+ *   detail: build the per-year rows and path objects (the Monte Carlo loop
+ *   skips them for speed and reads `balances` instead).
+ */
+export function runPlan(P, opts = {}) {
+  const { s, years, deflators, flows, targetsByYear, surplusByYear, withdrawOrder, contribs, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
+  const path = opts.path ?? null;
+  const detail = opts.detail ?? true;
+  const holdings = P.holdings.map((h) => ({ ...h }));
+  const managedTaxable = holdings[0];
+  if (opts.extraSavingsToday) {
+    managedTaxable.v += opts.extraSavingsToday;
+    managedTaxable.basis += opts.extraSavingsToday;
+  }
+  const sumOf = (/** @type {boolean} */ own) => {
+    let t = 0;
+    for (const h of holdings) if (h.own === own) t += h.v;
+    return t;
+  };
+  /** The target split of `total` bucket-plan dollars at the start of year i. */
+  const splitAt = (/** @type {number} */ i, /** @type {number} */ total) => {
+    const t = targetsByYear[i];
+    const targets = { preservation: t.preservation, income: t.income, equities: Math.max(0, t.equities - Math.max(0, sumOf(true))) };
+    return { split: allocate(total, targets, surplusByYear[i]), targets };
   };
 
-  // Market drop now: equities fall drawdownPct, high income half that (on
-  // today's split of the bucket-plan money), capital preservation not at all.
-  // Own funds are assumed stock-heavy and fall the full drawdownPct. Cost
-  // basis doesn't change.
-  const startDollars = splitAt(0);
+  // Start of the plan: the bucket-plan money sits in its target split.
+  /** @type {Mix} */
+  let B = splitAt(0, Math.max(0, sumOf(false))).split;
+  const startMix = { ...B };
   const startOwn = sumOf(true);
-  if (overlay.drawdownPct) {
-    const dd = overlay.drawdownPct / 100;
-    const managed = sumOf(false);
-    if (managed > 0) {
-      const loss = startDollars.equities * dd + startDollars.income * dd * INCOME_DROP_SHARE;
-      const keep = Math.max(0, 1 - loss / managed);
-      for (const h of holdings) if (!h.own) h.v *= keep;
-    }
-    for (const h of holdings) if (h.own) h.v *= 1 - dd;
-  }
 
-  let bal = sumOf(false) + sumOf(true);
-  const path = [{ year: startYear, age: s.profile.currentAge, bal }];
+  const balances = new Float64Array(years + 1);
+  let bal = sumOf(false) + startOwn;
+  balances[0] = bal;
+  const pathOut = detail ? [{ year: P.startYear, age: s.profile.currentAge, bal }] : [];
   /** @type {YearRow[]} */ const rows = [];
   /** @type {number|null} */ let firstNegYear = null;
   /** @type {number|null} */ let firstBreachYear = null;
@@ -305,33 +355,41 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
 
   for (let i = 0; i < years; i++) {
     const f = flows[i];
-    const d = deflator(i);
-
-    // 1. Split the bucket-plan money and earn the blended return; own funds
-    //    earn their own return.
+    const d = deflators[i];
     const managedStart = sumOf(false);
     const ownStart = sumOf(true);
-    const mix = shares(splitAt(i));
-    const actual = overlay.returnsByYear?.[i] ?? planReturns;
-    const r = managedStart > 0
-      ? mix.preservation * actual.preservation + mix.income * actual.income + mix.equities * actual.equities
-      : actual.preservation; // a negative balance (borrowed) carries roughly an inflation-level cost
-    for (const h of holdings) h.v *= 1 + (h.own ? overlay.returnsByYear?.[i]?.own ?? h.ownRate : r);
+    const mix = detail ? shares(B) : B;
+
+    // 1. Returns.
+    const rP = path ? path.preservation[i] : planReturns.preservation;
+    const rI = path ? path.income[i] : planReturns.income;
+    const rE = path ? path.equities[i] : planReturns.equities;
+    const bucketsBefore = B.preservation + B.income + B.equities;
+    B.preservation *= 1 + rP;
+    B.income *= 1 + rI;
+    B.equities *= 1 + rE;
+    const bucketsAfter = B.preservation + B.income + B.equities;
+    // Bucket-plan holdings move with the buckets; a borrowed (negative)
+    // balance carries roughly an inflation-level cost.
+    const managedFactor = managedStart > 0 && bucketsBefore > 0 ? bucketsAfter / bucketsBefore : 1 + planReturns.preservation;
+    for (const h of holdings) {
+      if (h.own) h.v *= 1 + (path ? path.own[h.ownIdx][i] : h.ownRate);
+      else h.v *= managedFactor;
+    }
     const startTotal = managedStart + ownStart;
-    const grownTotal = sumOf(false) + sumOf(true);
-    const portfolioReturn = startTotal > 0 ? grownTotal / startTotal - 1 : r;
+    const portfolioReturn = startTotal > 0 ? (sumOf(false) + sumOf(true)) / startTotal - 1 : managedFactor - 1;
 
-    // 2. Contributions land at year end.
+    // 2. Contributions.
     let contribTotal = 0;
-    contribs[i].forEach((c, idx) => {
-      if (!c) return;
-      holdings[idx].v += c;
-      if (holdings[idx].pool === "taxable") holdings[idx].basis += c;
-      contribTotal += c;
-    });
+    const c = contribs[i];
+    for (let idx = 0; idx < c.length; idx++) {
+      if (!c[idx]) continue;
+      holdings[idx].v += c[idx];
+      if (holdings[idx].pool === "taxable") holdings[idx].basis += c[idx];
+      contribTotal += c[idx];
+    }
 
-    // 3. Net cash flow: a surplus is saved to the taxable account; a shortfall
-    //    is withdrawn in order, grossed up for tax.
+    // 3. Net cash flow.
     let withdrawn = 0;
     let tax = 0;
     if (f.net >= 0) {
@@ -359,55 +417,69 @@ export function simulate(s, overlay = {}, extraSavingsToday = 0) {
       if (short > 1e-9) managedTaxable.v -= short;
     }
 
-    bal = (sumOf(false) + sumOf(true)) / deflator(i + 1);
+    // Keep the buckets equal to the bucket-plan money: money that left comes
+    // out of capital preservation first; money that arrived tops up the
+    // safe buckets toward next year's targets first.
+    const managedNow = Math.max(0, sumOf(false));
+    const delta = managedNow - (B.preservation + B.income + B.equities);
+    const next = i + 1;
+    if (delta < 0) drawFromBuckets(B, -delta);
+    else if (delta > 0) addToBuckets(B, delta, splitAt(next, managedNow).targets);
+
+    // 4. Refill only after a year equities didn't fall.
+    if (rE >= 0) B = splitAt(next, managedNow).split;
+
+    bal = (sumOf(false) + sumOf(true)) / deflators[i + 1];
+    balances[i + 1] = bal;
     const balYear = f.year + 1;
-    const balAge = f.age + 1;
     if (bal < minBal) minBal = bal;
     if (firstNegYear === null && bal < 0) firstNegYear = balYear;
     if (firstBreachYear === null && bal < breachThreshold) firstBreachYear = balYear;
 
-    path.push({ year: balYear, age: balAge, bal });
-    rows.push({
-      year: f.year,
-      age: f.age,
-      income: f.income / d,
-      ss: f.ss / d,
-      propCF: f.propCF / d,
-      proceeds: f.proceeds / d,
-      health: f.health / d,
-      spend: f.spend / d,
-      contrib: contribTotal / d,
-      withdrawn: withdrawn / d,
-      tax: tax / d,
-      returnPct: portfolioReturn * 100,
-      mix,
-      ownBal: ownStart / d,
-      bal,
-    });
+    if (detail) {
+      pathOut.push({ year: balYear, age: f.age + 1, bal });
+      rows.push({
+        year: f.year,
+        age: f.age,
+        income: f.income / d,
+        ss: f.ss / d,
+        health: f.health / d,
+        spend: f.spend / d,
+        contrib: contribTotal / d,
+        withdrawn: withdrawn / d,
+        tax: tax / d,
+        returnPct: portfolioReturn * 100,
+        mix: /** @type {Mix} */ (mix),
+        ownBal: ownStart / d,
+        bal,
+      });
+    }
   }
 
   return {
-    path,
+    path: pathOut,
     rows,
+    balances,
     endBal: bal,
     firstNegYear,
     firstBreachYear,
     minBal,
-    startYear,
-    startMix: startDollars,
+    startYear: P.startYear,
+    startMix,
     startOwn,
     earlyDeferredYears,
     earlyRothYears,
   };
 }
 
-/** @typedef {{pool: "taxable"|"deferred"|"roth", own: boolean, v: number, basis: number, ownRate: number}} Holding */
-
-const POOL_ORDER = /** @type {const} */ (["taxable", "deferred", "roth"]);
-
-/** @param {import("../model/schema.mjs").AccountType} type @returns {"taxable"|"deferred"|"roth"} */
-function poolOf(type) {
-  if (type === "taxable") return "taxable";
-  if (type === "roth_ira") return "roth";
-  return "deferred";
+/**
+ * The expected-return plan: every year earns exactly the bucket returns you
+ * entered.
+ * @param {import("../model/schema.mjs").RunwayState} s validated state
+ * @param {ScenarioOverlay} [overlay]
+ * @param {number} [extraSavingsToday] extra $ added to the taxable account today (as fresh cash: basis = amount)
+ * @returns {SimResult}
+ */
+export function simulate(s, overlay = {}, extraSavingsToday = 0) {
+  return runPlan(prepare(s, overlay), { extraSavingsToday });
 }

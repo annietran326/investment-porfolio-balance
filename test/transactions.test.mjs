@@ -42,13 +42,13 @@ const CARD_CSV =
     "2026-06-02,30.00,TRADER JOES,groceries",
     "2026-05-15,45.00,NETFLIX,fun",
     "2026-04-10,80.00,CVS PHARMACY #1234,pharmacy", // healthcare → flagged
-    "2026-05-20,200.00,HOME DEPOT #55,home repair", // property → flagged
+    "2026-05-20,200.00,HOME DEPOT #55,home repair", // home costs are ordinary spending (not flagged)
     "2026-07-01,999.00,AMAZON,fun", // current month → excluded from derivation
   ].join("\n") + "\n";
 
 // Hand-computed derivation over Apr–Jun (monthsCounted 3):
 //   groceries 120+60+90+30 = 300 → 100.00/mo (3 active months)
-//   home repair 200 → 66.67/mo (flagged)   pharmacy 80 → 26.67/mo (flagged)
+//   home repair 200 → 66.67/mo   pharmacy 80 → 26.67/mo (flagged)
 //   fun 45 → 15.00/mo
 
 const CARD_MAPPING = { date: "Date", amount: "Amount", description: "Description", category: "Category" };
@@ -60,7 +60,7 @@ const BANK_CSV =
     "Posted Date,Debit,Payee",
     "04/05/2026,-52.10,COMCAST",
     "04/12/2026,-19.99,SPOTIFY",
-    "5/20/26,-1200.00,CHASE EPAY MORTGAGE", // description-derived name → property-flagged
+    "5/20/26,-1200.00,CHASE EPAY MORTGAGE", // description-derived name; a mortgage is ordinary spending
     '05/03/2026,"-1,250.50",LANDLORD LLC',
     "05/15/2026,(35.00),CVS PHARMACY #9",
     "5/28/26,2500.00,PAYROLL DIRECT DEP", // income → excluded after sign flip
@@ -269,7 +269,7 @@ test("derivation excludes BOTH the current month and the earliest month; average
 
   assert.deepEqual(derived.categories, [
     { name: "groceries", monthly: 100, months: 3, total: 300 },
-    { name: "home repair", monthly: 66.67, months: 1, total: 200, flagged: true },
+    { name: "home repair", monthly: 66.67, months: 1, total: 200 },
     { name: "pharmacy", monthly: 26.67, months: 1, total: 80, flagged: true },
     { name: "fun", monthly: 15, months: 1, total: 45 },
   ]);
@@ -295,7 +295,7 @@ test("modeled-elsewhere flags apply case-insensitively to categories AND descrip
   // April is the earliest (excluded) month, so the window is May only.
   assert.deepEqual(derived.window, { from: "2026-05", to: "2026-05", monthsCounted: 1 });
   assert.equal(byName.get("CVS PHARMACY").flagged, true, "description-derived healthcare name flagged");
-  assert.equal(byName.get("CHASE EPAY MORTGAGE").flagged, true, "description-derived property name flagged");
+  assert.equal(byName.get("CHASE EPAY MORTGAGE").flagged, undefined, "a mortgage is ordinary spending now (no rental properties)");
   assert.equal(byName.get("LANDLORD LLC").flagged, undefined);
 
   // Case-insensitive on explicit category names too. (The 2026-04 row only
@@ -304,7 +304,7 @@ test("modeled-elsewhere flags apply case-insensitively to categories AND descrip
     "Date,Amount,Description,Category\n2026-04-01,1,W,setup\n2026-05-01,10,X,DENTAL Care\n2026-05-02,11,Y,Plumbing Fix\n2026-06-02,11,Z,dining\n";
   const cats = deriveCategories(parseAndNormalize(csv, CARD_MAPPING, "positive-is-charge").rows, { now: NOW }).categories;
   const flags = Object.fromEntries(cats.map((c) => [c.name, c.flagged ?? false]));
-  assert.deepEqual(flags, { "DENTAL Care": true, "Plumbing Fix": true, dining: false });
+  assert.deepEqual(flags, { "DENTAL Care": true, "Plumbing Fix": false, dining: false }, "healthcare flagged; home costs are ordinary spending");
 });
 
 // ---------------------------------------------------------------------------
@@ -478,7 +478,7 @@ test("preview → apply: rev threading, 409 stale, 410 bad token, 400 bad mode/c
   assert.deepEqual(p.sampleRows[0], { row: 2, date: "2026-03-20", amount: 100, description: "SAFEWAY #123" });
   assert.deepEqual(p.derived.window, { from: "2026-04", to: "2026-06", monthsCounted: 3 });
   assert.equal(p.derived.categories.find((c) => c.name === "pharmacy").flagged, true);
-  assert.equal(p.derived.categories.find((c) => c.name === "home repair").flagged, true);
+  assert.equal(p.derived.categories.find((c) => c.name === "home repair").flagged, undefined, "home costs are ordinary spending");
 
   const rev = pv.body.rev;
   const token = pv.body.token;

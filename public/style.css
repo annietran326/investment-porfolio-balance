@@ -385,10 +385,13 @@ td.name { font-family: inherit; }
 /* One custom property per scenario drives the line stroke, the chip swatch,
    AND the readout text color — CSP forbids style attributes, classes don't. */
 .scen-base { --scen: #5eead4; }
-.scen-stress { --scen: #f59e0b; }
-.scen-drawdown { --scen: #f87171; }
 .scen-spend { --scen: #c084fc; }
-.scen-everything { --scen: #60a5fa; }
+/* simulated outcome lines: the middle future bold, the cautious lines lighter */
+.scen-p50 { --scen: #5eead4; }
+.scen-p80 { --scen: #f59e0b; }
+.scen-p90 { --scen: #f87171; }
+.scen-s50 { --scen: #c084fc; }
+.scen-s90 { --scen: #818cf8; }
 
 .chart-wrap svg { display: block; width: 100%; height: auto; cursor: crosshair; }
 
@@ -406,7 +409,8 @@ td.name { font-family: inherit; }
 .chip.off .swatch { background: transparent; border: 1px solid var(--scen); }
 
 path.scen-line { fill: none; stroke: var(--scen); stroke-width: 1.4; }
-path.scen-line.scen-base { stroke-width: 2.6; }
+path.scen-line.scen-base, path.scen-line.scen-p50 { stroke-width: 2.6; }
+path.scen-line.scen-s50, path.scen-line.scen-s90 { stroke-dasharray: 5 4; }
 .chart .gridline { stroke: var(--border); stroke-width: 1; }
 .chart .zero-line { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 4 3; }
 .chart .tick-label { fill: var(--dim); font: 10px var(--mono); }
@@ -568,3 +572,7 @@ button.linklike {
 @media (max-width: 640px) {
   .kpi.kpi3 { grid-template-columns: 1fr; }
 }
+
+/* while the simulation reruns after an edit, fade its numbers slightly */
+#results.mc-running #verdict, #results.mc-running #scenarioRows, #results.mc-running .kpi:not(.kpi3) { opacity: .6; transition: opacity .2s; }
+.item.account:not([data-invest="own"]) .only-own-row { display: none; }

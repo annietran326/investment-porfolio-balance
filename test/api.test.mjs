@@ -96,10 +96,10 @@ test("stale baseRev → 409 with current rev; disk unchanged", async () => {
 
 test("PUT with text in a numeric field → 400 naming the path", async () => {
   const state = placeholderState();
-  state.properties[0].rentMonthly = "lots";
+  state.spending[0].monthly = "lots";
   const { status, body } = await sendJson("PUT", "/api/state", { state, baseRev: await currentRev() });
   assert.equal(status, 400);
-  assert.ok(body.errors.some((e) => e.path === "properties[0].rentMonthly" && /number/.test(e.message)));
+  assert.ok(body.errors.some((e) => e.path === "spending[0].monthly" && /number/.test(e.message)));
 });
 
 test("PUT with a malformed JSON body → 400", async () => {
@@ -143,8 +143,8 @@ test("restore endpoint: 409 on stale rev, 404 on unknown file, 200 round-trip", 
 test("GET /api/trends parses rows and skips a hand-planted torn line", async () => {
   const beforeRows = (await getJson("/api/trends")).body.rows;
   assert.ok(beforeRows.length >= 1);
-  assert.ok(beforeRows.every((r) => r.v === 3 && typeof r.rev === "number"));
-  appendFileSync(join(dir, "trends.jsonl"), '{"v":3,"ts":"torn');
+  assert.ok(beforeRows.every((r) => r.v === 4 && typeof r.rev === "number"));
+  appendFileSync(join(dir, "trends.jsonl"), '{"v":4,"ts":"torn');
   const rows = (await getJson("/api/trends")).body.rows;
   assert.equal(rows.length, beforeRows.length, "torn line skipped");
 });
@@ -246,10 +246,10 @@ test("POST /api/scenarios/create mode:scratch adds a fresh empty-default plan (n
   assert.equal(res.body.scenarios.length, 3, "list grows again");
   assert.equal(res.body.scenarios[2].name, "Scratch plan");
   assert.equal(res.body.activeId, res.body.scenarios[2].id, "scratch scenario becomes active");
-  // Fresh default is an empty plan (balance 0, no properties), NOT a copy of the
-  // 2,222,222 active state.
+  // Fresh default is an empty plan (no accounts, no spending), NOT a copy of
+  // the 2,222,222 active state.
   assert.equal(res.body.state.accounts.length, 0, "scratch is a fresh default (no accounts), not a copy");
-  assert.equal(res.body.state.properties.length, 0);
+  assert.equal(res.body.state.spending.length, 0);
 });
 
 test("POST /api/scenarios/switch changes the active state; 404 unknown; 409 stale", async () => {

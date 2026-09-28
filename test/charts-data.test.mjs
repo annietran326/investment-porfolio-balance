@@ -47,7 +47,7 @@ function dPoints(d) {
 /** A well-formed trend row; overrides poke holes in it. */
 function trendRow(overrides = {}) {
   return {
-    v: 1,
+    v: 4,
     ts: "2026-07-01T14:00:00.000Z",
     date: "2026-07-01",
     source: "edit",
@@ -55,7 +55,7 @@ function trendRow(overrides = {}) {
     totalBalance: 1_500_000,
     monthlySpend: 7200,
     gapBase: { kind: "value", amount: 85_000 },
-    gapWorst: { kind: "unreachable" },
+    successBase: 0.8,
     ...overrides,
   };
 }
@@ -159,7 +159,8 @@ test("readoutAt: per-scenario balance at the year; scenarios without that year a
 });
 
 test("shortLabel: known scenario keys shorten; unknown keys fall back to the full label", () => {
-  assert.equal(shortLabel("drawdown", "Market −30% now"), "crash now");
+  assert.equal(shortLabel("spend", "Spending +20% forever"), "spend +20%");
+  assert.equal(shortLabel("p90", "90% outcome"), "90%");
   assert.equal(shortLabel("custom-future", "My custom scenario"), "My custom scenario");
 });
 
@@ -225,7 +226,7 @@ test("trendModel: unknown fields and future v values are tolerated", () => {
   assert.equal(points[1].totalBalance, 7);
 });
 
-test("trendModel/gapAmount: met → 0, value → amount, unreachable/unknown → gap; old required-income rows keep balance/spend but no gap", () => {
+test("trendModel/gapAmount: met → 0, value → amount, unreachable/unknown → gap; older rows keep balance/spend but no gap", () => {
   assert.equal(gapAmount({ kind: "met" }), 0);
   assert.equal(gapAmount({ kind: "value", amount: 85_000 }), 85_000);
   assert.equal(gapAmount({ kind: "unreachable" }), null);
@@ -235,9 +236,10 @@ test("trendModel/gapAmount: met → 0, value → amount, unreachable/unknown →
     trendRow({ date: "2026-07-01", gapBase: { kind: "met" } }),
     trendRow({ date: "2026-07-02", gapBase: { kind: "unreachable" } }),
     trendRow({ date: "2026-07-03", gapBase: { kind: "value", amount: 40_000 } }),
-    trendRow({ date: "2026-07-04", gapBase: undefined, requiredBase: { kind: "value", perYear: 9 } }), // a v2 row
+    trendRow({ date: "2026-07-04", v: 2, gapBase: undefined, requiredBase: { kind: "value", perYear: 9 } }), // a v2 row
+    trendRow({ date: "2026-07-05", v: 3, gapBase: { kind: "value", amount: 5 } }), // v3: the expected-return gap, not comparable
   ]);
-  assert.deepEqual(points.map((p) => p.gap), [0, null, 40_000, null]);
+  assert.deepEqual(points.map((p) => p.gap), [0, null, 40_000, null, null]);
   assert.equal(points[3].totalBalance, trendRow().totalBalance, "the old row still counts for balance");
 });
 
@@ -320,7 +322,6 @@ test("DOM controllers load under plain Node without touching document", () => {
 function drawdownState(costBasis) {
   const s = placeholderState();
   s.incomes = [];
-  s.properties = [];
   s.accounts = [{ ...s.accounts[0], balance: 400_000, costBasis }];
   return s;
 }

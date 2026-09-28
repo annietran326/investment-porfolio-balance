@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { simulate, EARLY_WITHDRAWAL_START_AGE } from "../src/engine/simulate.mjs";
-import { propertyCashflowYear, SALE_YEAR_OWNED_MONTHS } from "../src/engine/property.mjs";
+import { simulate, prepare, runPlan, EARLY_WITHDRAWAL_START_AGE } from "../src/engine/simulate.mjs";
+import { monteCarlo, makePaths, runFutures, gapToTarget, drawReturn } from "../src/engine/montecarlo.mjs";
+import { goalMet } from "../src/engine/solver.mjs";
 import { pvFactor, bucketTargets, allocate, bucketFor, shares, surplusShares } from "../src/engine/buckets.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 import { newAccount, newBuckets, newTaxes, validate } from "../src/model/schema.mjs";
@@ -19,7 +20,7 @@ function near(actual, expected, msg, tol = 0.01) {
 /**
  * A bare plan for hand-computed tests: no inflation, every bucket earning the
  * same return (so the split can't change the result), no Social Security,
- * healthcare, property, household, or income unless a test adds it.
+ * healthcare, household, or income unless a test adds it.
  * @param {{age?: number, years?: number, returnPct?: number, inflationPct?: number, accounts?: any[], spendMonthly?: number}} [o]
  */
 function flat(o = {}) {
@@ -31,7 +32,6 @@ function flat(o = {}) {
   s.buckets = { ...newBuckets(), preservationReturnPct: r, incomeReturnPct: r, equitiesReturnPct: r };
   s.taxes = { ordinaryIncomePct: 0, capitalGainsPct: 0 };
   s.accounts = o.accounts ?? [newAccount({ name: "Brokerage", type: "taxable", balance: 100_000 })];
-  s.properties = [];
   s.incomes = [];
   s.spending = o.spendMonthly ? [{ name: "living", monthly: o.spendMonthly, fromYear: null, toYear: null, growthPct: null }] : [];
   s.social = { startAge: 67, monthly: 0, haircutPct: 0 };
@@ -270,17 +270,12 @@ test("withdrawals use bucket-plan money before own-fund money of the same tax ty
   near(sim.rows[2].ownBal, 91_000);
 });
 
-test("market crash: own funds fall the full equity drop", () => {
-  const s = flat({ accounts: [newAccount({ name: "401k", type: "401k", balance: 100_000, invest: "own", ownReturnPct: 0 })] });
-  near(simulate(s, { drawdownPct: 30 }).path[0].bal, 70_000);
-});
-
 // ---------------------------------------------------------------------------
 // the three buckets
 // ---------------------------------------------------------------------------
 
 test("bucketFor and pvFactor follow the time-based rule (hand-computed)", () => {
-  const b = newBuckets(); // 8 / 15; 2.5 / 5.5 / 9.5 %
+  const b = newBuckets(); // cutoffs 8 / 15
   assert.equal(bucketFor(1, b), "preservation");
   assert.equal(bucketFor(8, b), "preservation");
   assert.equal(bucketFor(9, b), "income");
@@ -375,35 +370,9 @@ test("shares() sums to 1, or all zero for an empty portfolio", () => {
   assert.deepEqual(shares({ preservation: 0, income: 0, equities: 0 }), { preservation: 0, income: 0, equities: 0 });
 });
 
-test("returnsByYear (the Monte Carlo hook) overrides actual returns, not the plan's split", () => {
-  const s = flat({ returnPct: 5, spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 100_000 })] });
-  const base = simulate(s);
-  const crash = simulate(s, { returnsByYear: [{ preservation: 0, income: -0.1, equities: -0.3 }] });
-  assert.deepEqual(crash.startMix, base.startMix, "the split plans with the assumptions");
-  assert.ok(crash.rows[0].bal < base.rows[0].bal);
-  near(crash.rows[1].returnPct, base.rows[1].returnPct, "later years fall back to the assumptions", 1e-9);
-});
-
 // ---------------------------------------------------------------------------
-// stress overlays
+// ending conditions
 // ---------------------------------------------------------------------------
-
-test("market crash hits equities fully, high income half, capital preservation not at all", () => {
-  const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 1_000_000 })] });
-  s.buckets = { preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
-  const base = simulate(s);
-  const crash = simulate(s, { drawdownPct: 30 });
-  const { income, equities } = base.startMix; // preservation 12k, income 12k, equities 976k
-  near(crash.path[0].bal, 1_000_000 - equities * 0.3 - income * 0.15);
-});
-
-test("one-time cost lands in its year, in today's dollars", () => {
-  const s = flat({ inflationPct: 3, years: 5 });
-  const base = simulate(s);
-  const shock = simulate(s, { oneTimeCost: 50_000, oneTimeCostYearIdx: 3 });
-  near(shock.rows[3].spend - base.rows[3].spend, 50_000);
-  near(shock.rows[2].spend, base.rows[2].spend);
-});
 
 test("floor mode: firstBreachYear marks the first dip below the floor while firstNegYear stays null", () => {
   // 600k, flat, 24k/yr: 2027=576, 2028=552, 2029=528, 2030=504, 2031=480 (< 500k floor).
@@ -420,7 +389,6 @@ test("zero assets and no income runs out immediately", () => {
   const s = state();
   s.accounts = [];
   s.incomes = [];
-  s.properties = [];
   assert.deepEqual(validate(s).errors, []);
   assert.notEqual(simulate(s).firstNegYear, null);
 });
@@ -465,65 +433,6 @@ test("no spouse: the plan ends at your plan-to age as before", () => {
   const s = couple(60, 60);
   s.household.people = [];
   assert.equal(simulate(s).rows.length, 30);
-});
-
-// ---------------------------------------------------------------------------
-// property cash flow
-// ---------------------------------------------------------------------------
-
-const rental = (o = {}) => ({ name: "r", rentMonthly: 3200, costsMonthly: 900, mortgageMonthly: 2400, payoffYear: 2049, saleYear: 2027, saleNetProceeds: 250_000, rentGrowthPct: 0, costsGrowthPct: 0, ...o });
-
-test("sale year books part-year ownership plus proceeds exactly once", () => {
-  const p = rental();
-  const inSale = propertyCashflowYear(p, 2027);
-  assert.equal(inSale.proceeds, 250_000);
-  assert.equal(inSale.cf, (3200 - 900 - 2400) * SALE_YEAR_OWNED_MONTHS);
-  assert.deepEqual(propertyCashflowYear(p, 2028), { cf: 0, proceeds: 0 });
-  assert.equal(propertyCashflowYear(p, 2026).cf, (3200 - 900 - 2400) * 12);
-});
-
-test("sale proceeds are entered in today's dollars and land inflated in the sale year", () => {
-  const p = rental({ saleYear: 2030 });
-  near(propertyCashflowYear(p, 2030, { startYear: 2026, inflationPct: 3 }).proceeds, 250_000 * 1.03 ** 4);
-});
-
-test("a sale predating the simulation window stays sold under saleDelayYears", () => {
-  const p = rental({ saleYear: 2025 });
-  const overlay = { startYear: 2026, saleDelayYears: 2 };
-  for (let year = 2026; year <= 2032; year++) {
-    assert.deepEqual(propertyCashflowYear(p, year, overlay), { cf: 0, proceeds: 0 }, `year ${year}`);
-  }
-});
-
-test("delayed sale shifts proceeds; keep-forever property cash flows forever", () => {
-  const p = rental();
-  assert.equal(propertyCashflowYear(p, 2027, { saleDelayYears: 2 }).proceeds, 0);
-  assert.equal(propertyCashflowYear(p, 2029, { saleDelayYears: 2 }).proceeds, 250_000);
-  const keep = rental({ saleYear: null, saleNetProceeds: null });
-  assert.notEqual(propertyCashflowYear(keep, 2080).cf, 0);
-  assert.equal(propertyCashflowYear(keep, 2080).proceeds, 0);
-});
-
-test("mortgage is paid through the payoff year and stops after it", () => {
-  const keep = rental({ saleYear: null });
-  const during = propertyCashflowYear(keep, 2049);
-  const after = propertyCashflowYear(keep, 2050);
-  assert.equal(after.cf, during.cf + 2400 * 12);
-});
-
-test("vacancy overlay knocks months off rent only inside the window", () => {
-  const keep = rental({ saleYear: null });
-  const inWindow = propertyCashflowYear(keep, 2026, { startYear: 2026, vacancyMonths: 4, vacancyYears: 2 });
-  const outWindow = propertyCashflowYear(keep, 2028, { startYear: 2026, vacancyMonths: 4, vacancyYears: 2 });
-  assert.equal(outWindow.cf - inWindow.cf, 3200 * 4);
-});
-
-test("rent and costs follow inflation when blank; the mortgage is a fixed dollar amount", () => {
-  const p = rental({ saleYear: null, rentMonthly: 2000, costsMonthly: 500, mortgageMonthly: 1000, rentGrowthPct: null, costsGrowthPct: null });
-  const y10 = propertyCashflowYear(p, 2036, { startYear: 2026, inflationPct: 3 });
-  near(y10.cf, (2000 * 1.03 ** 10 - 500 * 1.03 ** 10 - 1000) * 12);
-  const own = propertyCashflowYear({ ...p, rentGrowthPct: 5 }, 2036, { startYear: 2026, inflationPct: 3 });
-  near(own.cf, (2000 * 1.05 ** 10 - 500 * 1.03 ** 10 - 1000) * 12, "an explicit rent increase overrides inflation");
 });
 
 // ---------------------------------------------------------------------------
@@ -604,4 +513,144 @@ test("the placeholder simulates cleanly with default taxes", () => {
   assert.deepEqual(s.taxes, newTaxes());
   const sim = simulate(s);
   assert.ok(sim.rows.every((r) => Number.isFinite(r.bal) && Number.isFinite(r.tax)));
+});
+
+// ---------------------------------------------------------------------------
+// the refill rule (real bucket balances)
+// ---------------------------------------------------------------------------
+
+/**
+ * A 3-year plan needing $12k a year, cutoffs 1 / 2, all expected returns 0,
+ * $36k in a taxable account (no gains) → targets 12k / 12k / 12k.
+ */
+function threeYears() {
+  const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 36_000 })] });
+  s.buckets = { ...s.buckets, preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
+  return s;
+}
+/** A hand-made return path. */
+function path(eq, inc = eq.map(() => 0), pres = eq.map(() => 0)) {
+  return { preservation: Float64Array.from(pres), income: Float64Array.from(inc), equities: Float64Array.from(eq), own: [] };
+}
+
+test("after a DOWN year for equities, nothing is sold to refill: spending comes from capital preservation, then high income", () => {
+  const P = prepare(threeYears());
+  // Year 0: equities −50% → buckets 12 / 12 / 6; the $12k withdrawal empties capital preservation → 0 / 12 / 6, no refill.
+  // Year 1: equities flat (an up year) → the $12k comes from high income → 0 / 0 / 6, then refill for year 2 → 6 / 0 / 0.
+  const res = runPlan(P, { path: path([-0.5, 0, 0]) });
+  near(res.rows[0].mix.preservation, 1 / 3, "year 0 starts in the target split", 1e-9);
+  near(res.rows[1].mix.preservation, 0, "no refill after the down year", 1e-9);
+  near(res.rows[1].mix.income, 12 / 18, "", 1e-9);
+  near(res.rows[1].mix.equities, 6 / 18, "equities are left alone to recover", 1e-9);
+  near(res.rows[2].mix.preservation, 1, "refilled after the up year", 1e-9);
+});
+
+test("after an UP year for equities, the buckets are refilled to their targets", () => {
+  const P = prepare(threeYears());
+  // Year 0: equities +10% → 12 / 12 / 13.2; withdraw 12 from capital preservation → 0 / 12 / 13.2 = 25.2,
+  // refill for year 1 (targets 12 / 12 / 0, extra → high income with 2 years left) → 12 / 13.2 / 0.
+  const res = runPlan(P, { path: path([0.1, 0, 0]) });
+  near(res.rows[1].mix.preservation, 12 / 25.2, "", 1e-9);
+  near(res.rows[1].mix.income, 13.2 / 25.2, "", 1e-9);
+  near(res.rows[1].mix.equities, 0, "", 1e-9);
+});
+
+test("with expected returns every year is an up year, so the plan rebalances yearly", () => {
+  const s = threeYears();
+  s.buckets.equitiesReturnPct = 5;
+  const expected = simulate(s);
+  const viaPath = runPlan(prepare(s), { path: path([0.05, 0.05, 0.05]) });
+  for (let i = 0; i < 3; i++) near(viaPath.rows[i].bal, expected.rows[i].bal, `year ${i}`, 1e-6);
+});
+
+// ---------------------------------------------------------------------------
+// Monte Carlo
+// ---------------------------------------------------------------------------
+
+test("drawReturn: the entered rate is the median; the swing spreads years evenly in log terms", () => {
+  near(drawReturn(0.095, 0.17, 0), 0.095, "z = 0 gives exactly the rate", 1e-12);
+  assert.equal(drawReturn(0.05, 0, 2.5), 0.05, "no swing, no randomness");
+  const up = drawReturn(0.095, 0.17, 1);
+  const down = drawReturn(0.095, 0.17, -1);
+  near((1 + up) * (1 + down), 1.095 ** 2, "a good year and an equally bad year compound back to the median", 1e-9);
+  assert.ok(down < 0 && up > 0.25);
+});
+
+test("simulated futures are repeatable: the same inputs give the same answer", () => {
+  const s = state();
+  const a = monteCarlo(s, {}, { runs: 200 });
+  const b = monteCarlo(s, {}, { runs: 200 });
+  assert.equal(a.successRate, b.successRate);
+  assert.deepEqual(a.end, b.end);
+  assert.deepEqual(a.gap, b.gap);
+});
+
+test("with no swings, every simulated future is the expected-return plan", () => {
+  const s = state();
+  s.buckets = { ...s.buckets, preservationVolPct: 0, incomeVolPct: 0, equitiesVolPct: 0 };
+  s.accounts = s.accounts.map((a) => ({ ...a, ownVolPct: 0 }));
+  const expected = simulate(s);
+  const mc = monteCarlo(s, {}, { runs: 20 });
+  assert.equal(mc.successRate, goalMet(s, expected) ? 1 : 0);
+  mc.bands.forEach((b, i) => {
+    near(b.p50, expected.path[i].bal, `year ${i} median`, 1e-6);
+    near(b.p90, expected.path[i].bal, `year ${i} 90% line`, 1e-6);
+  });
+});
+
+test("outcome lines are ordered: 90% ≤ 80% ≤ 50%, and swings spread them apart", () => {
+  const mc = monteCarlo(state(), {}, { runs: 300 });
+  for (const b of mc.bands) assert.ok(b.p90 <= b.p80 + 1e-9 && b.p80 <= b.p50 + 1e-9, `year ${b.year}`);
+  const last = mc.bands.at(-1);
+  assert.ok(/** @type {any} */ (last).p50 - /** @type {any} */ (last).p90 > 10_000, "real spread between the typical and the cautious outcome");
+});
+
+test("the Monte Carlo gap reaches the target on the same futures, and a bit less does not", () => {
+  const s = state();
+  const P = prepare(s);
+  const paths = makePaths(P, { runs: 300 });
+  const gap = gapToTarget(P, paths, 90);
+  assert.equal(gap.kind, "value");
+  if (gap.kind !== "value") return;
+  assert.equal(gap.amount % 1000, 0);
+  assert.ok(runFutures(P, paths, gap.amount, { bands: false }).successRate >= 0.9);
+  // The search stops within 0.2% (or $500) and rounds up to $1,000, so this much less must fall short.
+  assert.ok(runFutures(P, paths, gap.amount - 1000 - gap.amount * 0.002, { bands: false }).successRate < 0.9);
+});
+
+test("more money today never lowers the chance of success", () => {
+  const s = state();
+  const P = prepare(s);
+  const paths = makePaths(P, { runs: 200 });
+  let prev = -1;
+  for (let x = 0; x <= 2_000_000; x += 100_000) {
+    const rate = runFutures(P, paths, x, { bands: false }).successRate;
+    assert.ok(rate >= prev, `success fell at +$${x}`);
+    prev = rate;
+  }
+});
+
+test("a plan with a big cushion succeeds in (nearly) every future; +20% spending never helps", () => {
+  const rich = state();
+  rich.accounts[0].balance = 8_000_000;
+  assert.ok(monteCarlo(rich, {}, { runs: 200 }).successRate > 0.97);
+  const s = state();
+  const base = monteCarlo(s, {}, { runs: 200 });
+  const spend = monteCarlo(s, { spendMult: 1.2 }, { runs: 200 });
+  assert.ok(spend.successRate <= base.successRate);
+});
+
+test("equities and high income move together; capital preservation doesn't", () => {
+  const P = prepare(state());
+  const paths = makePaths(P, { runs: 400 });
+  const xs = [], ys = [], zs = [];
+  for (const p of paths) for (let i = 0; i < 10; i++) { xs.push(Math.log(1 + p.equities[i])); ys.push(Math.log(1 + p.income[i])); zs.push(Math.log(1 + p.preservation[i])); }
+  const corr = (a, b) => {
+    const ma = a.reduce((x, y) => x + y) / a.length, mb = b.reduce((x, y) => x + y) / b.length;
+    let sab = 0, saa = 0, sbb = 0;
+    for (let i = 0; i < a.length; i++) { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) ** 2; sbb += (b[i] - mb) ** 2; }
+    return sab / Math.sqrt(saa * sbb);
+  };
+  near(corr(xs, ys), 0.5, "equities vs high income", 0.06);
+  near(corr(xs, zs), 0, "equities vs capital preservation", 0.06);
 });

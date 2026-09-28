@@ -17,7 +17,7 @@
 
 /** @typedef {import("../../src/model/schema.mjs").RunwayState} RunwayState */
 /** @typedef {import("../../src/model/schema.mjs").PersonRole} PersonRole */
-/** @typedef {"accounts"|"properties"|"incomes"|"spending"} ListKind */
+/** @typedef {"accounts"|"incomes"|"spending"} ListKind */
 
 /**
  * Blank row per list kind — must mirror the schema factories (pinned by
@@ -27,10 +27,7 @@
  */
 export function blankRow(kind, state) {
   if (kind === "accounts") {
-    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 };
-  }
-  if (kind === "properties") {
-    return { name: "new property", rentMonthly: 0, costsMonthly: 0, mortgageMonthly: 0, payoffYear: null, saleYear: null, saleNetProceeds: null, rentGrowthPct: null, costsGrowthPct: null };
+    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 };
   }
   if (kind === "incomes") {
     const y = state.profile.currentYear;

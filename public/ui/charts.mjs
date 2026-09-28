@@ -185,10 +185,12 @@ export function readoutAt(series, year) {
 /** Legend/readout copy — the full scenario labels are too long for chips. */
 const SHORT_LABELS = {
   base: "base",
-  stress: "stress",
-  drawdown: "crash now",
   spend: "spend +20%",
-  everything: "everything",
+  p50: "50%",
+  p80: "80%",
+  p90: "90%",
+  s50: "+20% spend 50%",
+  s90: "+20% spend 90%",
 };
 
 /** @param {string} key @param {string} label fallback for unknown keys */
@@ -362,7 +364,7 @@ export function createCashflowTable(mount) {
   let showAll = false;
 
   const headRow = el("tr", {}, el("th", {}, "year"), el("th", {}, "age"));
-  for (const label of ["income", "SS", "property", "sales", "health", "spend", "saved in", "taken out", "tax", "return", "balance"]) {
+  for (const label of ["income", "SS", "health", "spend", "saved in", "taken out", "tax", "return", "balance"]) {
     headRow.appendChild(el("th", { class: "num" }, label));
   }
   const tbody = el("tbody");
@@ -388,8 +390,6 @@ export function createCashflowTable(mount) {
           el("td", { class: "dim" }, String(r.age)),
           money(r.income),
           money(r.ss),
-          money(r.propCF),
-          money(r.proceeds),
           money(r.health),
           money(r.spend),
           money(r.contrib),

@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  verdictCopy,
+  mcVerdictCopy,
+  expectedLine,
   gapCell,
   fmtPct,
   goalText,
@@ -119,38 +120,35 @@ function makePipeline({ server, initialRev = 0 } = {}) {
 // verdict copy — three-way, never blank
 // ---------------------------------------------------------------------------
 
-test("verdictCopy: distinct non-empty copy for met / value / unreachable", () => {
+const mc = (/** @type {number} */ rate, /** @type {any} */ gap) => ({ successRate: rate, gap, end: { p50: 1_234_000, p90: 456_000 }, runs: 1000 });
+
+test("mcVerdictCopy: yes at or above the target; the gap when below; never blank", () => {
+  const s = placeholderState(); // target 90%
+  const yes = mcVerdictCopy(mc(0.94, { kind: "met" }), s);
+  assert.equal(yes.tone, "good");
+  assert.match(yes.headline, /^Yes, you have enough: the plan works in 94% of 1,000 simulated futures/);
+  assert.match(yes.detail, /\$1,234,000/);
+  assert.match(yes.detail, /\$456,000/);
+  const no = mcVerdictCopy(mc(0.36, { kind: "value", amount: 747_000 }), s);
+  assert.equal(no.tone, "bad");
+  assert.match(no.headline, /works in 36%.*gap is \$747,000/);
+  assert.match(no.detail, /90% target/);
+  const never = mcVerdictCopy(mc(0.01, { kind: "unreachable", cap: 50_000_000 }), s);
+  assert.equal(never.tone, "bad");
+  for (const c of [yes, no, never]) assert.ok(c.headline.length > 0);
+  assert.equal(new Set([yes.headline, no.headline, never.headline]).size, 3);
+});
+
+test("mcVerdictCopy follows the success target", () => {
   const s = placeholderState();
-  const met = verdictCopy({ kind: "met" }, s, 1_000_000);
-  const value = verdictCopy({ kind: "value", amount: 250_000 }, s, -5);
-  const unreach = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, s, -5);
-  for (const c of [met, value, unreach]) {
-    assert.ok(c.headline.length > 0, "headline never blank");
-    assert.ok(c.detail.length > 0, "detail never blank");
-    assert.ok(["good", "bad"].includes(c.tone));
-  }
-  assert.equal(new Set([met.headline, value.headline, unreach.headline]).size, 3, "pairwise distinct");
+  s.simulation.targetSuccessPct = 80;
+  assert.equal(mcVerdictCopy(mc(0.85, { kind: "met" }), s).tone, "good", "85% clears an 80% target");
 });
 
-test("verdictCopy met: good tone, names the goal and the end balance", () => {
-  const c = verdictCopy({ kind: "met" }, placeholderState(), 1_234_000);
-  assert.equal(c.tone, "good");
-  assert.match(c.headline, /^Yes, you have enough/);
-  assert.match(c.detail, /die with zero/);
-  assert.match(c.detail, /\$1,234,000/);
-});
-
-test("verdictCopy value: names the gap in today's dollars", () => {
-  const c = verdictCopy({ kind: "value", amount: 250_000 }, placeholderState(), -5);
-  assert.equal(c.tone, "bad");
-  assert.match(c.headline, /gap is \$250,000 in today's dollars/);
-  assert.doesNotMatch(c.detail, /earn/, "no 'or earn' alternative any more");
-});
-
-test("verdictCopy unreachable: names the cap", () => {
-  const c = verdictCopy({ kind: "unreachable", cap: 50_000_000 }, placeholderState(), -5);
-  assert.equal(c.tone, "bad");
-  assert.match(c.headline, /\$50,000,000/);
+test("expectedLine: one line on the every-year-average plan", () => {
+  const s = placeholderState();
+  assert.match(expectedLine({ endBal: 500_000, firstBreachYear: null, startYear: 2026 }, { kind: "met" }, s), /the plan works, ending with \$500,000/);
+  assert.match(expectedLine({ endBal: -5, firstBreachYear: 2064, startYear: 2026 }, { kind: "value", amount: 160_000 }, s), /runs out at age 83 \(2064\), and \$160,000 more today/);
 });
 
 test("gapCell: never blank; colour per kind", () => {
@@ -395,24 +393,11 @@ test("debounce: timer resets on new edits; flush fires immediately; cancel disar
 test("addRow: appends a valid blank row for each kind without mutating input", () => {
   const s = placeholderState();
   const before = structuredClone(s);
-  const withProp = addRow(s, "properties");
-  assert.equal(withProp.properties.length, s.properties.length + 1);
-  assert.deepEqual(withProp.properties.at(-1), {
-    name: "new property",
-    rentMonthly: 0,
-    costsMonthly: 0,
-    mortgageMonthly: 0,
-    payoffYear: null,
-    saleYear: null,
-    saleNetProceeds: null,
-    rentGrowthPct: null,
-    costsGrowthPct: null,
-  });
   const withIncome = addRow(s, "incomes");
   assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030, growthPct: null });
   const withSpend = addRow(s, "spending");
   assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null });
-  for (const next of [withProp, withIncome, withSpend]) {
+  for (const next of [withIncome, withSpend]) {
     assert.deepEqual(validate(next).errors, [], "blank rows validate cleanly");
   }
   assert.deepEqual(s, before, "input state never mutated");
@@ -430,8 +415,8 @@ test("removeRow: removes exactly the indexed row without mutating input", () => 
 test("setRowValue / setValueAtPath: immutable single-field updates", () => {
   const s = placeholderState();
   const before = structuredClone(s);
-  const a = setRowValue(s, "properties", 0, "saleYear", null);
-  assert.equal(a.properties[0].saleYear, null);
+  const a = setRowValue(s, "spending", 0, "toYear", null);
+  assert.equal(a.spending[0].toYear, null);
   const b = setValueAtPath(s, "profile.endAge", 100);
   assert.equal(b.profile.endAge, 100);
   assert.equal(b.accounts[0].balance, s.accounts[0].balance, "unrelated fields untouched");

@@ -24,7 +24,7 @@
 import { inflateRawSync } from "node:zlib";
 import * as XLSX from "xlsx";
 import { TEMPLATE_DEF } from "../../scripts/build-template.mjs";
-import { END_STATE_MODES, PERSON_ROLES, newProperty, newIncome, newSpendingCategory, newPerson, newAccount, totalBalance } from "../model/schema.mjs";
+import { END_STATE_MODES, PERSON_ROLES, newIncome, newSpendingCategory, newPerson, newAccount, totalBalance } from "../model/schema.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
 /** @typedef {import("../../scripts/build-template.mjs").TabDef} TabDef */
@@ -744,7 +744,7 @@ export function previewTemplate(state, parsed) {
       const counts = diffPeople(state.household.people, t.rows);
       tabs.push({ ...base, status: "ready", ...counts, errors: [] });
     } else {
-      const section = /** @type {"accounts"|"properties"|"incomes"|"spending"} */ (def.section);
+      const section = /** @type {"accounts"|"incomes"|"spending"} */ (def.section);
       const counts = diffList(state[section], t.rows, def.columns.map((c) => c.field));
       tabs.push({ ...base, status: "ready", ...counts, errors: [] });
     }
@@ -788,7 +788,7 @@ export function applyTabs(state, parsed, tabKeys) {
     } else {
       // Normalize each row through its factory so any field an optional column
       // omitted lands with its correct v2 default (never a partial v1 shape).
-      const section = /** @type {"accounts"|"properties"|"incomes"|"spending"} */ (def.section);
+      const section = /** @type {"accounts"|"incomes"|"spending"} */ (def.section);
       /** @type {any} */ (next)[section] = t.rows.map((row) => makeRow(section, row));
     }
   }
@@ -798,12 +798,11 @@ export function applyTabs(state, parsed, tabKeys) {
 /**
  * Wrap a parsed list row in its section's factory so the result is a complete,
  * valid item: optional-column omissions fall back to schema defaults.
- * @param {"accounts"|"properties"|"incomes"|"spending"} section
+ * @param {"accounts"|"incomes"|"spending"} section
  * @param {any} row
  */
 function makeRow(section, row) {
   if (section === "accounts") return newAccount(row);
-  if (section === "properties") return newProperty(row);
   if (section === "incomes") return newIncome(row);
   return newSpendingCategory(row);
 }
@@ -870,7 +869,7 @@ export function buildTemplateWorkbook(state) {
         aoa.push(def.columns.map((c) => personCell(person, c)));
       }
     } else {
-      const section = /** @type {"accounts"|"properties"|"incomes"|"spending"} */ (def.section);
+      const section = /** @type {"accounts"|"incomes"|"spending"} */ (def.section);
       for (const row of /** @type {any[]} */ (state[section])) {
         aoa.push(def.columns.map((c) => row[c.field]));
       }

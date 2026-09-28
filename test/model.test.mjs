@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, newBuckets, newTaxes, newEconomy, reanchorYears } from "../src/model/schema.mjs";
+import { validate, defaultState, SCHEMA_VERSION, newSocial, newHealth, newBuckets, newTaxes, newEconomy, newSimulation, reanchorYears } from "../src/model/schema.mjs";
 import { migrate, MissingVersionError, FutureVersionError } from "../src/model/migrate.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 
@@ -32,37 +32,26 @@ test("placeholder and default states pass validation with no errors or warnings"
   }
 });
 
-test("sale year in the past is a warning, not an error", () => {
-  const s = placeholderState();
-  s.properties[0].saleYear = 2020;
-  const { errors, warnings } = validate(s);
-  assert.deepEqual(errors, []);
-  assert.ok(warnings.some((w) => w.path === "properties[0].saleYear" && w.message.includes("past")));
-});
-
 test("text in a numeric field is an error naming the path", () => {
   const s = placeholderState();
   // @ts-expect-error deliberate corruption
-  s.properties[0].rentMonthly = "abc";
+  s.spending[0].monthly = "abc";
   const { errors } = validate(s);
-  assert.ok(errors.some((e) => e.path === "properties[0].rentMonthly" && e.message.includes("number")));
+  assert.ok(errors.some((e) => e.path === "spending[0].monthly" && e.message.includes("number")));
 });
 
-test("saleYear null is keep-forever (valid); 0 is an error; number is valid", () => {
+test("simulation inputs: swings 0–60%, success target 50–99%", () => {
   const s = placeholderState();
-  s.properties[0].saleYear = null;
-  assert.deepEqual(validate(s).errors, []);
-  s.properties[0].saleYear = 0;
-  assert.ok(validate(s).errors.some((e) => e.path === "properties[0].saleYear"));
-});
-
-test("sale year set without proceeds warns", () => {
-  const s = placeholderState();
-  s.properties[0].saleYear = 2030;
-  s.properties[0].saleNetProceeds = null;
-  const { errors, warnings } = validate(s);
-  assert.deepEqual(errors, []);
-  assert.ok(warnings.some((w) => w.path === "properties[0].saleNetProceeds"));
+  s.buckets.equitiesVolPct = 70;
+  s.accounts[2].ownVolPct = -1;
+  s.simulation.targetSuccessPct = 100;
+  const paths = validate(s).errors.map((e) => e.path);
+  assert.ok(paths.includes("buckets.equitiesVolPct"));
+  assert.ok(paths.includes("accounts[2].ownVolPct"));
+  assert.ok(paths.includes("simulation.targetSuccessPct"));
+  const ok = placeholderState();
+  ok.buckets.preservationVolPct = 0; // a perfectly steady bucket is allowed
+  assert.deepEqual(validate(ok).errors, []);
 });
 
 test("income window and end-age ordering rules", () => {
@@ -152,15 +141,12 @@ test("v1 → current migration is additive: preserves values, adds safe defaults
   assert.equal(state.incomes[0].toYear, 2028);
   assert.equal(state.spending[0].monthly, 4000);
   assert.equal(state.endState.amounts.bequest, 100000);
-  assert.equal(state.properties[0].payoffYear, 2040);
-  assert.equal(state.properties[0].saleYear, null);
+  assert.ok(!("properties" in state), "rental properties are dropped in v9");
   // new fields default to "no change": open windows, rates that follow inflation
   assert.equal(state.spending[0].fromYear, null);
   assert.equal(state.spending[0].toYear, null);
   assert.equal(state.spending[0].growthPct, null);
   assert.equal(state.incomes[0].growthPct, null);
-  assert.equal(state.properties[0].rentGrowthPct, null);
-  assert.equal(state.properties[0].costsGrowthPct, null);
   assert.deepEqual(state.household, { people: [] });
 });
 
@@ -213,8 +199,6 @@ test("reanchorYears shifts every year field by the delta and preserves nulls", (
   const s = placeholderState(); // BASE_YEAR 2026
   const moved = reanchorYears(s, 2030); // +4
   assert.equal(moved.profile.currentYear, 2030);
-  assert.equal(moved.properties[0].payoffYear, s.properties[0].payoffYear + 4);
-  assert.equal(moved.properties[0].saleYear, null); // keep-forever stays null
   assert.equal(moved.incomes[0].fromYear, s.incomes[0].fromYear + 4);
   assert.equal(moved.incomes[0].toYear, s.incomes[0].toYear + 4);
   assert.equal(moved.spending[0].toYear, null); // perpetual stays null
@@ -282,7 +266,11 @@ test("default and placeholder states carry v6 sections that validate clean", () 
     assert.deepEqual(errors, []);
     assert.deepEqual(warnings, []);
   }
-  assert.deepEqual(newBuckets(), { preservationReturnPct: 2.5, incomeReturnPct: 5.5, equitiesReturnPct: 9.5, preservationYears: 8, incomeThroughYear: 15 });
+  assert.deepEqual(newBuckets(), {
+    preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15,
+    preservationVolPct: 1, incomeVolPct: 8, equitiesVolPct: 17,
+  });
+  assert.deepEqual(newSimulation(), { targetSuccessPct: 90 });
   assert.equal(newEconomy().inflationPct, 2.5);
 });
 
@@ -372,8 +360,7 @@ test("v5 → v6: balance becomes a taxable account with basis from the old gain 
   assert.equal(state.accounts[0].balance, 1_000_000);
   assert.equal(state.accounts[0].costBasis, 600_000, "40% gain share → basis is 60% of the balance");
   assert.equal(state.taxes.capitalGainsPct, 20, "the old gains rate carries over");
-  assert.equal(state.properties[0].rentGrowthPct, 3.53, "+1% real at 2.5% inflation → 3.53% actual");
-  assert.equal(state.properties[0].costsGrowthPct, null, "0 real → with inflation");
+  assert.ok(!("properties" in state), "the rental is dropped by the v9 rung");
   assert.equal(state.incomes[0].growthPct, null);
   assert.equal(state.spending[0].growthPct, 1.47, "−1% real → 1.47% actual (0.99 × 1.025)");
   assert.ok(!("realGrowthPct" in state.spending[0]));
@@ -428,4 +415,28 @@ test("v7 → v8 drops the work-until age; nothing else changes", () => {
   const { schemaVersion: _sv, ...after } = state;
   void _sv;
   assert.deepEqual(after, before);
+});
+
+test("v8 → v9 drops rental properties, adds swings and the success target, and moves untouched default returns to 3 / 6 / 8", () => {
+  const { simulation, ...base } = placeholderState();
+  void simulation;
+  const v8 = {
+    ...base,
+    schemaVersion: 8,
+    properties: [{ name: "Rental", rentMonthly: 2000, costsMonthly: 500, mortgageMonthly: 1000, payoffYear: 2040, saleYear: null, saleNetProceeds: null, rentGrowthPct: null, costsGrowthPct: null }],
+    buckets: { preservationReturnPct: 2.5, incomeReturnPct: 5.5, equitiesReturnPct: 9.5, preservationYears: 8, incomeThroughYear: 15 },
+    accounts: base.accounts.map(({ ownVolPct, ...a }) => (void ownVolPct, a)),
+  };
+  const { state, fromVersion } = migrate(v8);
+  assert.equal(fromVersion, 8);
+  assert.deepEqual(validate(state).errors, []);
+  assert.ok(!("properties" in state));
+  assert.deepEqual(state.buckets, newBuckets(), "old default returns → new defaults, swings added");
+  assert.ok(state.accounts.every((a) => a.ownVolPct === 15));
+  assert.deepEqual(state.simulation, newSimulation());
+
+  const custom = { ...v8, buckets: { ...v8.buckets, equitiesReturnPct: 7.25 } };
+  const kept = migrate(custom).state;
+  assert.equal(kept.buckets.equitiesReturnPct, 7.25, "a rate you changed is kept");
+  assert.equal(kept.buckets.preservationReturnPct, 2.5);
 });

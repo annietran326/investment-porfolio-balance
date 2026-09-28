@@ -135,15 +135,12 @@ test("the committed template artifact parses clean (parser and template can't dr
 // v2 round-trip: growth columns, expense windows, Household tab
 // ---------------------------------------------------------------------------
 
-test("v4 round-trip: spouse + dependent (w/ ongoing support cost + window) + growing rent + time-boxed spending survive export→reimport", () => {
-  // A state that touches every new v2/v3/v4 field: a property whose rent
-  // outpaces inflation, a time-boxed spending line, and a household with a
-  // spouse (SS + healthcare) and a dependent carrying an ongoing support cost
-  // over a [fromYear, toYear] window.
+test("round-trip: accounts, spouse + dependent, growing income, time-boxed spending, and simulation inputs survive export→reimport", () => {
+  // A state that touches every field: accounts of each kind (incl. an own
+  // fund), a time-boxed spending line, a household with a spouse (SS +
+  // healthcare) and a dependent with a support-cost window, and the
+  // simulation's swings and success target.
   const state = defaultState();
-  state.properties = [
-    { name: "Rental (rent +4%, costs 2%)", rentMonthly: 3000, costsMonthly: 850, mortgageMonthly: 2100, payoffYear: 2048, saleYear: null, saleNetProceeds: null, rentGrowthPct: 4, costsGrowthPct: 2 },
-  ];
   state.incomes = [{ name: "Consulting (grows 4.5%)", annual: 60_000, fromYear: 2026, toYear: 2035, growthPct: 4.5 }];
   state.spending = [
     { name: "living", monthly: 3000, fromYear: null, toYear: null, growthPct: null }, // perpetual, with inflation
@@ -151,11 +148,12 @@ test("v4 round-trip: spouse + dependent (w/ ongoing support cost + window) + gro
     { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5 }, // open-ended from a future year
   ];
   state.accounts = [
-    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 },
-    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "own", ownReturnPct: 6.5 },
-    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 },
+    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
+    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "own", ownReturnPct: 6.5, ownVolPct: 12 },
+    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
   ];
   state.economy.inflationPct = 3;
+  state.simulation.targetSuccessPct = 85;
   state.buckets.preservationYears = 5;
   state.household = {
     people: [
@@ -186,8 +184,8 @@ test("v4 round-trip: spouse + dependent (w/ ongoing support cost + window) + gro
   assert.deepEqual(validate(applied).errors, [], "the reimported state is valid v4");
 
   // Spot-check the load-bearing new fields specifically.
-  assert.equal(applied.properties[0].rentGrowthPct, 4);
-  assert.equal(applied.properties[0].costsGrowthPct, 2);
+  assert.equal(applied.buckets.equitiesVolPct, state.buckets.equitiesVolPct);
+  assert.equal(applied.simulation.targetSuccessPct, 85);
   assert.equal(applied.incomes[0].growthPct, 4.5);
   assert.equal(applied.spending[0].growthPct, null, "a blank increase stays 'with inflation' (null), never 0");
   assert.deepEqual(applied.accounts, state.accounts, "accounts round-trip, incl. cost basis and contributions");
@@ -289,7 +287,7 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   });
   const parsed = parseTemplate(buf);
   assert.deepEqual(parsed.tabsFound, ["accounts", "spending"]);
-  assert.deepEqual(parsed.tabsMissing, ["properties", "income", "household", "assumptions"]);
+  assert.deepEqual(parsed.tabsMissing, ["income", "household", "assumptions"]);
 
   const pv = previewTemplate(placeholderState(), parsed);
   assert.equal(pv.tabs.find((t) => t.key === "income").status, "missing");
@@ -300,57 +298,47 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   const state = placeholderState();
   const applied = applyTabs(state, parsed, ["accounts", "spending"]);
   assert.deepEqual(applied.incomes, state.incomes, "absent tab leaves incomes untouched");
-  assert.deepEqual(applied.properties, state.properties, "absent tab leaves properties untouched");
   assert.deepEqual(applied.household, state.household, "absent Household tab leaves people untouched");
   // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
   assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null }]);
   assert.deepEqual(applied.accounts, [
-    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7 },
+    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
   ]);
 });
 
-test("text in a rent cell → cell-addressed error; tab blocked; other tabs still applicable", () => {
+test("text in an income cell → cell-addressed error; tab blocked; other tabs still applicable", () => {
   const buf = wbBuffer({
-    Properties: [
-      HEADERS.Properties,
-      ["Good1", 1000, 100, 0, null, null, null],
-      ["Good2", 1200, 100, 0, null, null, null],
-      ["Bad", "abc", 100, 0, null, null, null],
-    ],
-    Income: [HEADERS.Income, ["W2", 90000, 2026, 2030]],
+    Income: [HEADERS.Income, ["Good1", 1000, 2026, 2030], ["Good2", 1200, 2026, 2030], ["Bad", "abc", 2026, 2030]],
+    Spending: [HEADERS.Spending, ["food", 900]],
   });
   const parsed = parseTemplate(buf);
-  const perr = parsed.perTab.properties.errors;
-  assert.equal(perr.length, 1);
-  assert.equal(perr[0].cell, "Properties!B4");
-  assert.match(perr[0].message, /expected a number, got 'abc'/);
+  const ierr = parsed.perTab.income.errors;
+  assert.equal(ierr.length, 1);
+  assert.equal(ierr[0].cell, "Income!B4");
+  assert.match(ierr[0].message, /expected a number, got 'abc'/);
 
-  assert.deepEqual(applicableTabs(parsed), ["income"]);
+  assert.deepEqual(applicableTabs(parsed), ["spending"]);
   const pv = previewTemplate(placeholderState(), parsed);
-  assert.equal(pv.tabs.find((t) => t.key === "properties").status, "blocked");
-  assert.equal(pv.tabs.find((t) => t.key === "income").status, "ready");
+  assert.equal(pv.tabs.find((t) => t.key === "income").status, "blocked");
+  assert.equal(pv.tabs.find((t) => t.key === "spending").status, "ready");
 
-  const applied = applyTabs(placeholderState(), parsed, ["income"]);
-  assert.deepEqual(applied.incomes, [{ name: "W2", annual: 90000, fromYear: 2026, toYear: 2030, growthPct: null }]);
-  assert.throws(() => applyTabs(placeholderState(), parsed, ["properties"]), /not applicable/);
+  const applied = applyTabs(placeholderState(), parsed, ["spending"]);
+  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null }]);
+  assert.throws(() => applyTabs(placeholderState(), parsed, ["income"]), /not applicable/);
 });
 
-test("empty sale-year cell → null (keep forever), NEVER 0; explicit 0 → error", () => {
+test("empty nullable cells stay null (open / same as balance / with inflation), NEVER 0", () => {
   const ok = parseTemplate(
     wbBuffer({
-      Properties: [HEADERS.Properties, ["Keep", 1000, 100, 0, null, null, null], ["Sell", 1000, 100, 500, 2030, 2031, 50000]],
+      Accounts: [HEADERS.Accounts, ["Brokerage", "taxable", 100_000, null]],
+      Spending: [HEADERS.Spending, ["loan", 500, null, null, null]],
     })
   );
-  assert.deepEqual(ok.perTab.properties.errors, []);
-  assert.equal(ok.perTab.properties.rows[0].saleYear, null);
-  assert.equal(ok.perTab.properties.rows[0].payoffYear, null);
-  assert.equal(ok.perTab.properties.rows[0].saleNetProceeds, null);
-  assert.equal(ok.perTab.properties.rows[1].saleYear, 2031);
-
-  const zero = parseTemplate(wbBuffer({ Properties: [HEADERS.Properties, ["Oops", 1000, 100, 0, null, 0, 50000]] }));
-  assert.equal(zero.perTab.properties.errors.length, 1);
-  assert.equal(zero.perTab.properties.errors[0].cell, "Properties!F2");
-  assert.match(zero.perTab.properties.errors[0].message, /0 is not a year — leave the cell empty/);
+  assert.deepEqual(ok.perTab.accounts.errors, []);
+  assert.equal(ok.perTab.accounts.rows[0].costBasis, null, "blank basis = same as balance");
+  assert.equal(ok.perTab.spending.rows[0].fromYear, null);
+  assert.equal(ok.perTab.spending.rows[0].toYear, null);
+  assert.equal(ok.perTab.spending.rows[0].growthPct, null, "blank increase = with inflation, not 0%");
 });
 
 test('coercion: "$1,200" → 1200, "25%" → 25, "1,200" → 1200, Excel percent format → plain number', () => {
@@ -453,7 +441,7 @@ test("a sheet with more rows than the 10k read cap is blocked, not silently trun
 
 test("exported text cells are inert strings; guarded round-trip restores the original", () => {
   const state = placeholderState();
-  state.properties[0].name = "=cmd|'/c calc'!A0";
+  state.spending[1].name = "=cmd|'/c calc'!A0";
   state.accounts[1].name = "-2+3+cmd";
   state.incomes[0].name = '+HYPERLINK("http://evil.example","click")';
   state.spending[0].name = "@SUM(A1:A9)";
@@ -464,7 +452,7 @@ test("exported text cells are inert strings; guarded round-trip restores the ori
   const wb = XLSX.read(buf, { dense: true });
   const cellAt = (sheet, r, c) => wb.Sheets[sheet]["!data"][r][c];
   for (const [sheet, r, original] of [
-    ["Properties", 1, state.properties[0].name],
+    ["Spending", 2, state.spending[1].name],
     ["Accounts", 2, state.accounts[1].name],
     ["Income", 1, state.incomes[0].name],
     ["Spending", 1, state.spending[0].name],
@@ -723,19 +711,19 @@ test("preview guard rails: content-type, macro filename, garbage bytes, renamed 
 
 test("blocked tab via API: preview marks it, apply of the blocked tab 400s, valid sibling applies", async () => {
   const buf = wbBuffer({
-    Properties: [HEADERS.Properties, ["Bad", "abc", 100, 0, null, null, null]],
+    Income: [HEADERS.Income, ["Bad", "abc", 2026, 2030]],
     Spending: [HEADERS.Spending, ["groceries", 650]],
   });
   const pv = await sendOctet("/api/import/template/preview", buf);
   assert.equal(pv.status, 200);
-  const propTab = pv.body.preview.tabs.find((t) => t.key === "properties");
-  assert.equal(propTab.status, "blocked");
-  assert.equal(propTab.errors[0].cell, "Properties!B2");
-  assert.equal(pv.body.preview.tabs.find((t) => t.key === "income").status, "missing");
+  const incTab = pv.body.preview.tabs.find((t) => t.key === "income");
+  assert.equal(incTab.status, "blocked");
+  assert.equal(incTab.errors[0].cell, "Income!B2");
+  assert.equal(pv.body.preview.tabs.find((t) => t.key === "household").status, "missing");
 
   const blockedApply = await sendJson("POST", "/api/import/template/apply", {
     token: pv.body.token,
-    tabs: ["properties"],
+    tabs: ["income"],
     baseRev: pv.body.rev,
   });
   assert.equal(blockedApply.status, 400);
@@ -748,5 +736,5 @@ test("blocked tab via API: preview marks it, apply of the blocked tab 400s, vali
   assert.equal(okApply.status, 200);
   const state = (await getJson("/api/state")).body.state;
   assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650, fromYear: null, toYear: null, growthPct: null }]);
-  assert.ok(state.properties.length > 0, "properties section untouched by the blocked tab");
+  assert.ok(state.incomes.length > 0, "income section untouched by the blocked tab");
 });

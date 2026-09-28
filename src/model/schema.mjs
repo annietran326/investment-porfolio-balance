@@ -10,8 +10,6 @@
 //     account type decides how withdrawals are taxed. Each account is either
 //     invested in the household's three-bucket plan or held in its own fund
 //     (e.g. a target-date 401(k)) at its own return.
-//   - `saleYear: null` means "keep this property forever". Empty is meaningful;
-//     0 is an error, never coerced. Import parsers must preserve this distinction.
 //   - Spending lines carry an optional [fromYear, toYear] window (null = open).
 //   - The household is self (profile/social/health) plus `household.people` for a
 //     spouse and dependents. You and a spouse each live to the plan-to age;
@@ -19,7 +17,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -48,6 +46,7 @@ export const BASE_YEAR = 2026;
  * @property {number|null} contributionGrowthPct how fast contributions rise, %/yr; null = with inflation
  * @property {AccountInvest} invest        "buckets" = part of the three-bucket plan; "own" = its own fund, left alone
  * @property {number} ownReturnPct         the own fund's return, %/yr before inflation (used when invest is "own")
+ * @property {number} ownVolPct            the own fund's typical yearly swing (volatility), % (used when invest is "own")
  *
  * @typedef {Object} Buckets
  * The three investment buckets and the time-based rule that splits money
@@ -59,23 +58,18 @@ export const BASE_YEAR = 2026;
  * @property {number} equitiesReturnPct     global equities return, %/yr (before inflation)
  * @property {number} preservationYears     years 1..N of withdrawals held in capital preservation
  * @property {number} incomeThroughYear     years N+1..M held in high income
+ * @property {number} preservationVolPct    capital preservation's typical yearly swing (standard deviation), %
+ * @property {number} incomeVolPct          high income's typical yearly swing, %
+ * @property {number} equitiesVolPct        global equities' typical yearly swing, %
+ *
+ * @typedef {Object} Simulation
+ * @property {number} targetSuccessPct the share of simulated futures the plan should succeed in (the gap aims for it)
  *
  * @typedef {Object} Taxes
  * Effective (average) rates, federal plus state, applied to money taken out of
- * accounts. Income streams and property proceeds are entered after tax.
+ * accounts. Income streams are entered after tax.
  * @property {number} ordinaryIncomePct  on traditional IRA / 401(k) withdrawals
  * @property {number} capitalGainsPct    on the gain portion of taxable-account sales
- *
- * @typedef {Object} Property
- * @property {string} name
- * @property {number} rentMonthly     today's $
- * @property {number} costsMonthly    today's $: tax/insurance/HOA/maintenance, excl. mortgage
- * @property {number} mortgageMonthly P&I, a fixed dollar payment (it does not rise with inflation)
- * @property {number|null} payoffYear mortgage ends after this year; null = never (interest-only/none)
- * @property {number|null} saleYear   null = keep forever
- * @property {number|null} saleNetProceeds net cash after payoff, costs, taxes, in today's $
- * @property {number|null} rentGrowthPct  %/yr; null = with inflation
- * @property {number|null} costsGrowthPct %/yr; null = with inflation
  *
  * @typedef {Object} Income
  * @property {string} name
@@ -86,7 +80,7 @@ export const BASE_YEAR = 2026;
  *
  * @typedef {Object} SpendingCategory
  * @property {string} name
- * @property {number} monthly  today's $, excl. property costs and healthcare (modeled separately)
+ * @property {number} monthly  today's $, excl. healthcare (modeled separately)
  * @property {number|null} fromYear first year this cost applies; null = from the start
  * @property {number|null} toYear   last year this cost applies; null = perpetual
  * @property {number|null} growthPct %/yr increase; null = with inflation
@@ -127,13 +121,13 @@ export const BASE_YEAR = 2026;
  * @property {Account[]} accounts
  * @property {Buckets} buckets
  * @property {Taxes} taxes
- * @property {Property[]} properties
  * @property {Income[]} incomes
  * @property {SpendingCategory[]} spending
  * @property {Social} social
  * @property {Health} health
  * @property {Household} household
  * @property {EndState} endState
+ * @property {Simulation} simulation
  */
 
 // A growth or return rate this far out is almost certainly a typo.
@@ -143,6 +137,8 @@ export const ACCOUNT_TYPES = /** @type {AccountType[]} */ (["taxable", "traditio
 export const ACCOUNT_INVEST = /** @type {AccountInvest[]} */ (["buckets", "own"]);
 // A stock-heavy target-date fund's rough long-run return, before inflation.
 export const DEFAULT_OWN_RETURN_PCT = 7;
+// ...and its typical yearly swing: a little calmer than pure global equities.
+export const DEFAULT_OWN_VOL_PCT = 15;
 export const ACCOUNT_TYPE_LABELS = {
   taxable: "Taxable brokerage",
   traditional_ira: "Traditional IRA",
@@ -160,26 +156,30 @@ export function newSpendingCategory(o = {}) {
 export function newIncome(o = {}) {
   return { name: o.name ?? "", annual: o.annual ?? 0, fromYear: o.fromYear ?? 0, toYear: o.toYear ?? 0, growthPct: o.growthPct ?? null };
 }
-/** @param {Partial<Property>} [o] @returns {Property} */
-export function newProperty(o = {}) {
-  return {
-    name: o.name ?? "", rentMonthly: o.rentMonthly ?? 0, costsMonthly: o.costsMonthly ?? 0, mortgageMonthly: o.mortgageMonthly ?? 0,
-    payoffYear: o.payoffYear ?? null, saleYear: o.saleYear ?? null, saleNetProceeds: o.saleNetProceeds ?? null,
-    rentGrowthPct: o.rentGrowthPct ?? null, costsGrowthPct: o.costsGrowthPct ?? null,
-  };
-}
 /** @param {Partial<Account>} [o] @returns {Account} */
 export function newAccount(o = {}) {
   return {
     name: o.name ?? "", type: o.type ?? "taxable", balance: o.balance ?? 0, costBasis: o.costBasis ?? null,
     contributionAnnual: o.contributionAnnual ?? 0, employerMatchAnnual: o.employerMatchAnnual ?? 0,
     contributeYears: o.contributeYears ?? 0, contributionGrowthPct: o.contributionGrowthPct ?? null,
-    invest: o.invest ?? "buckets", ownReturnPct: o.ownReturnPct ?? DEFAULT_OWN_RETURN_PCT,
+    invest: o.invest ?? "buckets", ownReturnPct: o.ownReturnPct ?? DEFAULT_OWN_RETURN_PCT, ownVolPct: o.ownVolPct ?? DEFAULT_OWN_VOL_PCT,
   };
 }
 /** @returns {Buckets} */
 export function newBuckets() {
-  return { preservationReturnPct: 2.5, incomeReturnPct: 5.5, equitiesReturnPct: 9.5, preservationYears: 8, incomeThroughYear: 15 };
+  return {
+    // Expected returns before inflation, near 2026 professional forecasts
+    // (e.g. J.P. Morgan global equities 7.0%, high yield ~6%, cash ~3.3%).
+    preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15,
+    // Typical yearly swings, a bit cautious vs. the 2024 Horizon Actuarial
+    // survey averages (cash 1.1%, core bonds 5.9%, high yield 9.9%, US large
+    // cap 16.5%, non-US developed 18.1%).
+    preservationVolPct: 1, incomeVolPct: 8, equitiesVolPct: 17,
+  };
+}
+/** @returns {Simulation} */
+export function newSimulation() {
+  return { targetSuccessPct: 90 };
 }
 /** @returns {Taxes} */
 export function newTaxes() {
@@ -215,8 +215,8 @@ export function newPerson(role, o = {}) {
   return p;
 }
 
-// 2026 defaults (all user-editable): inflation 2.5%; bucket returns 2.5 / 5.5 /
-// 9.5% before inflation (about 0 / 3 / 7% after); bucket cutoffs 8 and 15
+// 2026 defaults (all user-editable): inflation 2.5%; bucket returns 3 / 6 /
+// 8% before inflation (about 0.5 / 3.4 / 5.4% after); bucket cutoffs 8 and 15
 // years; SS haircut 25% (Trustees Report: 22–28% cut at 2032); pre-65
 // healthcare $16K/yr (unsubsidized ACA anchor); Medicare-age $7,500/yr.
 /** @returns {RunwayState} */
@@ -228,13 +228,13 @@ export function defaultState() {
     accounts: [],
     buckets: newBuckets(),
     taxes: newTaxes(),
-    properties: [],
     incomes: [],
     spending: [],
     social: { startAge: 67, monthly: 0, haircutPct: 25 },
     health: { preMedicareAnnual: 16000, postMedicareAnnual: 7500, employerCoverageUntilAge: 40 },
     household: { people: [] },
     endState: { mode: "zero", amounts: { bequest: 0, floor: 0 } },
+    simulation: newSimulation(),
   };
 }
 
@@ -258,10 +258,6 @@ export function reanchorYears(state, targetYear) {
   const shift = (/** @type {number|null} */ y) => (typeof y === "number" ? y + delta : y);
   const next = structuredClone(state);
   next.profile.currentYear = targetYear;
-  for (const p of next.properties) {
-    p.payoffYear = shift(p.payoffYear);
-    p.saleYear = shift(p.saleYear);
-  }
   for (const inc of next.incomes) {
     inc.fromYear += delta;
     inc.toYear += delta;
@@ -359,10 +355,10 @@ export function validate(s) {
     add(errors, "schemaVersion", `expected ${SCHEMA_VERSION}, got ${s.schemaVersion}`);
   }
 
-  for (const key of /** @type {const} */ (["profile", "economy", "buckets", "taxes", "social", "health", "household", "endState"])) {
+  for (const key of /** @type {const} */ (["profile", "economy", "buckets", "taxes", "social", "health", "household", "endState", "simulation"])) {
     if (!s[key] || typeof s[key] !== "object") add(errors, key, "missing section");
   }
-  for (const key of /** @type {const} */ (["accounts", "properties", "incomes", "spending"])) {
+  for (const key of /** @type {const} */ (["accounts", "incomes", "spending"])) {
     if (!Array.isArray(s[key])) add(errors, key, "must be an array");
   }
   if (errors.length) return { errors, warnings };
@@ -389,6 +385,9 @@ export function validate(s) {
   const b = s.buckets;
   for (const k of /** @type {const} */ (["preservationReturnPct", "incomeReturnPct", "equitiesReturnPct"])) {
     if (requireNumber(errors, b[k], `buckets.${k}`)) warnIfExtremeRate(warnings, b[k], `buckets.${k}`);
+  }
+  for (const k of /** @type {const} */ (["preservationVolPct", "incomeVolPct", "equitiesVolPct"])) {
+    if (requireNumber(errors, b[k], `buckets.${k}`) && (b[k] < 0 || b[k] > 60)) add(errors, `buckets.${k}`, "swing must be between 0 and 60%");
   }
   const pyOk = requireNumber(errors, b.preservationYears, "buckets.preservationYears");
   const iyOk = requireNumber(errors, b.incomeThroughYear, "buckets.incomeThroughYear");
@@ -423,6 +422,7 @@ export function validate(s) {
     warnIfExtremeRate(warnings, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
     if (!ACCOUNT_INVEST.includes(a.invest)) add(errors, `${at}.invest`, `must be one of ${ACCOUNT_INVEST.join(", ")}`);
     if (requireNumber(errors, a.ownReturnPct, `${at}.ownReturnPct`)) warnIfExtremeRate(warnings, a.ownReturnPct, `${at}.ownReturnPct`);
+    if (requireNumber(errors, a.ownVolPct, `${at}.ownVolPct`) && (a.ownVolPct < 0 || a.ownVolPct > 60)) add(errors, `${at}.ownVolPct`, "swing must be between 0 and 60%");
     if (yearsOk && a.contributeYears < 0) add(errors, `${at}.contributeYears`, "can't be negative");
     if (yearsOk && a.contributeYears === 0 && ((a.contributionAnnual ?? 0) > 0 || (a.employerMatchAnnual ?? 0) > 0)) {
       add(warnings, `${at}.contributeYears`, "contributions are set but for 0 years, so none will be added. How many more years will you contribute?");
@@ -436,33 +436,6 @@ export function validate(s) {
     }
     if (a.type === "roth_ira" && typeof a.employerMatchAnnual === "number" && a.employerMatchAnnual > 0) {
       add(warnings, `${at}.employerMatchAnnual`, "IRAs don't get an employer match. Did you mean the 401(k)?");
-    }
-  });
-
-  s.properties.forEach((p, i) => {
-    const at = `properties[${i}]`;
-    if (typeof p.name !== "string" || !p.name.trim()) add(errors, `${at}.name`, "name required");
-    requireNumber(errors, p.rentMonthly, `${at}.rentMonthly`);
-    requireNumber(errors, p.costsMonthly, `${at}.costsMonthly`);
-    requireNumber(errors, p.mortgageMonthly, `${at}.mortgageMonthly`);
-    requireNumberOrNull(errors, p.payoffYear, `${at}.payoffYear`);
-    requireNumberOrNull(errors, p.saleYear, `${at}.saleYear`);
-    requireNumberOrNull(errors, p.saleNetProceeds, `${at}.saleNetProceeds`);
-    requireNumberOrNull(errors, p.rentGrowthPct, `${at}.rentGrowthPct`);
-    requireNumberOrNull(errors, p.costsGrowthPct, `${at}.costsGrowthPct`);
-    warnIfExtremeRate(warnings, p.rentGrowthPct, `${at}.rentGrowthPct`);
-    warnIfExtremeRate(warnings, p.costsGrowthPct, `${at}.costsGrowthPct`);
-    if (p.saleYear === 0) add(errors, `${at}.saleYear`, "0 is not a year. Leave it empty to keep forever");
-    if (typeof p.saleYear === "number" && p.saleYear !== 0) {
-      if (p.saleYear < currentYear) {
-        add(warnings, `${at}.saleYear`, `sale year ${p.saleYear} is in the past, so proceeds will never be counted`);
-      }
-      if (p.saleNetProceeds === null) {
-        add(warnings, `${at}.saleNetProceeds`, "sale year set but net proceeds empty, so the sale adds $0");
-      }
-    }
-    if (typeof p.payoffYear === "number" && p.payoffYear < currentYear) {
-      add(warnings, `${at}.payoffYear`, `payoff year ${p.payoffYear} is in the past, so the mortgage is treated as paid off`);
     }
   });
 
@@ -524,6 +497,11 @@ export function validate(s) {
     }
   });
   if (spouseCount > 1) add(warnings, "household.people", "more than one spouse is unusual, but all are modeled");
+
+  if (requireNumber(errors, s.simulation.targetSuccessPct, "simulation.targetSuccessPct")) {
+    const t = s.simulation.targetSuccessPct;
+    if (t < 50 || t > 99) add(errors, "simulation.targetSuccessPct", "pick a target between 50% and 99%");
+  }
 
   if (!END_STATE_MODES.includes(s.endState.mode)) {
     add(errors, "endState.mode", `must be one of ${END_STATE_MODES.join(", ")}`);

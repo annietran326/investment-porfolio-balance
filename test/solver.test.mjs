@@ -2,15 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simulate } from "../src/engine/simulate.mjs";
 import { requiredSavings, goalMet, GAP_CAP, GAP_ROUND_TO } from "../src/engine/solver.mjs";
-import {
-  SCENARIOS,
-  STRESS_VACANCY_MONTHS,
-  STRESS_VACANCY_YEARS,
-  STRESS_REPAIR_COST,
-  STRESS_SALE_DELAY_YEARS,
-  DRAWDOWN_PCT,
-  SPEND_SHOCK_MULT,
-} from "../src/engine/scenarios.mjs";
+import { SCENARIOS, SPEND_SHOCK_MULT } from "../src/engine/scenarios.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 import { newAccount } from "../src/model/schema.mjs";
 
@@ -29,7 +21,6 @@ const lean = () => {
   const s = placeholderState();
   withBalance(s, 300_000);
   s.incomes = [];
-  s.properties = [];
   return s;
 };
 const hopeless = () => {
@@ -41,38 +32,12 @@ const hopeless = () => {
 
 const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
 
-test("monotonicity: every stress scenario requires at least the base case", () => {
+test("monotonicity: +20% spending needs at least the base case's gap", () => {
   const s = lean();
   const base = gapOf(requiredSavings(s, {}));
   for (const sc of SCENARIOS) {
     const req = gapOf(requiredSavings(s, sc.overlay));
     assert.ok(req >= base, `${sc.key} (${req}) should require >= base (${base})`);
-  }
-});
-
-test("monotonicity with properties kept: a past sale is never resurrected by saleDelayYears", () => {
-  // Unlike the lean fixture above (which strips properties), this one KEEPS
-  // the placeholder's two properties and adds one already sold BEFORE the
-  // window — one year back, so the stress overlay's 2-year saleDelayYears
-  // would push it INSIDE the window (phantom rent + proceeds) if unguarded.
-  const s = placeholderState();
-  withBalance(s, 300_000);
-  s.incomes = [];
-  s.properties.push({
-    name: "Sold before the window",
-    rentMonthly: 4000,
-    costsMonthly: 500,
-    mortgageMonthly: 0,
-    payoffYear: null,
-    saleYear: s.profile.currentYear - 1,
-    saleNetProceeds: 750_000,
-  });
-  const base = gapOf(requiredSavings(s, {}));
-  for (const key of ["stress", "everything"]) {
-    const sc = SCENARIOS.find((x) => x.key === key);
-    assert.ok(sc);
-    const req = gapOf(requiredSavings(s, sc.overlay));
-    assert.ok(req >= base, `${key} (${req}) should require >= base (${base})`);
   }
 });
 
@@ -97,22 +62,10 @@ test("goalMet picks the amount for the ACTIVE mode only", () => {
   assert.ok(goalMet(s, simulate(s)));
 });
 
-test("everything-at-once is composed from the same magnitude constants — no silent softening", () => {
-  const everything = SCENARIOS.find((sc) => sc.key === "everything");
-  assert.ok(everything);
-  assert.deepEqual(everything.overlay, {
-    vacancyMonths: STRESS_VACANCY_MONTHS,
-    vacancyYears: STRESS_VACANCY_YEARS,
-    oneTimeCost: STRESS_REPAIR_COST,
-    oneTimeCostYearIdx: 0,
-    saleDelayYears: STRESS_SALE_DELAY_YEARS,
-    drawdownPct: DRAWDOWN_PCT,
-    spendMult: SPEND_SHOCK_MULT,
-  });
-  const stress = SCENARIOS.find((sc) => sc.key === "stress");
-  assert.equal(stress?.overlay.oneTimeCost, STRESS_REPAIR_COST);
-  const spend = SCENARIOS.find((sc) => sc.key === "spend");
-  assert.equal(spend?.overlay.spendMult, SPEND_SHOCK_MULT);
+test("the scenarios are the base case and +20% spending", () => {
+  assert.deepEqual(SCENARIOS.map((sc) => sc.key), ["base", "spend"]);
+  assert.equal(SCENARIOS[1].overlay.spendMult, SPEND_SHOCK_MULT);
+  assert.equal(SPEND_SHOCK_MULT, 1.2);
 });
 
 test("scenario keys are unique and base is first", () => {
@@ -160,7 +113,7 @@ test("gap solver precondition: end balance never falls as savings today rise (in
   }
 });
 
-test("gap monotonicity: every stress scenario needs at least the base gap; bigger safe buckets cost more", () => {
+test("gap monotonicity: +20% spending needs at least the base gap; bigger safe buckets cost more", () => {
   const s = lean();
   const base = gapOf(requiredSavings(s));
   for (const sc of SCENARIOS) {

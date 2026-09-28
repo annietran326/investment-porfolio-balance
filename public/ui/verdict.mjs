@@ -56,33 +56,54 @@ export function fmtPct(share) {
 }
 
 /**
- * The headline answer, as copy: do I have enough, and if not, the gap.
- * @param {import("../../src/engine/solver.mjs").GapResult} gap base-case requiredSavings(state, {})
+ * The headline answer from the simulated futures: the chance of success
+ * against the target, and the gap if it falls short.
+ * @param {{successRate: number, gap: import("../../src/engine/solver.mjs").GapResult, end: {p50: number, p90: number}, runs: number}} base
  * @param {RunwayState} state
- * @param {number} endBal base-case end balance, today's $
  * @returns {{tone: "good"|"bad", headline: string, detail: string}}
  */
-export function verdictCopy(gap, state, endBal) {
-  const goal = goalText(state);
-  if (gap.kind === "met") {
+export function mcVerdictCopy(base, state) {
+  const target = state.simulation.targetSuccessPct;
+  const pct = fmtPct(base.successRate);
+  const runs = base.runs.toLocaleString("en-US");
+  if (base.successRate * 100 >= target) {
     return {
       tone: "good",
-      headline: "Yes, you have enough.",
-      detail: `With what you have today, the plan reaches your goal (${goal}) at age ${state.profile.endAge}, ending with ${fmtMoney(endBal)} in today's dollars.`,
+      headline: `Yes, you have enough: the plan works in ${pct} of ${runs} simulated futures.`,
+      detail: `Your target is ${target}%. In the middle future you'd end with ${fmtMoney(base.end.p50)}; 90% of futures end with at least ${fmtMoney(base.end.p90)} (today's dollars).`,
     };
   }
-  if (gap.kind === "value") {
+  if (base.gap.kind === "value") {
     return {
       tone: "bad",
-      headline: `Not yet. The gap is ${fmtMoney(gap.amount)} in today's dollars.`,
-      detail: `That's how much more you'd need invested today, in the recommended split, to ${goal} by age ${state.profile.endAge}.`,
+      headline: `Not yet: the plan works in ${pct} of ${runs} simulated futures. The gap is ${fmtMoney(base.gap.amount)}.`,
+      detail: `That's how much more you'd need invested today, in the recommended split, to reach your ${target}% target (today's dollars).`,
     };
+  }
+  if (base.gap.kind === "met") {
+    // Rounding at the boundary: the solver found no gap even though the rate reads just under target.
+    return { tone: "good", headline: `The plan works in ${pct} of ${runs} simulated futures, right at your ${target}% target.`, detail: "" };
   }
   return {
     tone: "bad",
-    headline: `Not reachable even with ${fmtMoney(gap.cap)} more today.`,
-    detail: `Something in the plan outruns any realistic amount of savings. Check spending, the plan-to age, and the goal (${goal}).`,
+    headline: `The plan works in ${pct} of ${runs} simulated futures, and no realistic amount of savings reaches ${target}%.`,
+    detail: `Something in the plan outruns any amount up to ${fmtMoney(base.gap.cap)}. Check spending, the plan-to age, and the goal (${goalText(state)}).`,
   };
+}
+
+/**
+ * One line on the expected-return plan (every year exactly average), for comparison.
+ * @param {{endBal: number, firstBreachYear: number|null, startYear: number}} sim
+ * @param {import("../../src/engine/solver.mjs").GapResult} gap
+ * @param {RunwayState} state
+ */
+export function expectedLine(sim, gap, state) {
+  const prefix = "If every year earned exactly its expected return: ";
+  if (gap.kind === "met") return `${prefix}the plan works, ending with ${fmtMoney(sim.endBal)}.`;
+  const age = sim.firstBreachYear === null ? null : sim.firstBreachYear - state.profile.currentYear + state.profile.currentAge;
+  const runsOut = age === null ? "the plan falls short of your goal" : `money runs out at age ${age} (${sim.firstBreachYear})`;
+  const more = gap.kind === "value" ? `, and ${fmtMoney(gap.amount)} more today would fix that.` : ".";
+  return `${prefix}${runsOut}${more}`;
 }
 
 /**

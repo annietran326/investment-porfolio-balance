@@ -44,7 +44,7 @@ import {
   migrateWorkspace,
   validateWorkspace,
 } from "../model/workspace.mjs";
-import { requiredSavings } from "../engine/solver.mjs";
+import { monteCarlo } from "../engine/montecarlo.mjs";
 import { SCENARIOS } from "../engine/scenarios.mjs";
 
 /** @typedef {import("../model/schema.mjs").RunwayState} RunwayState */
@@ -354,9 +354,9 @@ export function createStore(dataDir, opts = {}) {
   function computeTrendRow(state, scenarioName, source, rev) {
     const ts = now();
     const base = SCENARIOS.find((sc) => sc.key === "base");
-    const worst = SCENARIOS.find((sc) => sc.key === "everything");
+    const mc = monteCarlo(state, base?.overlay ?? {});
     return {
-      v: 3,
+      v: 4,
       ts: ts.toISOString(),
       date: dateOf(ts),
       source,
@@ -369,8 +369,9 @@ export function createStore(dataDir, opts = {}) {
         const active = (c.fromYear === null || c.fromYear === undefined || cy >= c.fromYear) && (c.toYear === null || c.toYear === undefined || cy <= c.toYear);
         return active ? sum + c.monthly : sum;
       }, 0),
-      gapBase: encodeGap(requiredSavings(state, base?.overlay ?? {})),
-      gapWorst: encodeGap(requiredSavings(state, worst?.overlay ?? {})),
+      // Simulated (Monte Carlo) base case: the gap to the success target, and the chance of success.
+      gapBase: encodeGap(mc.gap),
+      successBase: mc.successRate,
     };
   }
 

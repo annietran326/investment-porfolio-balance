@@ -146,7 +146,7 @@ test("first save of a date: current + one snapshot + one trend row; 20 same-day 
   assert.equal(active.state.accounts[0].balance, 1_000_018, "current.json still updates every save");
 
   const row = JSON.parse(trendLines(dir)[0]);
-  assert.equal(row.v, 3, "trend rows are v3 (gap) now");
+  assert.equal(row.v, 4, "trend rows are v4 (simulated gap + chance of success)");
   assert.equal(row.date, "2026-07-10");
   assert.equal(row.source, "edit");
   assert.equal(row.rev, 1);
@@ -154,7 +154,7 @@ test("first save of a date: current + one snapshot + one trend row; 20 same-day 
   assert.equal(row.totalBalance, 1_000_000);
   assert.equal(row.monthlySpend, 3500 + 3000 + 1200); // the placeholder's spending lines
   assert.ok(["met", "value", "unreachable"].includes(row.gapBase.kind), "trend rows track the gap");
-  assert.ok(["met", "value", "unreachable"].includes(row.gapWorst.kind));
+  assert.ok(row.successBase >= 0 && row.successBase <= 1, "and the chance of success");
   assert.ok(!("rev" in current), "rev is server-owned, never inside current.json");
 });
 
@@ -582,14 +582,14 @@ test("save rejects invalid state with ValidationError carrying issues", () => {
   const { store } = makeStore(dir);
   store.init();
   const bad = placeholderState();
-  bad.properties[0].rentMonthly = /** @type {any} */ ("abc");
+  bad.spending[0].monthly = /** @type {any} */ ("abc");
   const badWs = makeWorkspace({ id: "s1", state: bad });
   assert.throws(() => store.save(badWs), ValidationError);
   try {
     store.save(badWs);
   } catch (e) {
     // validateWorkspace path-prefixes each scenario's state errors.
-    assert.ok(e.issues.some((i) => i.path === "scenarios[0].state.properties[0].rentMonthly"));
+    assert.ok(e.issues.some((i) => i.path === "scenarios[0].state.spending[0].monthly"));
   }
   assert.ok(!existsSync(join(dir, "current.json")), "nothing written for a rejected state");
 });
@@ -607,7 +607,7 @@ test("appendShutdownTrend appends only when rev moved since the last trend row",
   const lines = trendLines(dir);
   assert.equal(lines.length, 2);
   const last = JSON.parse(lines[1]);
-  assert.equal(last.v, 3);
+  assert.equal(last.v, 4);
   assert.equal(last.source, "shutdown");
   assert.equal(last.rev, 2);
   assert.equal(last.scenario, "Base plan");

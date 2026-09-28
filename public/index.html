@@ -110,6 +110,13 @@
       <div class="field"><label for="f-rEq">Global equities</label><input id="f-rEq" type="number" step="0.1" data-path="buckets.equitiesReturnPct"><div class="issue"></div></div>
     </div>
     <div class="dim small-note" id="realReturnsNote"></div>
+    <div class="subhead">Typical yearly swing of each bucket, % <span class="hint">for the simulation</span></div>
+    <div class="grid3">
+      <div class="field"><label for="f-vPres">Capital preservation</label><input id="f-vPres" type="number" step="0.5" min="0" data-path="buckets.preservationVolPct"><div class="issue"></div></div>
+      <div class="field"><label for="f-vInc">High income</label><input id="f-vInc" type="number" step="0.5" min="0" data-path="buckets.incomeVolPct"><div class="issue"></div></div>
+      <div class="field"><label for="f-vEq">Global equities</label><input id="f-vEq" type="number" step="0.5" min="0" data-path="buckets.equitiesVolPct"><div class="issue"></div></div>
+    </div>
+    <div class="footnote">The expected return is what money compounds at over the long run; the swing is how bumpy the individual years are. With equities at 8% and a 17% swing, about 2 years in 3 land between −8% and +26%, and about 1 year in 20 is −17% or worse. The simulation draws 1,000 possible futures this way; equities and high income tend to move together. Defaults are a little cautious vs. what investment firms use on average (cash 1.1%, core bonds 5.9%, high-yield bonds 9.9%, US stocks 16.5%, international stocks 18.1%).</div>
     <div class="subhead">Which years of withdrawals each bucket covers</div>
     <div class="grid2">
       <div class="field"><label for="f-presYears">Capital preservation: through year</label><input id="f-presYears" type="number" min="0" step="1" data-path="buckets.preservationYears"><div class="issue"></div></div>
@@ -136,21 +143,14 @@
       <div class="field"><label for="f-taxOrd">Ordinary income rate % (traditional IRA / 401(k))</label><input id="f-taxOrd" type="number" step="1" data-path="taxes.ordinaryIncomePct"><div class="issue"></div></div>
       <div class="field"><label for="f-taxCg">Capital gains rate % (taxable account gains)</label><input id="f-taxCg" type="number" step="1" data-path="taxes.capitalGainsPct"><div class="issue"></div></div>
     </div>
-    <div class="footnote">Use your average rate, not your top bracket: total tax divided by income. Income streams and property proceeds are entered after tax, so these rates apply only to money taken out of accounts.</div>
+    <div class="footnote">Use your average rate, not your top bracket: total tax divided by income. Income streams are entered after tax, so these rates apply only to money taken out of accounts.</div>
   </section>
 
   <section class="card">
-    <h2>Spending <span class="hint">$/mo, excluding property costs and healthcare</span></h2>
+    <h2>Spending <span class="hint">$/mo, excluding healthcare</span></h2>
     <div class="itemlist" id="spendList"></div>
     <button id="addSpend" type="button" class="small">+ category</button>
     <div class="footnote">Leave the increase blank to rise with inflation, or enter your own rate (for example, 3.5 if you expect this cost to rise faster). Set start/end years for costs that stop, like a car loan.</div>
-  </section>
-
-  <section class="card">
-    <h2>Properties <span class="hint">rentals</span></h2>
-    <div class="itemlist" id="propList"></div>
-    <button id="addProp" type="button" class="small">+ property</button>
-    <div class="footnote">Sale proceeds = net cash after payoff, costs, taxes. Empty sale year = keep forever. P&amp;I stops after the payoff year even without a sale.</div>
   </section>
 
   <section class="card">
@@ -171,6 +171,7 @@
         <div class="issue"></div>
       </div>
     </div>
+    <div class="field narrow"><label for="f-target">Success target: the plan should work in this % of simulated futures</label><input id="f-target" type="number" min="50" max="99" step="1" data-path="simulation.targetSuccessPct"><div class="issue"></div></div>
   </section>
 
 </div>
@@ -179,6 +180,14 @@
   <div id="verdict" class="verdict">
     <div class="v-headline" id="verdictHeadline"></div>
     <div class="v-detail" id="verdictDetail"></div>
+    <div class="v-detail dim" id="verdictExpected"></div>
+  </div>
+
+  <div class="kpi">
+    <div class="box"><div class="v" id="kpiSuccess"></div><div class="l" id="kpiSuccessLabel">chance of success</div></div>
+    <div class="box"><div class="v" id="kpiGap"></div><div class="l" id="kpiGapLabel">gap today</div></div>
+    <div class="box"><div class="v" id="kpiEnd90"></div><div class="l" id="kpiEnd90Label">90% outcome at the end</div></div>
+    <div class="box"><div class="v" id="kpiTotal"></div><div class="l">invested today</div></div>
   </div>
 
   <section class="card">
@@ -192,17 +201,10 @@
     <div class="footnote" id="splitNote"></div>
   </section>
 
-  <div class="kpi">
-    <div class="box"><div class="v" id="kpiGap"></div><div class="l" id="kpiGapLabel">gap today</div></div>
-    <div class="box"><div class="v" id="kpiTotal"></div><div class="l">invested today</div></div>
-    <div class="box"><div class="v" id="kpiEndBal"></div><div class="l" id="kpiEndBalLabel">end balance</div></div>
-    <div class="box"><div class="v" id="kpiRunway"></div><div class="l">money lasts until</div></div>
-  </div>
-
   <div id="flags" class="banner banner-warn hidden"></div>
 
   <section class="card">
-    <h2>How the split changes as you age <span class="hint">base case, rebalanced each year</span></h2>
+    <h2>How the split changes as you age <span class="hint">base case, expected returns</span></h2>
     <table>
       <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Own funds</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
       <tbody id="glideRows"></tbody>
@@ -211,19 +213,19 @@
   </section>
 
   <section class="card">
-    <h2>Stress tests</h2>
+    <h2>Simulated futures <span class="hint" id="mcHint">1,000 per scenario</span></h2>
     <table>
-      <thead><tr><th>Stress test</th><th>Money lasts until</th><th class="num">Gap today</th></tr></thead>
+      <thead><tr><th>Scenario</th><th class="num">Chance of success</th><th class="num" id="thGap">Gap today</th><th class="num">50% outcome</th><th class="num">80% outcome</th><th class="num">90% outcome</th></tr></thead>
       <tbody id="scenarioRows"></tbody>
     </table>
-    <div class="footnote">Gap today = extra money you'd need invested now (today's dollars) to reach your goal. The market crash hits your split today: equities −30%, high income −15%, capital preservation untouched, which is where a bigger safe bucket pays off.</div>
+    <div class="footnote">Chance of success = the share of 1,000 simulated futures in which the plan reaches your goal without running out. Gap today = how much more you'd need invested now (today's dollars) to succeed in your target share of futures. Outcomes are the balance left at the end, in today's dollars: the 50% outcome is the middle future; 80% (or 90%) of futures end at least as well as the 80% (or 90%) outcome.</div>
   </section>
 
   <section class="card">
-    <h2>Balance over time <span class="hint">hover or tap for a year; click a chip to toggle a stress test</span></h2>
+    <h2>Balance over time <span class="hint">simulated outcomes; hover or tap for a year, click a chip to toggle a line</span></h2>
     <div id="balanceChart" class="chart-wrap"></div>
     <details class="drill">
-      <summary>Year-by-year cash flow (base case)</summary>
+      <summary>Year-by-year cash flow (base case, expected returns)</summary>
       <div id="cashflowTable"></div>
     </details>
   </section>
@@ -245,52 +247,32 @@
   <section class="card">
     <h2>Import &amp; export <span class="hint">.xlsx template · transactions .csv</span></h2>
     <div id="importsBody"></div>
-    <div class="footnote">Spreadsheet import replaces only the tabs present in the file — a missing tab leaves that section unchanged. An empty sale-year cell means keep forever; it is never read as 0. Transaction CSV import stores normalized rows locally and derives monthly spending from complete months only; healthcare/property-like categories are excluded by default because the model carries those costs separately. Applying either import preserves the current state as a snapshot first.</div>
+    <div class="footnote">Spreadsheet import replaces only the tabs present in the file; a missing tab leaves that section unchanged. Transaction CSV import stores normalized rows locally and derives monthly spending from complete months only; healthcare-like categories are excluded by default because the model carries healthcare separately. Applying either import preserves the current state as a snapshot first.</div>
   </section>
 
   <section class="card">
     <details class="drill">
       <summary>How the math works <span class="hint">exactly what goes into the numbers, click to expand</span></summary>
       <div class="math-doc">
-        <p><strong>Dollars.</strong> You enter amounts in today's dollars. The engine then runs in actual future dollars: every cost and income rises at its own rate (or at inflation if you leave the rate blank), and returns are actual returns. Every result is converted back to today's dollars, so $1M at age 80 means what $1M buys today.</p>
-        <p><strong>Each year</strong>, in order: (1) money in the bucket plan is split across the three buckets and earns the blended return, while any account in its own fund earns that fund's return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from the accounts.</p>
-        <p><strong>Own-fund accounts</strong> (like a 401(k) in a target-date fund) aren't part of the split. They're treated as long-term money, so they reduce how much the bucket plan needs to hold in equities. Contributions go in at year end for the number of years you enter on each account.</p>
-        <p><strong>Cash flow each year</strong> = income + Social Security + property cash flow + sale proceeds − spending − healthcare. Social Security and healthcare rise with inflation. Mortgage payments are fixed dollar amounts and don't rise.</p>
-        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: years 1 through your capital preservation cutoff go to capital preservation, the next years through your high income cutoff go to high income, and the rest go to equities. Each withdrawal is valued at what it costs today, following the path its money takes (it waits in equities, then moves to high income, then to capital preservation). The buckets fill in that order: capital preservation first, then high income, then equities, so capital preservation is a fixed cushion of your next years of withdrawals, not a share of the total. With more years left than the high income cutoff, everything else goes to equities; once fewer remain, everything else goes to high income; in the final capital-preservation years, everything is in capital preservation. If you have less than the plan needs, the later buckets are short first and the gap shows how much more you'd need. The split is redone every year.</p>
-        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, bucket-plan money is used before own-fund money. Enough is taken to cover tax, so the after-tax amount pays the bills:</p>
+        <p><strong>Dollars.</strong> You enter amounts in today's dollars. The engine runs in actual future dollars: every cost and income rises at its own rate (or at inflation if you leave the rate blank). Every result is converted back to today's dollars, so $1M at age 80 means what $1M buys today.</p>
+        <p><strong>Cash flow each year</strong> = income + Social Security − spending − healthcare. Social Security and healthcare rise with inflation. You and your spouse each live to the plan-to age; the plan runs until the younger of you reaches it, and the survivor keeps the larger Social Security check.</p>
+        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: the next years (through your capital preservation cutoff) to capital preservation, the following years (through your high income cutoff) to high income. Each is valued at what it costs today. The buckets fill in that order: capital preservation first, then high income, then everything else in equities. With fewer years left than the high income cutoff, everything else goes to high income; in the final capital-preservation years, everything is in capital preservation. Own-fund accounts (like a target-date 401(k)) aren't part of the split; they count as long-term money.</p>
+        <p><strong>Each year</strong>, in order: (1) every bucket and own fund earns its return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from accounts, and on the bucket side it comes out of capital preservation first, then high income. (4) <strong>Refilling:</strong> after a year equities rose, the buckets are reset to their targets. After a year equities fell, nothing is sold to refill; the plan keeps spending from the safe buckets and lets equities recover.</p>
+        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, bucket-plan money before own-fund money. Enough is taken to cover tax:</p>
         <ul>
-          <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time. A sale lowers the basis in proportion (average cost).</li>
+          <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time.</li>
           <li><strong>Traditional IRA / 401(k)</strong>: ordinary income rate on the whole amount, plus a 10% penalty before age 59½.</li>
-          <li><strong>Roth</strong>: tax-free. (Withdrawals before 59½ are flagged but not penalized.)</li>
+          <li><strong>Roth</strong>: tax-free.</li>
         </ul>
-        <p><strong>Do I have enough?</strong> The plan runs once with what you have. If it reaches your goal (spend down to zero, leave an amount, or never drop below a floor) without the balance going negative, you have enough. If not, the <strong>gap</strong> is the smallest extra amount, invested today as new money in a taxable account, that reaches the goal. It's found by trying amounts until one just works.</p>
-        <p><strong>Stress tests</strong> rerun the same plan under bad cases: a rental vacancy plus a big repair plus a delayed sale, a market crash today, spending 20% higher, and all at once.</p>
-        <p class="dim"><strong>What it doesn't do (yet):</strong> no random market paths (every year earns the expected return; Monte Carlo is planned), no required minimum distributions (slightly optimistic), no tax brackets (one effective rate each), rebalancing is treated as tax-free, and every account in the bucket plan holds the same mix. Every number here follows from the inputs you can see.</p>
+        <p><strong>Simulated futures (Monte Carlo).</strong> The plan is run through 1,000 futures. In each, every year's return for each bucket is drawn at random: the expected return you entered is what money compounds at in a typical future, and the swing sets how bumpy the years are. Equities and high income tend to move together; capital preservation moves on its own; a target-date own fund follows equities closely. Inflation is fixed. The draws are repeatable, so the same inputs always give the same answer.</p>
+        <p><strong>Chance of success</strong> is the share of futures that reach your goal (spend down to zero, leave an amount, or never drop below a floor) without running out. The <strong>gap</strong> is the smallest extra amount, invested today in the recommended split, that lifts the chance of success to your target. The <strong>50% / 80% / 90% outcomes</strong> are balances that half, 80%, and 90% of futures end at least as well as.</p>
+        <p>The recommended split, the by-age table, and the year-by-year cash flow use the expected returns (every year exactly average), so they're easy to read.</p>
+        <p class="dim"><strong>What it doesn't do (yet):</strong> no required minimum distributions (slightly optimistic), no tax brackets (one effective rate each), rebalancing is treated as tax-free, and inflation doesn't vary.</p>
       </div>
     </details>
   </section>
 </div>
 </main>
-
-<template id="tpl-property">
-  <div class="item">
-    <div class="head">
-      <input type="text" data-key="name" placeholder="name" aria-label="property name">
-      <button type="button" class="small danger remove" aria-label="remove property">✕</button>
-    </div>
-    <div class="issue"></div>
-    <div class="grid3">
-      <div class="field"><label>rent $/mo</label><input type="number" data-key="rentMonthly"><div class="issue"></div></div>
-      <div class="field"><label>costs $/mo</label><input type="number" data-key="costsMonthly"><div class="issue"></div></div>
-      <div class="field"><label>P&amp;I $/mo</label><input type="number" data-key="mortgageMonthly"><div class="issue"></div></div>
-      <div class="field"><label>payoff yr</label><input type="number" data-key="payoffYear" placeholder="never"><div class="issue"></div></div>
-      <div class="field"><label>sale yr</label><input type="number" data-key="saleYear" placeholder="empty = keep forever"><div class="issue"></div></div>
-      <div class="field"><label>net proceeds $</label><input type="number" data-key="saleNetProceeds"><div class="issue"></div></div>
-      <div class="field"><label>rent increase %/yr</label><input type="number" step="0.1" data-key="rentGrowthPct" placeholder="inflation"><div class="issue"></div></div>
-      <div class="field"><label>costs increase %/yr</label><input type="number" step="0.1" data-key="costsGrowthPct" placeholder="inflation"><div class="issue"></div></div>
-    </div>
-  </div>
-</template>
 
 <template id="tpl-account">
   <div class="item account">
@@ -317,6 +299,10 @@
           <option value="own">Own fund</option>
         </select><div class="issue"></div></div>
       <div class="field only-own"><label>its return %/yr, before inflation</label><input type="number" step="0.1" data-key="ownReturnPct"><div class="issue"></div></div>
+    </div>
+    <div class="grid2 only-own-row">
+      <div class="field"></div>
+      <div class="field only-own"><label>its typical yearly swing %</label><input type="number" step="0.5" min="0" data-key="ownVolPct"><div class="issue"></div></div>
     </div>
     <div class="grid2x2 contrib">
       <div class="field"><label>your contribution $/yr</label><input type="number" data-key="contributionAnnual" placeholder="0"><div class="issue"></div></div>

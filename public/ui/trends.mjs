@@ -25,8 +25,9 @@ function isNum(v) {
 /**
  * gapBase → a plottable number: "met" → 0 (nothing more needed), "value" →
  * amount, "unreachable" (and any future kind) → null (a gap in the line).
- * Rows written before the gap existed (v2, which carried the old required
- * income instead) also plot as null: the two numbers aren't comparable.
+ * Only v4+ rows carry the simulated (Monte Carlo) gap; older rows (the
+ * expected-return gap, or the old required income) plot as null because the
+ * numbers aren't comparable.
  * @param {unknown} gap
  * @returns {number|null}
  */
@@ -62,7 +63,7 @@ export function trendModel(rows) {
       date: r.date,
       totalBalance: r.totalBalance,
       monthlySpend: r.monthlySpend,
-      gap: hasGap ? gapAmount(r.gapBase) : null,
+      gap: hasGap && typeof r.v === "number" && r.v >= 4 ? gapAmount(r.gapBase) : null,
     });
   }
   const points = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -133,7 +134,7 @@ export const TRENDS_EMPTY_COPY =
 const SERIES = [
   { key: /** @type {const} */ ("totalBalance"), label: "total balance" },
   { key: /** @type {const} */ ("monthlySpend"), label: "monthly spend" },
-  { key: /** @type {const} */ ("gap"), label: "gap today (base)" },
+  { key: /** @type {const} */ ("gap"), label: "gap to target (simulated)" },
 ];
 
 // ---------------------------------------------------------------------------

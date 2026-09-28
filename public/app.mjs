@@ -1,7 +1,8 @@
 // Browser entry point — thin DOM wiring over the pure modules. The engine and
 // model are imported DIRECTLY into the browser: every state change re-runs the
-// simulation and solver locally (instant), and saves flow through the
-// debounced, serialized save pipeline.
+// expected-return plan locally (instant) and hands the Monte Carlo simulation
+// to a background worker (mc-worker.mjs); saves flow through the debounced,
+// serialized save pipeline.
 //
 // Rendering discipline: form inputs update in place (typing never loses focus
 // or characters); results/verdict/table re-render on every state change; row
@@ -10,10 +11,9 @@
 import { simulate } from "/engine/simulate.mjs";
 import { requiredSavings } from "/engine/solver.mjs";
 import { BUCKET_KEYS } from "/engine/buckets.mjs";
-import { SCENARIOS } from "/engine/scenarios.mjs";
 import { validate, PLAN_TO_AGE_PRESETS, totalBalance } from "/model/schema.mjs";
 import { qs, el, setText, show } from "./ui/dom.mjs";
-import { verdictCopy, fmtCompact, fmtMoney, fmtPct, gapCell, runwayCell, errorsText } from "./ui/verdict.mjs";
+import { mcVerdictCopy, expectedLine, fmtCompact, fmtMoney, fmtPct, gapCell, errorsText } from "./ui/verdict.mjs";
 import { createSavePipeline } from "./ui/save.mjs";
 import { createBalanceChart, createCashflowTable } from "./ui/charts.mjs";
 import { initTrends } from "./ui/trends.mjs";
@@ -57,7 +57,6 @@ const pipeline = createSavePipeline({
 
 const LISTS = {
   accounts: { container: qs("#accountList"), template: qs("#tpl-account"), addBtn: qs("#addAccount") },
-  properties: { container: qs("#propList"), template: qs("#tpl-property"), addBtn: qs("#addProp") },
   incomes: { container: qs("#incomeList"), template: qs("#tpl-income"), addBtn: qs("#addIncome") },
   spending: { container: qs("#spendList"), template: qs("#tpl-spend"), addBtn: qs("#addSpend") },
 };
@@ -188,7 +187,7 @@ function issueSlotNear(input) {
 }
 
 function issueSlotFor(path) {
-  const m = /^(accounts|properties|incomes|spending)\[(\d+)\]\.(\w+)$/.exec(path);
+  const m = /^(accounts|incomes|spending)\[(\d+)\]\.(\w+)$/.exec(path);
   if (m) {
     const row = LISTS[m[1]].container.children[Number(m[2])];
     const input = row?.querySelector(`[data-key="${m[3]}"]`);
@@ -240,66 +239,163 @@ function setKpi(sel, text, cls) {
   setText(node, text);
 }
 
-function renderResults() {
-  const results = SCENARIOS.map((sc) => ({
-    key: sc.key,
-    label: sc.label,
-    sim: simulate(state, sc.overlay),
-    gap: requiredSavings(state, sc.overlay),
-  }));
-  const base = results[0];
+/** The latest expected-return run (the split and tables) and Monte Carlo results. */
+let lastExpected = /** @type {any} */ (null);
+let lastMc = /** @type {any} */ (null);
 
-  // Verdict: do I have enough, and if not, the gap.
-  const copy = verdictCopy(base.gap, state, base.sim.endBal);
+/**
+ * Re-render everything that comes from the expected-return plan (instant), then
+ * ask the worker for fresh simulated futures.
+ */
+function renderResults() {
+  const sim = simulate(state);
+  const gap = requiredSavings(state);
+  lastExpected = { sim, gap };
+  setText(qs("#verdictExpected"), expectedLine(sim, gap, state));
+  renderSplit(sim, lastMc?.results?.[0]?.gap ?? null);
+  setKpi("#kpiTotal", fmtCompact(totalBalance(state)), "");
+  renderFlags(sim);
+  renderGlide(sim);
+  cashflow.update(sim.rows);
+  requestMonteCarlo();
+}
+
+// ---------------------------------------------------------------------------
+// Monte Carlo in the background: one job at a time; while one runs, only the
+// newest state waits (older edits are dropped). Results for a stale state are
+// ignored.
+// ---------------------------------------------------------------------------
+
+let mcSeq = 0;
+let mcBusy = false;
+/** @type {{id: number, state: object}|null} */
+let mcPending = null;
+/** @type {Worker|null} */
+let mcWorker = null;
+try {
+  mcWorker = new Worker("/mc-worker.mjs", { type: "module" });
+  mcWorker.onmessage = (e) => onMonteCarlo(e.data);
+  mcWorker.onerror = () => {
+    mcWorker = null; // fall back to running on the page
+    mcBusy = false;
+  };
+} catch {
+  mcWorker = null;
+}
+
+function requestMonteCarlo() {
+  const job = { id: ++mcSeq, state: structuredClone(state) };
+  if (mcBusy) {
+    mcPending = job;
+    return;
+  }
+  sendMonteCarlo(job);
+}
+
+/** @param {{id: number, state: any}} job */
+async function sendMonteCarlo(job) {
+  mcBusy = true;
+  qs("#results").classList.add("mc-running");
+  if (!lastMc) {
+    setText(qs("#verdictHeadline"), "Running 1,000 simulated futures…");
+    setText(qs("#verdictDetail"), "");
+  }
+  if (mcWorker) {
+    mcWorker.postMessage(job);
+    return;
+  }
+  // No worker available: run on the page, after letting the screen paint.
+  await new Promise((r) => setTimeout(r, 30));
+  const { monteCarlo } = await import("/engine/montecarlo.mjs");
+  const { SCENARIOS } = await import("/engine/scenarios.mjs");
+  const results = SCENARIOS.map((sc) => ({ key: sc.key, label: sc.label, ...monteCarlo(job.state, sc.overlay) }));
+  onMonteCarlo({ id: job.id, results });
+}
+
+/** @param {{id: number, results?: any[], error?: string}} data */
+function onMonteCarlo(data) {
+  mcBusy = false;
+  if (mcPending) {
+    const next = mcPending;
+    mcPending = null;
+    sendMonteCarlo(next);
+  } else {
+    qs("#results").classList.remove("mc-running");
+  }
+  if (data.id !== mcSeq) return; // a newer edit is on its way
+  if (data.error || !data.results) {
+    setText(qs("#verdictHeadline"), "The simulation couldn't run.");
+    setText(qs("#verdictDetail"), data.error ?? "");
+    return;
+  }
+  lastMc = data;
+  renderMonteCarlo(data.results);
+}
+
+/** @param {any[]} results base first, then +20% spending */
+function renderMonteCarlo(results) {
+  const base = results[0];
+  const copy = mcVerdictCopy(base, state);
   const verdict = qs("#verdict");
   verdict.classList.toggle("good", copy.tone === "good");
   verdict.classList.toggle("bad", copy.tone === "bad");
   setText(qs("#verdictHeadline"), copy.headline);
   setText(qs("#verdictDetail"), copy.detail);
 
-  renderSplit(base);
-
-  // Headline numbers.
+  const target = state.simulation.targetSuccessPct;
+  setKpi("#kpiSuccess", fmtPct(base.successRate), base.successRate * 100 >= target ? "pos" : "warn");
+  setText(qs("#kpiSuccessLabel"), `chance of success (target ${target}%)`);
   const gc = gapCell(base.gap);
   setKpi("#kpiGap", gc.text, gc.cls);
-  setText(qs("#kpiGapLabel"), base.gap.kind === "met" ? "gap today (you have enough)" : "gap today (more needed now)");
-  setKpi("#kpiTotal", fmtCompact(totalBalance(state)), "");
-  setKpi("#kpiEndBal", fmtCompact(base.sim.endBal), base.sim.endBal >= 0 ? "pos" : "neg");
-  setText(qs("#kpiEndBalLabel"), `balance at ${state.profile.endAge} (today's $)`);
-  const run = runwayCell(base.sim);
-  const runAge = base.sim.firstBreachYear === null ? null : base.sim.firstBreachYear - state.profile.currentYear + state.profile.currentAge;
-  setKpi("#kpiRunway", runAge === null ? "never runs out" : `age ${runAge} (${base.sim.firstBreachYear})`, run.cls === "neg" ? "warn" : run.cls);
+  setText(qs("#kpiGapLabel"), `gap today to reach ${target}%`);
+  setKpi("#kpiEnd90", fmtCompact(base.end.p90), base.end.p90 >= 0 ? "" : "neg");
+  setText(qs("#kpiEnd90Label"), "90% outcome at the end (today's $)");
 
-  renderFlags(base.sim);
-  renderGlide(base.sim);
-
+  setText(qs("#thGap"), `Gap to ${target}%`);
   const tbody = qs("#scenarioRows");
   tbody.textContent = "";
   for (const r of results) {
-    const rc = runwayCell(r.sim);
     const gcell = gapCell(r.gap);
+    const money = (/** @type {number} */ v) => el("td", { class: v < 0 ? "num neg" : "num" }, fmtCompact(v));
     tbody.appendChild(
       el(
         "tr",
         {},
         el("td", { class: "name" }, r.label),
-        el("td", { class: rc.cls }, rc.text),
-        el("td", { class: `num ${gcell.cls}` }, gcell.text)
+        el("td", { class: r.successRate * 100 >= target ? "num pos" : "num warn" }, fmtPct(r.successRate)),
+        el("td", { class: `num ${gcell.cls}` }, gcell.text),
+        money(r.end.p50),
+        money(r.end.p80),
+        money(r.end.p90)
       )
     );
   }
 
-  balanceChart.update(results.map((r) => ({ key: r.key, label: r.label, path: r.sim.path })));
-  cashflow.update(base.sim.rows);
+  const spend = results[1];
+  /** @param {any[]} bands @param {"p50"|"p80"|"p90"} q */
+  const line = (bands, q) => bands.map((b) => ({ year: b.year, age: b.age, bal: b[q] }));
+  balanceChart.update([
+    { key: "p50", label: "50% outcome", path: line(base.bands, "p50") },
+    { key: "p80", label: "80% outcome", path: line(base.bands, "p80") },
+    { key: "p90", label: "90% outcome", path: line(base.bands, "p90") },
+    ...(spend
+      ? [
+          { key: "s50", label: "+20% spending, 50%", path: line(spend.bands, "p50") },
+          { key: "s90", label: "+20% spending, 90%", path: line(spend.bands, "p90") },
+        ]
+      : []),
+  ]);
+  if (lastExpected) renderSplit(lastExpected.sim, base.gap);
 }
 
 /**
  * The recommended split: shares and dollars for the money you have today. When
- * there's a gap, also say what each bucket would hold with the gap closed.
- * @param {{sim: any, gap: any}} base
+ * there's a gap (to the success target), also say what each bucket would hold
+ * with the gap closed.
+ * @param {any} sim the expected-return run @param {any} gap the Monte Carlo gap, once known
  */
-function renderSplit(base) {
-  const dollars = base.sim.startMix;
+function renderSplit(sim, gap) {
+  const dollars = sim.startMix;
   const total = dollars.preservation + dollars.income + dollars.equities;
   /** @type {Record<string, [string, string]>} */
   const ids = { preservation: ["#kpiPres", "#kpiPresAmt"], income: ["#kpiInc", "#kpiIncAmt"], equities: ["#kpiEq", "#kpiEqAmt"] };
@@ -313,15 +409,15 @@ function renderSplit(base) {
     seg.style.width = `${share * 100}%`;
     bar.appendChild(seg);
   }
-  const own = base.sim.startOwn;
+  const own = sim.startOwn;
   setText(qs("#splitHint"), own > 0 ? `of the ${fmtCompact(total)} in your three-bucket plan` : `of the ${fmtCompact(total)} you have today`);
 
   let note = "";
   if (!(total > 0)) {
     note = "Add your accounts to see a recommended split.";
-  } else if (base.gap.kind === "value") {
-    const funded = simulate(state, {}, base.gap.amount).startMix;
-    note = `You're short. The buckets fill in order (capital preservation first), so the later buckets hold less than the plan needs. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
+  } else if (gap?.kind === "value") {
+    const funded = simulate(state, {}, gap.amount).startMix;
+    note = `There's a gap. The buckets fill in order (capital preservation first), so any shortfall is in the later buckets. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
   } else if (dollars.preservation === 0 && dollars.income === 0) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {

@@ -5,7 +5,7 @@
 // — add a schema field and this fails until the UI blank is updated too.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { newProperty, newIncome, newSpendingCategory, newPerson, newAccount } from "../src/model/schema.mjs";
+import { newIncome, newSpendingCategory, newPerson, newAccount } from "../src/model/schema.mjs";
 import { blankRow, addPerson } from "../public/ui/forms.mjs";
 import { defaultState } from "../src/model/schema.mjs";
 
@@ -13,7 +13,6 @@ const state = () => ({ ...defaultState(), profile: { currentAge: 40, endAge: 95,
 
 test("blankRow mirrors the schema factories", () => {
   assert.deepEqual(blankRow("accounts", state()), newAccount({ name: "new account" }));
-  assert.deepEqual(blankRow("properties", state()), newProperty({ name: "new property" }));
   assert.deepEqual(blankRow("incomes", state()), newIncome({ name: "new income", fromYear: 2026, toYear: 2030 }));
   assert.deepEqual(blankRow("spending", state()), newSpendingCategory({ name: "new category" }));
 });

@@ -22,8 +22,8 @@
 //   - Derivation uses complete months only: the current calendar month AND
 //     the earliest month present are both excluded (both presumed partial).
 //   - "Modeled elsewhere" flagging: categories whose names (from the file OR
-//     derived from descriptions) match healthcare/property patterns are
-//     default-FLAGGED for exclusion — the model carries healthcare + property
+//     derived from descriptions) match healthcare patterns are
+//     default-FLAGGED for exclusion — the model carries healthcare
 //     costs separately, and double-counting inflates required income. The
 //     user can untick the flag in the UI.
 import { createHash } from "node:crypto";
@@ -90,10 +90,10 @@ export class CsvFileError extends Error {
 
 export const APPLY_MODES = /** @type {const} */ (["replace-all", "update-matching-names", "add-new-only"]);
 
-// Categories the model already carries separately (health section, property
-// costs) — matching names are default-flagged for exclusion from spending.
+// Categories the model already carries separately (the healthcare section):
+// matching names are default-flagged for exclusion from spending. Home costs
+// (mortgage, repairs) are ordinary spending in this version.
 export const HEALTHCARE_RE = /pharmacy|medical|health|dental|cvs|walgreens|insurance/i;
-export const PROPERTY_RE = /home depot|lowes|repair|plumb|hvac|property|mortgage/i;
 
 // Row numbers throughout are 1-based FILE lines (the header is line 1, the
 // first data row is line 2) so they match what the user sees in an editor.
@@ -521,7 +521,7 @@ export function deriveCategories(storedRows, { now }) {
         months: g.months.size,
         total: g.total,
       };
-      if (HEALTHCARE_RE.test(g.name) || PROPERTY_RE.test(g.name)) cat.flagged = true;
+      if (HEALTHCARE_RE.test(g.name)) cat.flagged = true; // healthcare is modeled separately
       return cat;
     })
     .sort((a, b) => b.monthly - a.monthly || (a.name < b.name ? -1 : 1));

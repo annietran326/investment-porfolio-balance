@@ -511,7 +511,7 @@ export function createApi(store, opts = {}) {
     }
     if (parsed.tabsFound.length === 0) {
       return sendJson(res, 400, {
-        errors: [{ path: "", message: "no recognized tabs — expected Accounts, Properties, Income, Spending, and/or Assumptions" }],
+        errors: [{ path: "", message: "no recognized tabs — expected Accounts, Income, Spending, Household, and/or Assumptions" }],
       });
     }
     const token = randomUUID();

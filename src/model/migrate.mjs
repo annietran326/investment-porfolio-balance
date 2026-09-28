@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newProperty, newAccount, newBuckets, newEconomy, newTaxes, DEFAULT_OWN_RETURN_PCT } from "./schema.mjs";
+import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation, DEFAULT_OWN_RETURN_PCT, DEFAULT_OWN_VOL_PCT } from "./schema.mjs";
 
 export class MissingVersionError extends Error {
   constructor() {
@@ -217,7 +217,7 @@ function migrateV5(v5) {
     taxes: { ...newTaxes(), capitalGainsPct: num(tax?.effectiveGainsRatePct, newTaxes().capitalGainsPct) },
     properties: arr(v5.properties).map((/** @type {any} */ p) => {
       const { rentRealGrowthPct, costsRealGrowthPct, ...pr } = p;
-      return newProperty({ ...pr, rentGrowthPct: realToActualGrowth(rentRealGrowthPct), costsGrowthPct: realToActualGrowth(costsRealGrowthPct) });
+      return { ...pr, rentGrowthPct: realToActualGrowth(rentRealGrowthPct), costsGrowthPct: realToActualGrowth(costsRealGrowthPct) };
     }),
     incomes: arr(v5.incomes).map((/** @type {any} */ inc) => {
       const { realGrowthPct, ...ir } = inc;
@@ -274,6 +274,34 @@ function migrateV7(v7) {
   return { ...rest, schemaVersion: 8 };
 }
 
+/**
+ * v8 -> v9 (the Monte Carlo version): rental properties are removed, and the
+ * simulation's inputs arrive with their defaults: each bucket's typical yearly
+ * swing, each own-fund account's swing, and the success target. Bucket
+ * returns still at the old defaults move to the new 3 / 6 / 8%.
+ * @param {any} v8
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV8(v8) {
+  const { properties, ...rest } = v8;
+  void properties;
+  const fresh = newBuckets();
+  const old = v8.buckets ?? {};
+  // Returns still at the old defaults (2.5 / 5.5 / 9.5) move to the new ones;
+  // any rate you changed yourself is kept.
+  const untouched = old.preservationReturnPct === 2.5 && old.incomeReturnPct === 5.5 && old.equitiesReturnPct === 9.5;
+  const returns = untouched
+    ? { preservationReturnPct: fresh.preservationReturnPct, incomeReturnPct: fresh.incomeReturnPct, equitiesReturnPct: fresh.equitiesReturnPct }
+    : {};
+  return {
+    ...rest,
+    schemaVersion: 9,
+    buckets: { ...old, ...returns, preservationVolPct: fresh.preservationVolPct, incomeVolPct: fresh.incomeVolPct, equitiesVolPct: fresh.equitiesVolPct },
+    accounts: arr(v8.accounts).map((/** @type {any} */ a) => ({ ...a, ownVolPct: a.ownVolPct ?? DEFAULT_OWN_VOL_PCT })),
+    simulation: newSimulation(),
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -284,6 +312,7 @@ const RUNGS = {
   5: migrateV5,
   6: migrateV6,
   7: migrateV7,
+  8: migrateV8,
 };
 
 /**

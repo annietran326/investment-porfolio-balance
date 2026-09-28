@@ -150,6 +150,7 @@ test("the app renders in a real browser (boot runs, verdict + rows paint, no fai
     const balance = await ev('document.querySelector("#accountList input[data-key=balance]")?.value ?? ""');
     const split = await ev('document.getElementById("kpiEq")?.textContent ?? ""');
     const glideRows = await ev('document.querySelectorAll("#glideRows > tr").length');
+    const success = await ev('document.getElementById("kpiSuccess")?.textContent ?? ""');
 
     // favicon 404 is benign (not part of the module graph) — everything else must load.
     const realErrors = errors.filter((e) => !/favicon\.ico/.test(e));
@@ -157,10 +158,11 @@ test("the app renders in a real browser (boot runs, verdict + rows paint, no fai
     assert.deepEqual(realErrors, [], `browser reported resource/JS errors:\n${realErrors.join("\n")}`);
     assert.equal(presetButtons, 3, "boot did not run (age-preset buttons never appended)");
     assert.ok(verdict.length > 0, "verdict headline is blank — results never rendered");
-    assert.equal(scenarioRows, 5, "scenario table did not populate");
+    assert.equal(scenarioRows, 2, "simulated-futures table did not populate (base + 20% spending)");
     assert.ok(balance.length > 0, "account balance field never populated from state");
     assert.match(split, /%$/, "recommended split never rendered");
     assert.ok(glideRows > 0, "the split-over-time table did not populate");
+    assert.match(success, /^\d+%$/, "the Monte Carlo worker never reported a chance of success");
   } finally {
     client?.close();
     // Wait for Chrome to ACTUALLY exit before deleting its profile dir. kill()

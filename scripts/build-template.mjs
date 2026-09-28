@@ -30,10 +30,10 @@ import { fileURLToPath } from "node:url";
  * @property {string} doc   unit / notes column text
  *
  * @typedef {Object} TabDef
- * @property {"accounts"|"properties"|"income"|"spending"|"household"|"assumptions"} key
+ * @property {"accounts"|"income"|"spending"|"household"|"assumptions"} key
  * @property {string} name  sheet name (matched case-insensitively on import)
  * @property {"list"|"household"|"settings"} kind
- * @property {"accounts"|"properties"|"incomes"|"spending"} [section] state array for list tabs
+ * @property {"accounts"|"incomes"|"spending"} [section] state array for list tabs
  * @property {ColumnDef[]} columns
  * @property {SettingDef[]} [settings]
  * @property {string} [note] comment row ("#" prefix — ignored by the parser)
@@ -58,29 +58,7 @@ export const TEMPLATE_DEF = {
         { header: "Contribution increase %/yr (blank = inflation)", field: "contributionGrowthPct", type: "number", nullable: true, optional: true },
         { header: "Invested in (buckets or own)", field: "invest", type: "text", choices: ["buckets", "own"], optional: true },
         { header: "Own fund return %/yr (used when invested in own)", field: "ownReturnPct", type: "number", optional: true },
-      ],
-    },
-    {
-      key: "properties",
-      name: "Properties",
-      kind: "list",
-      section: "properties",
-      columns: [
-        { header: "Name", field: "name", type: "text" },
-        { header: "Rent $/mo", field: "rentMonthly", type: "number" },
-        { header: "Costs $/mo", field: "costsMonthly", type: "number" },
-        { header: "Mortgage P&I $/mo", field: "mortgageMonthly", type: "number" },
-        { header: "Payoff year", field: "payoffYear", type: "number", nullable: true },
-        {
-          header: "Sale year (leave empty to keep)",
-          field: "saleYear",
-          type: "number",
-          nullable: true,
-          zeroError: "0 is not a year — leave the cell empty to keep forever",
-        },
-        { header: "Net sale proceeds $", field: "saleNetProceeds", type: "number", nullable: true },
-        { header: "Rent increase %/yr (blank = inflation)", field: "rentGrowthPct", type: "number", nullable: true, optional: true },
-        { header: "Costs increase %/yr (blank = inflation)", field: "costsGrowthPct", type: "number", nullable: true, optional: true },
+        { header: "Own fund swing %/yr (used when invested in own)", field: "ownVolPct", type: "number", optional: true },
       ],
     },
     {
@@ -103,7 +81,7 @@ export const TEMPLATE_DEF = {
       section: "spending",
       columns: [
         { header: "Name", field: "name", type: "text" },
-        { header: "$/mo (excl. property costs & healthcare)", field: "monthly", type: "number" },
+        { header: "$/mo (excl. healthcare)", field: "monthly", type: "number" },
         { header: "From year (blank = from start)", field: "fromYear", type: "number", nullable: true, optional: true },
         { header: "To year (blank = perpetual)", field: "toYear", type: "number", nullable: true, optional: true },
         { header: "Increase %/yr (blank = inflation)", field: "growthPct", type: "number", nullable: true, optional: true },
@@ -154,6 +132,10 @@ export const TEMPLATE_DEF = {
         { key: "buckets.equitiesReturnPct", type: "number", doc: "global equities return %/yr, before inflation" },
         { key: "buckets.preservationYears", type: "number", doc: "years of withdrawals held in capital preservation (years 1 to N)" },
         { key: "buckets.incomeThroughYear", type: "number", doc: "high income holds years N+1 through this year; equities hold the rest" },
+        { key: "buckets.preservationVolPct", type: "number", doc: "capital preservation's typical yearly swing %, for the simulation" },
+        { key: "buckets.incomeVolPct", type: "number", doc: "high income's typical yearly swing %" },
+        { key: "buckets.equitiesVolPct", type: "number", doc: "global equities' typical yearly swing %" },
+        { key: "simulation.targetSuccessPct", type: "number", doc: "the plan should work in this % of simulated futures (the gap aims for it)" },
         { key: "taxes.ordinaryIncomePct", type: "number", doc: "effective tax % on traditional IRA / 401(k) withdrawals (federal + state)" },
         { key: "taxes.capitalGainsPct", type: "number", doc: "effective tax % on gains when selling in a taxable account (federal + state)" },
         { key: "social.startAge", type: "number", doc: "Social Security start age (years)" },
