@@ -143,9 +143,9 @@ test("round-trip: accounts, spouse + dependent, growing income, time-boxed spend
   const state = defaultState();
   state.incomes = [{ name: "Consulting (grows 4.5%)", annual: 60_000, fromYear: 2026, toYear: 2035, growthPct: 4.5 }];
   state.spending = [
-    { name: "living", monthly: 3000, fromYear: null, toYear: null, growthPct: null }, // perpetual, with inflation
-    { name: "childcare (ends 2032)", monthly: 1800, fromYear: 2026, toYear: 2032, growthPct: null }, // time-boxed
-    { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5 }, // open-ended from a future year
+    { name: "living", monthly: 3000, fromYear: null, toYear: null, growthPct: null, variable: true }, // perpetual, with inflation
+    { name: "childcare (ends 2032)", monthly: 1800, fromYear: 2026, toYear: 2032, growthPct: null, variable: false }, // time-boxed, fixed
+    { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5, variable: true }, // open-ended from a future year
   ];
   state.accounts = [
     { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
@@ -154,6 +154,7 @@ test("round-trip: accounts, spouse + dependent, growing income, time-boxed spend
   ];
   state.economy.inflationPct = 3;
   state.simulation.targetSuccessPct = 85;
+  state.simulation.spendMorePct = 15;
   state.buckets.preservationYears = 5;
   state.household = {
     people: [
@@ -186,6 +187,8 @@ test("round-trip: accounts, spouse + dependent, growing income, time-boxed spend
   // Spot-check the load-bearing new fields specifically.
   assert.equal(applied.buckets.equitiesVolPct, state.buckets.equitiesVolPct);
   assert.equal(applied.simulation.targetSuccessPct, 85);
+  assert.equal(applied.simulation.spendMorePct, 15);
+  assert.deepEqual(applied.spending.map((c) => c.variable), [true, false, true], "the Variable yes/no column round-trips");
   assert.equal(applied.incomes[0].growthPct, 4.5);
   assert.equal(applied.spending[0].growthPct, null, "a blank increase stays 'with inflation' (null), never 0");
   assert.deepEqual(applied.accounts, state.accounts, "accounts round-trip, incl. cost basis and contributions");
@@ -300,7 +303,7 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   assert.deepEqual(applied.incomes, state.incomes, "absent tab leaves incomes untouched");
   assert.deepEqual(applied.household, state.household, "absent Household tab leaves people untouched");
   // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
-  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null }]);
+  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null, variable: true }]);
   assert.deepEqual(applied.accounts, [
     { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
   ]);
@@ -323,7 +326,7 @@ test("text in an income cell → cell-addressed error; tab blocked; other tabs s
   assert.equal(pv.tabs.find((t) => t.key === "spending").status, "ready");
 
   const applied = applyTabs(placeholderState(), parsed, ["spending"]);
-  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null }]);
+  assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null, variable: true }]);
   assert.throws(() => applyTabs(placeholderState(), parsed, ["income"]), /not applicable/);
 });
 
@@ -604,7 +607,7 @@ test("preview → apply: threads rev, 409 stale, 410 expired token, 400 invalid 
 
   const next = placeholderState();
   next.accounts = [{ ...next.accounts[0], balance: 900_000, costBasis: null }];
-  next.spending.push({ name: "boats", monthly: 500, fromYear: null, toYear: null, growthPct: null });
+  next.spending.push({ name: "boats", monthly: 500, fromYear: null, toYear: null, growthPct: null, variable: true });
   const buf = buildTemplateWorkbook(next);
 
   const pv = await sendOctet("/api/import/template/preview?filename=runway-export.local.xlsx", buf);
@@ -735,6 +738,6 @@ test("blocked tab via API: preview marks it, apply of the blocked tab 400s, vali
   });
   assert.equal(okApply.status, 200);
   const state = (await getJson("/api/state")).body.state;
-  assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650, fromYear: null, toYear: null, growthPct: null }]);
+  assert.deepEqual(state.spending, [{ name: "groceries", monthly: 650, fromYear: null, toYear: null, growthPct: null, variable: true }]);
   assert.ok(state.incomes.length > 0, "income section untouched by the blocked tab");
 });

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { simulate } from "../src/engine/simulate.mjs";
 import { requiredSavings, goalMet, GAP_CAP, GAP_ROUND_TO } from "../src/engine/solver.mjs";
-import { SCENARIOS, SPEND_SHOCK_MULT } from "../src/engine/scenarios.mjs";
+import { SCENARIOS, scenarioLabel } from "../src/engine/scenarios.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 import { newAccount } from "../src/model/schema.mjs";
 
@@ -26,13 +26,13 @@ const lean = () => {
 const hopeless = () => {
   const s = lean();
   withBalance(s, 0);
-  s.spending = [{ name: "impossible", monthly: 400_000, fromYear: null, toYear: null, growthPct: null }]; // $4.8M/yr forever
+  s.spending = [{ name: "impossible", monthly: 400_000, fromYear: null, toYear: null, growthPct: null, variable: true }]; // $4.8M/yr forever
   return s;
 };
 
 const gapOf = (res) => (res.kind === "met" ? 0 : res.kind === "value" ? res.amount : Infinity);
 
-test("monotonicity: +20% spending needs at least the base case's gap", () => {
+test("monotonicity: the spend more scenario needs at least the base case's gap", () => {
   const s = lean();
   const base = gapOf(requiredSavings(s, {}));
   for (const sc of SCENARIOS) {
@@ -62,10 +62,12 @@ test("goalMet picks the amount for the ACTIVE mode only", () => {
   assert.ok(goalMet(s, simulate(s)));
 });
 
-test("the scenarios are the base case and +20% spending", () => {
+test("the scenarios are the base case and the spend more scenario", () => {
   assert.deepEqual(SCENARIOS.map((sc) => sc.key), ["base", "spend"]);
-  assert.equal(SCENARIOS[1].overlay.spendMult, SPEND_SHOCK_MULT);
-  assert.equal(SPEND_SHOCK_MULT, 1.2);
+  assert.deepEqual(SCENARIOS[1].overlay, { spendMore: true });
+  const s = placeholderState();
+  s.simulation.spendMorePct = 30;
+  assert.equal(scenarioLabel(SCENARIOS[1], s), "Spend more scenario (+30% variable spending)");
 });
 
 test("scenario keys are unique and base is first", () => {
@@ -113,7 +115,7 @@ test("gap solver precondition: end balance never falls as savings today rise (in
   }
 });
 
-test("gap monotonicity: +20% spending needs at least the base gap; bigger safe buckets cost more", () => {
+test("gap monotonicity: spending more needs at least the base gap; bigger safe buckets cost more", () => {
   const s = lean();
   const base = gapOf(requiredSavings(s));
   for (const sc of SCENARIOS) {

@@ -33,7 +33,7 @@ function flat(o = {}) {
   s.taxes = { ordinaryIncomePct: 0, capitalGainsPct: 0 };
   s.accounts = o.accounts ?? [newAccount({ name: "Brokerage", type: "taxable", balance: 100_000 })];
   s.incomes = [];
-  s.spending = o.spendMonthly ? [{ name: "living", monthly: o.spendMonthly, fromYear: null, toYear: null, growthPct: null }] : [];
+  s.spending = o.spendMonthly ? [{ name: "living", monthly: o.spendMonthly, fromYear: null, toYear: null, growthPct: null, variable: true }] : [];
   s.social = { startAge: 67, monthly: 0, haircutPct: 0 };
   s.health = { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 200 };
   s.household = { people: [] };
@@ -318,20 +318,25 @@ test("allocate fills in order: capital preservation, then high income, then equi
   assert.deepEqual(allocate(15_000, targets), { preservation: 15_000, income: 0, equities: 0 });
 });
 
-test("a well-funded plan keeps capital preservation at its fixed cushion, and moves out of equities near the end", () => {
+test("a well-funded plan keeps capital preservation at its fixed cushion; late in the plan, gains move to it instead of selling", () => {
   // Retired at 60 with far more than needed: capital preservation holds the
-  // next 8 years of withdrawals only (a modest share), equities hold the rest,
-  // and equities reach 0% in the final 8 years.
+  // next 8 years of withdrawals only (a modest share), equities hold the rest.
+  // With 15 or fewer years left, equities stop growing (their gains move to
+  // capital preservation) but aren't sold; in the last 8, high income's gains move too.
   const s = flat({ age: 60, years: 35, returnPct: 5, spendMonthly: 4000, accounts: [newAccount({ name: "b", type: "taxable", balance: 5_000_000 })] });
   const sim = simulate(s);
   const first = sim.rows[0].mix;
   near(sim.startMix.preservation, 48_000 * (1 / 1.05 + 1 / 1.05 ** 2 + 1 / 1.05 ** 3 + 1 / 1.05 ** 4 + 1 / 1.05 ** 5 + 1 / 1.05 ** 6 + 1 / 1.05 ** 7 + 1 / 1.05 ** 8), "exactly 8 years of withdrawals", 1e-6);
   assert.ok(first.preservation < 0.1 && first.equities > 0.8, "a small cushion; the rest is long-term money");
-  const last8 = sim.rows.filter((r) => r.age >= 60 + 35 - 8);
-  assert.ok(last8.every((r) => r.mix.equities < 1e-9), "no equities in the final 8 years");
-  assert.ok(last8.every((r) => r.mix.preservation > 1 - 1e-9), "the final 8 years are all capital preservation");
-  const mid = sim.rows.filter((r) => r.age >= 60 + 35 - 15 && r.age < 60 + 35 - 8);
-  assert.ok(mid.every((r) => r.mix.equities < 1e-9 && r.mix.income > 0.5), "with 9–15 years left: no equities, the rest in high income");
+  // Equities in dollars (nominal): share × balance × inflation factor (inflation is 0 here).
+  const eqDollars = (/** @type {any} */ r, /** @type {number} */ k) => sim.path[k].bal * r.mix.equities;
+  const late = sim.rows.map((r, k) => ({ r, k })).filter(({ r }) => r.age > 60 + 35 - 15);
+  for (let j = 1; j < late.length; j++) {
+    near(eqDollars(late[j].r, late[j].k), eqDollars(late[j - 1].r, late[j - 1].k), `equities held steady at age ${late[j].r.age} (not sold, not grown)`, 1);
+  }
+  assert.ok((late.at(-1)?.r.mix.equities ?? 0) > 0.2, "equities are never sold off late in the plan");
+  const cp = late.map(({ r }) => r.mix.preservation);
+  assert.ok(cp.every((x, j) => j === 0 || x >= cp[j - 1] - 1e-9), "capital preservation's share only grows late in the plan");
 });
 
 test("the year's return is the split-weighted blend of the bucket returns", () => {
@@ -474,21 +479,21 @@ test("spouse contributes Social Security and healthcare on their own age", () =>
 test("spending window: a time-boxed cost applies only within [fromYear, toYear]", () => {
   const s = flat({ years: 10 });
   s.spending = [
-    { name: "perpetual", monthly: 1000, fromYear: null, toYear: null, growthPct: null },
-    { name: "car loan", monthly: 500, fromYear: null, toYear: 2030, growthPct: null },
+    { name: "perpetual", monthly: 1000, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "car loan", monthly: 500, fromYear: null, toYear: 2030, growthPct: null, variable: true },
   ];
   const sim = simulate(s);
   near(/** @type {number} */ (sim.rows.find((r) => r.year === 2030)?.spend), 18_000);
   near(/** @type {number} */ (sim.rows.find((r) => r.year === 2031)?.spend), 12_000);
 });
 
-test("a dependent's support cost applies within its window and scales with the spending shock", () => {
+test("a dependent's support cost applies within its window, and the spend more scenario leaves it alone", () => {
   const s = flat({ years: 25, inflationPct: 2 });
   s.household = { people: [{ name: "Kid", role: "dependent", currentAge: null, annualCost: 18_000, fromYear: null, toYear: 2044 }] };
   const sim = simulate(s);
   near(/** @type {number} */ (sim.rows.find((r) => r.year === 2044)?.spend), 18_000);
   assert.equal(sim.rows.find((r) => r.year === 2045)?.spend, 0);
-  near(/** @type {number} */ (simulate(s, { spendMult: 1.2 }).rows.find((r) => r.year === 2030)?.spend), 21_600);
+  near(/** @type {number} */ (simulate(s, { spendMore: true }).rows.find((r) => r.year === 2030)?.spend), 18_000, "support costs like childcare aren't variable spending");
   const none = structuredClone(s);
   none.household.people[0].annualCost = 0;
   assert.ok(simulate(none).rows.every((r) => r.spend === 0), "no support cost → no engine effect");
@@ -545,14 +550,59 @@ test("after a DOWN year for equities, nothing is sold to refill: spending comes 
   near(res.rows[2].mix.preservation, 1, "refilled after the up year", 1e-9);
 });
 
-test("after an UP year for equities, the buckets are refilled to their targets", () => {
-  const P = prepare(threeYears());
-  // Year 0: equities +10% → 12 / 12 / 13.2; withdraw 12 from capital preservation → 0 / 12 / 13.2 = 25.2,
-  // refill for year 1 (targets 12 / 12 / 0, extra → high income with 2 years left) → 12 / 13.2 / 0.
+test("with many years left, an UP year for equities refills the buckets to their targets", () => {
+  // Cutoffs 1 / 1 so year 1's vantage point (2 years left) is still "long".
+  const s = threeYears();
+  s.buckets.incomeThroughYear = 1;
+  const P = prepare(s);
+  // Targets today: 12k preservation (year 1), 24k equities (years 2–3).
+  // Year 0: equities +10% → 12 / 0 / 26.4; withdraw 12 from preservation → 0 / 0 / 26.4,
+  // refill for year 1 (targets 12 / 0 / 12, extra → equities) → 12 / 0 / 14.4.
+  const res = runPlan(P, { path: path([0.1, 0, 0]) });
+  near(res.rows[0].mix.equities, 24 / 36, "", 1e-9);
+  near(res.rows[1].mix.preservation, 12 / 26.4, "", 1e-9);
+  near(res.rows[1].mix.equities, 14.4 / 26.4, "", 1e-9);
+});
+
+test("with fewer years left than the high income cutoff, equity gains move to capital preservation; nothing is sold", () => {
+  const P = prepare(threeYears()); // cutoffs 1 / 2: at year 1 there are 2 years left
+  // Year 0: equities +10% → 12 / 12 / 13.2 (gain 1.2); withdraw 12 from preservation → 0 / 12 / 13.2.
+  // Sweep the 1.2 gain → 1.2 / 12 / 12; preservation is short of its 12 target, so after this
+  // up year it's topped up from equities → 12 / 12 / 1.2.
   const res = runPlan(P, { path: path([0.1, 0, 0]) });
   near(res.rows[1].mix.preservation, 12 / 25.2, "", 1e-9);
-  near(res.rows[1].mix.income, 13.2 / 25.2, "", 1e-9);
-  near(res.rows[1].mix.equities, 0, "", 1e-9);
+  near(res.rows[1].mix.income, 12 / 25.2, "high income isn't raided", 1e-9);
+  near(res.rows[1].mix.equities, 1.2 / 25.2, "", 1e-9);
+});
+
+test("once capital preservation is full late in the plan, only GAINS move; principal stays put", () => {
+  // 3-year plan, cutoffs 1 / 2, plenty of money: $100k beyond the need sits in equities.
+  const s = threeYears();
+  s.accounts[0].balance = 136_000;
+  const P = prepare(s);
+  // Year 0: preservation 12, income 12, equities 112 (12 needed + 100 extra); equities +10% (gain 11.2).
+  // Withdraw 12 from preservation → 0 / 12 / 123.2. Sweep 11.2 → 11.2 / 12 / 112. Top preservation
+  // up to its 12 target from equities → 12 / 12 / 111.2.
+  const res = runPlan(P, { path: path([0.1, 0, 0]) });
+  const total = 135.2;
+  near(res.rows[1].mix.preservation, 12 / total, "", 1e-9);
+  near(res.rows[1].mix.income, 12 / total, "", 1e-9);
+  near(res.rows[1].mix.equities, 111.2 / total, "equities keep their principal", 1e-9);
+});
+
+test("in the final capital-preservation years, high income's gains move to capital preservation too", () => {
+  const s = threeYears();
+  s.accounts[0].balance = 136_000;
+  const P = prepare(s);
+  // Year 1 (1 year left after it, the final phase): high income +5% → its gain moves to preservation.
+  const res = runPlan(P, { path: path([0.1, 0, 0], [0, 0.05, 0]) });
+  // Start of year 1: 12 / 12 / 111.2. Growth: income 12.6 (gain 0.6), equities flat.
+  // Withdraw 12 from preservation → 0 / 12.6 / 111.2. Sweep income gain 0.6 → 0.6 / 12 / 111.2.
+  // Top preservation up to next year's 12 target from equities → 12 / 12 / 99.8.
+  const total = 123.8;
+  near(res.rows[2].mix.preservation, 12 / total, "", 1e-9);
+  near(res.rows[2].mix.income, 12 / total, "", 1e-9);
+  near(res.rows[2].mix.equities, 99.8 / total, "", 1e-9);
 });
 
 test("with expected returns every year is an up year, so the plan rebalances yearly", () => {
@@ -636,7 +686,7 @@ test("a plan with a big cushion succeeds in (nearly) every future; +20% spending
   assert.ok(monteCarlo(rich, {}, { runs: 200 }).successRate > 0.97);
   const s = state();
   const base = monteCarlo(s, {}, { runs: 200 });
-  const spend = monteCarlo(s, { spendMult: 1.2 }, { runs: 200 });
+  const spend = monteCarlo(s, { spendMore: true }, { runs: 200 });
   assert.ok(spend.successRate <= base.successRate);
 });
 
@@ -653,4 +703,19 @@ test("equities and high income move together; capital preservation doesn't", () 
   };
   near(corr(xs, ys), 0.5, "equities vs high income", 0.06);
   near(corr(xs, zs), 0, "equities vs capital preservation", 0.06);
+});
+
+test("the spend more scenario raises only variable lines, by the percent you set", () => {
+  const s = flat({ years: 3 });
+  s.spending = [
+    { name: "housing", monthly: 3000, fromYear: null, toYear: null, growthPct: null, variable: false },
+    { name: "travel", monthly: 1000, fromYear: null, toYear: null, growthPct: null, variable: true },
+  ];
+  s.health = { preMedicareAnnual: 10_000, postMedicareAnnual: 10_000, employerCoverageUntilAge: 0 };
+  s.simulation.spendMorePct = 25;
+  const base = simulate(s);
+  const more = simulate(s, { spendMore: true });
+  near(base.rows[0].spend, 36_000 + 12_000 + 10_000);
+  near(more.rows[0].spend, 36_000 + 12_000 * 1.25 + 10_000, "only travel rises; housing and healthcare don't");
+  near(more.rows[2].spend - base.rows[2].spend, 3_000, "a lasting step up, every year");
 });

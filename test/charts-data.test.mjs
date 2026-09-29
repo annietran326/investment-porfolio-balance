@@ -159,7 +159,7 @@ test("readoutAt: per-scenario balance at the year; scenarios without that year a
 });
 
 test("shortLabel: known scenario keys shorten; unknown keys fall back to the full label", () => {
-  assert.equal(shortLabel("spend", "Spending +20% forever"), "spend +20%");
+  assert.equal(shortLabel("spend", "Spend more scenario"), "spend more");
   assert.equal(shortLabel("p90", "90% outcome"), "90%");
   assert.equal(shortLabel("custom-future", "My custom scenario"), "My custom scenario");
 });

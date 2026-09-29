@@ -302,6 +302,27 @@ function migrateV8(v8) {
   };
 }
 
+// Spending lines whose names sound fixed (not flexible) start unchecked as
+// "variable" when a plan is upgraded to v10. Everything else starts checked.
+const FIXED_SPENDING_RE = /hous|mortgage|\brent\b|property tax|\bhoa\b|insurance|child ?care|daycare|tuition|utilit/i;
+
+/**
+ * v9 -> v10: the "spend more" scenario becomes an input that applies only to
+ * variable spending lines. Each line gains a `variable` flag (a best guess
+ * from its name, shown as a checkbox to review), and the scenario's percent
+ * (20, the old fixed shock) is added.
+ * @param {any} v9
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV9(v9) {
+  return {
+    ...v9,
+    schemaVersion: 10,
+    spending: arr(v9.spending).map((/** @type {any} */ c) => ({ ...c, variable: !FIXED_SPENDING_RE.test(String(c.name ?? "")) })),
+    simulation: { ...newSimulation(), ...(v9.simulation ?? {}), spendMorePct: 20 },
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -313,6 +334,7 @@ const RUNGS = {
   6: migrateV6,
   7: migrateV7,
   8: migrateV8,
+  9: migrateV9,
 };
 
 /**

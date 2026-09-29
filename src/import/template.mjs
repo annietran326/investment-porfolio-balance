@@ -343,7 +343,7 @@ function parseListTab(def, sheet) {
         else if (value === "") errors.push({ cell: cellAddr(def.name, r, c), message: `${col.field} required` });
         else if (col.choices) {
           const choice = (value ?? "").trim().toLowerCase();
-          if (col.choices.includes(choice)) row[col.field] = choice;
+          if (col.choices.includes(choice)) row[col.field] = col.bool ? choice === "yes" : choice;
           else errors.push({ cell: cellAddr(def.name, r, c), message: `must be one of ${col.choices.join(", ")}` });
         } else row[col.field] = value;
         return;
@@ -871,7 +871,7 @@ export function buildTemplateWorkbook(state) {
     } else {
       const section = /** @type {"accounts"|"incomes"|"spending"} */ (def.section);
       for (const row of /** @type {any[]} */ (state[section])) {
-        aoa.push(def.columns.map((c) => row[c.field]));
+        aoa.push(def.columns.map((c) => (c.bool ? (row[c.field] ? "yes" : "no") : row[c.field])));
       }
     }
     const ws = sheetFromAoa(aoa);

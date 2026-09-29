@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
  * @property {boolean} [emptyZero] empty cell → 0 (e.g. a support cost or a
  *   contribution). Distinct from nullable, where empty means "open" / "with inflation".
  * @property {string[]} [choices] text column that must be one of these values
+ * @property {boolean} [bool] a yes/no column stored as true/false
  * @property {boolean} [optional] column may be absent from an imported sheet
  * @property {"spouse"} [role] household column that applies only to this role;
  *   a dependent row leaves it blank
@@ -85,6 +86,7 @@ export const TEMPLATE_DEF = {
         { header: "From year (blank = from start)", field: "fromYear", type: "number", nullable: true, optional: true },
         { header: "To year (blank = perpetual)", field: "toYear", type: "number", nullable: true, optional: true },
         { header: "Increase %/yr (blank = inflation)", field: "growthPct", type: "number", nullable: true, optional: true },
+        { header: "Variable (yes/no)", field: "variable", type: "text", choices: ["yes", "no"], bool: true, optional: true },
       ],
     },
     {
@@ -136,6 +138,7 @@ export const TEMPLATE_DEF = {
         { key: "buckets.incomeVolPct", type: "number", doc: "high income's typical yearly swing %" },
         { key: "buckets.equitiesVolPct", type: "number", doc: "global equities' typical yearly swing %" },
         { key: "simulation.targetSuccessPct", type: "number", doc: "the plan should work in this % of simulated futures (the gap aims for it)" },
+        { key: "simulation.spendMorePct", type: "number", doc: "spend more scenario: % increase on variable spending lines" },
         { key: "taxes.ordinaryIncomePct", type: "number", doc: "effective tax % on traditional IRA / 401(k) withdrawals (federal + state)" },
         { key: "taxes.capitalGainsPct", type: "number", doc: "effective tax % on gains when selling in a taxable account (federal + state)" },
         { key: "social.startAge", type: "number", doc: "Social Security start age (years)" },

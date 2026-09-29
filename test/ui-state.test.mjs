@@ -396,7 +396,7 @@ test("addRow: appends a valid blank row for each kind without mutating input", (
   const withIncome = addRow(s, "incomes");
   assert.deepEqual(withIncome.incomes.at(-1), { name: "new income", annual: 0, fromYear: 2026, toYear: 2030, growthPct: null });
   const withSpend = addRow(s, "spending");
-  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null });
+  assert.deepEqual(withSpend.spending.at(-1), { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null, variable: true });
   for (const next of [withIncome, withSpend]) {
     assert.deepEqual(validate(next).errors, [], "blank rows validate cleanly");
   }

@@ -16,7 +16,8 @@
 // out with cutoffs 8/15 spends 5 years in equities, 7 in high income, and 8 in
 // capital preservation.)
 //
-// Filling order, by years left in the plan:
+// Filling order for TODAY's recommended split, by years left in the plan
+// (after today, late-life years follow the sweep rule in simulate.mjs):
 //   - more than `incomeThroughYear` years left: capital preservation gets the
 //     next `preservationYears` of withdrawals, high income gets the years after
 //     that through `incomeThroughYear`, and everything else goes to equities;

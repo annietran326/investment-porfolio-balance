@@ -34,7 +34,7 @@ export function blankRow(kind, state) {
     return { name: "new income", annual: 0, fromYear: y, toYear: y + 4, growthPct: null };
   }
   if (kind === "spending") {
-    return { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null };
+    return { name: "new category", monthly: 0, fromYear: null, toYear: null, growthPct: null, variable: true };
   }
   throw new Error(`unknown list kind: ${kind}`);
 }
@@ -186,6 +186,7 @@ export const ZERO_WHEN_BLANK = new Set(["contributionAnnual", "employerMatchAnnu
  * @param {ListKind} kind @param {string} key @param {string} raw @param {boolean} isText
  */
 export function parseRowField(kind, key, raw, isText) {
+  if (typeof raw === "boolean") return raw; // a checkbox
   if (isText) return raw;
   const v = parseNumField(raw);
   return v === null && kind === "accounts" && ZERO_WHEN_BLANK.has(key) ? 0 : v;
@@ -215,7 +216,7 @@ export function gainShareOf(a) {
  * @param {Element} container
  * @param {HTMLTemplateElement} template
  * @param {Record<string, any>[]} items
- * @param {{onField: (index: number, key: string, raw: string, isText: boolean) => void,
+ * @param {{onField: (index: number, key: string, raw: string|boolean, isText: boolean) => void,
  *          onRemove: (index: number) => void}} handlers
  */
 export function renderRows(container, template, items, handlers) {
@@ -228,6 +229,11 @@ export function renderRows(container, template, items, handlers) {
       const field = /** @type {HTMLInputElement} */ (input);
       const key = /** @type {string} */ (field.dataset.key);
       const v = item[key];
+      if (field.type === "checkbox") {
+        field.checked = v === true;
+        field.addEventListener("change", () => handlers.onField(index, key, field.checked, false));
+        continue;
+      }
       field.value = v === null || v === undefined ? "" : String(v);
       const isText = field.type !== "number";
       field.addEventListener(field.tagName === "SELECT" ? "change" : "input", () => handlers.onField(index, key, field.value, isText));

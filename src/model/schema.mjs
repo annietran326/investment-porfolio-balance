@@ -17,7 +17,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -64,6 +64,7 @@ export const BASE_YEAR = 2026;
  *
  * @typedef {Object} Simulation
  * @property {number} targetSuccessPct the share of simulated futures the plan should succeed in (the gap aims for it)
+ * @property {number} spendMorePct     the "spend more" scenario: % increase on variable spending lines
  *
  * @typedef {Object} Taxes
  * Effective (average) rates, federal plus state, applied to money taken out of
@@ -84,6 +85,7 @@ export const BASE_YEAR = 2026;
  * @property {number|null} fromYear first year this cost applies; null = from the start
  * @property {number|null} toYear   last year this cost applies; null = perpetual
  * @property {number|null} growthPct %/yr increase; null = with inflation
+ * @property {boolean} variable  flexible spending the "spend more" scenario applies to (not housing, property tax, etc.)
  *
  * @typedef {Object} Social
  * @property {number} startAge
@@ -150,7 +152,7 @@ export const ACCOUNT_TYPE_LABELS = {
 
 /** @param {Partial<SpendingCategory>} [o] @returns {SpendingCategory} */
 export function newSpendingCategory(o = {}) {
-  return { name: o.name ?? "", monthly: o.monthly ?? 0, fromYear: o.fromYear ?? null, toYear: o.toYear ?? null, growthPct: o.growthPct ?? null };
+  return { name: o.name ?? "", monthly: o.monthly ?? 0, fromYear: o.fromYear ?? null, toYear: o.toYear ?? null, growthPct: o.growthPct ?? null, variable: o.variable ?? true };
 }
 /** @param {Partial<Income>} [o] @returns {Income} */
 export function newIncome(o = {}) {
@@ -179,7 +181,7 @@ export function newBuckets() {
 }
 /** @returns {Simulation} */
 export function newSimulation() {
-  return { targetSuccessPct: 90 };
+  return { targetSuccessPct: 90, spendMorePct: 20 };
 }
 /** @returns {Taxes} */
 export function newTaxes() {
@@ -460,6 +462,7 @@ export function validate(s) {
     requireNumberOrNull(errors, c.toYear, `${at}.toYear`);
     requireNumberOrNull(errors, c.growthPct, `${at}.growthPct`);
     warnIfExtremeRate(warnings, c.growthPct, `${at}.growthPct`);
+    if (typeof c.variable !== "boolean") add(errors, `${at}.variable`, "must be checked or unchecked");
     if (typeof c.fromYear === "number" && typeof c.toYear === "number" && c.toYear < c.fromYear) {
       add(errors, `${at}.toYear`, `to-year ${c.toYear} is before from-year ${c.fromYear}`);
     }
@@ -501,6 +504,10 @@ export function validate(s) {
   if (requireNumber(errors, s.simulation.targetSuccessPct, "simulation.targetSuccessPct")) {
     const t = s.simulation.targetSuccessPct;
     if (t < 50 || t > 99) add(errors, "simulation.targetSuccessPct", "pick a target between 50% and 99%");
+  }
+  if (requireNumber(errors, s.simulation.spendMorePct, "simulation.spendMorePct")) {
+    if (s.simulation.spendMorePct < 0) add(errors, "simulation.spendMorePct", "can't be negative");
+    else if (s.simulation.spendMorePct > 200) add(warnings, "simulation.spendMorePct", `${s.simulation.spendMorePct}% more is a very large increase. Is that a typo?`);
   }
 
   if (!END_STATE_MODES.includes(s.endState.mode)) {

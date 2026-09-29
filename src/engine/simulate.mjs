@@ -38,6 +38,11 @@
 //      preservation and high income and lets equities recover. (With
 //      expected returns every year is an up year, so the plan rebalances
 //      yearly.) Rebalancing is treated as tax-free.
+//      Late in the plan nothing is sold to rebalance: with fewer years left
+//      than the high income cutoff, each year's equity GAINS move to capital
+//      preservation; within the final capital-preservation years, high
+//      income's gains move too. A short safe bucket is still refilled after a
+//      year equities didn't fall, and new money goes to capital preservation.
 //
 // Withdrawal taxes:
 //   - taxable: capital-gains rate x the gain share of what's sold, where
@@ -84,7 +89,8 @@ function ssAnnualOf(social) {
 /**
  * A scenario overlay. `{}` is the base case.
  * @typedef {Object} ScenarioOverlay
- * @property {number} [spendMult] multiplies category spending (not healthcare)
+ * @property {boolean} [spendMore] the "spend more" scenario: variable spending lines rise by
+ *   simulation.spendMorePct (fixed lines, household support costs, and healthcare don't)
  */
 
 /**
@@ -148,7 +154,7 @@ export function prepare(s, overlay = {}) {
   const endAge = s.profile.endAge;
   const inflPct = s.economy.inflationPct;
   const infl = inflPct / 100;
-  const spendMult = overlay.spendMult ?? 1;
+  const variableMult = overlay.spendMore ? 1 + s.simulation.spendMorePct / 100 : 1;
   const b = s.buckets;
   const planReturns = bucketReturns(b);
   const ssAnnualSelf = ssAnnualOf(s.social);
@@ -200,7 +206,8 @@ export function prepare(s, overlay = {}) {
     let categorySpend = 0;
     for (const c of s.spending) {
       if ((c.fromYear == null || year >= c.fromYear) && (c.toYear == null || year <= c.toYear)) {
-        categorySpend += grownValue(c.monthly * 12, effectiveGrowthPct(c.growthPct, inflPct), i);
+        const line = grownValue(c.monthly * 12, effectiveGrowthPct(c.growthPct, inflPct), i);
+        categorySpend += c.variable ? line * variableMult : line;
       }
     }
     // Household support costs: today's $, rising with inflation.
@@ -209,7 +216,7 @@ export function prepare(s, overlay = {}) {
         categorySpend += person.annualCost * d;
       }
     }
-    const spend = categorySpend * spendMult + health;
+    const spend = categorySpend + health;
     flows.push({ year, age, income, ss, health, spend, net: income + ss - spend });
   }
 
@@ -293,10 +300,11 @@ function drawFromBuckets(B, amount) {
 
 /**
  * Add `amount` to the buckets, topping up toward `targets` in order
- * (capital preservation, then high income), with the rest in equities.
+ * (capital preservation, then high income), with the rest in `restTo`.
  * @param {Mix} B @param {number} amount @param {Mix} targets
+ * @param {"preservation"|"income"|"equities"} [restTo]
  */
-function addToBuckets(B, amount, targets) {
+function addToBuckets(B, amount, targets, restTo = "equities") {
   for (const k of /** @type {const} */ (["preservation", "income"])) {
     if (amount <= 0) return;
     const room = Math.max(0, targets[k] - B[k]);
@@ -304,7 +312,32 @@ function addToBuckets(B, amount, targets) {
     B[k] += put;
     amount -= put;
   }
-  if (amount > 0) B.equities += amount;
+  if (amount > 0) B[restTo] += amount;
+}
+
+/**
+ * Move up to `amount` of one bucket's money into capital preservation.
+ * @param {Mix} B @param {"income"|"equities"} from @param {number} amount
+ */
+function moveToPreservation(B, from, amount) {
+  const m = Math.min(Math.max(0, amount), B[from]);
+  B[from] -= m;
+  B.preservation += m;
+}
+
+/**
+ * Top a bucket up to its target by moving money from other buckets, in order.
+ * @param {Mix} B @param {"preservation"|"income"} to @param {number} target
+ * @param {("income"|"equities")[]} from
+ */
+function topUp(B, to, target, from) {
+  for (const k of from) {
+    const need = target - B[to];
+    if (need <= 0) return;
+    const m = Math.min(need, B[k]);
+    B[k] -= m;
+    B[to] += m;
+  }
 }
 
 /**
@@ -365,6 +398,8 @@ export function runPlan(P, opts = {}) {
     const rI = path ? path.income[i] : planReturns.income;
     const rE = path ? path.equities[i] : planReturns.equities;
     const bucketsBefore = B.preservation + B.income + B.equities;
+    const gainI = B.income * rI; // this year's gains, for the late-life sweep
+    const gainE = B.equities * rE;
     B.preservation *= 1 + rP;
     B.income *= 1 + rI;
     B.equities *= 1 + rE;
@@ -423,11 +458,28 @@ export function runPlan(P, opts = {}) {
     const managedNow = Math.max(0, sumOf(false));
     const delta = managedNow - (B.preservation + B.income + B.equities);
     const next = i + 1;
+    const yearsLeft = years - next;
+    const phase = yearsLeft > s.buckets.incomeThroughYear ? "long" : yearsLeft > s.buckets.preservationYears ? "income" : "final";
+    const { targets } = splitAt(next, managedNow);
     if (delta < 0) drawFromBuckets(B, -delta);
-    else if (delta > 0) addToBuckets(B, delta, splitAt(next, managedNow).targets);
+    else if (delta > 0) addToBuckets(B, delta, targets, phase === "long" ? "equities" : "preservation");
 
-    // 4. Refill only after a year equities didn't fall.
-    if (rE >= 0) B = splitAt(next, managedNow).split;
+    // 4. Refill and late-life sweep.
+    if (phase === "long") {
+      // Plenty of years left: after a year equities didn't fall, reset to targets.
+      if (rE >= 0) B = allocate(managedNow, targets);
+    } else {
+      // Fewer years left than the high income cutoff: nothing is sold to
+      // rebalance; this year's equity gains move to capital preservation. In
+      // the final capital-preservation years, high income's gains move too.
+      moveToPreservation(B, "equities", gainE);
+      if (phase === "final") moveToPreservation(B, "income", gainI);
+      // Still refill a short safe bucket after a year equities didn't fall.
+      if (rE >= 0) {
+        topUp(B, "preservation", targets.preservation, ["equities", "income"]);
+        if (phase === "income") topUp(B, "income", targets.income, ["equities"]);
+      }
+    }
 
     bal = (sumOf(false) + sumOf(true)) / deflators[i + 1];
     balances[i + 1] = bal;

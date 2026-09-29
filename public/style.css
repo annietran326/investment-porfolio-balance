@@ -576,3 +576,7 @@ button.linklike {
 /* while the simulation reruns after an edit, fade its numbers slightly */
 #results.mc-running #verdict, #results.mc-running #scenarioRows, #results.mc-running .kpi:not(.kpi3) { opacity: .6; transition: opacity .2s; }
 .item.account:not([data-invest="own"]) .only-own-row { display: none; }
+
+.itemlist .item .head .variable-check { flex: 0 0 auto; font-size: 12px; color: var(--dim); white-space: nowrap; }
+.itemlist .item .head .variable-check input { flex: none; }
+.spend-more { margin-top: 12px; }

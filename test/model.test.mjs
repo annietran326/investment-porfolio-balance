@@ -270,7 +270,7 @@ test("default and placeholder states carry v6 sections that validate clean", () 
     preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15,
     preservationVolPct: 1, incomeVolPct: 8, equitiesVolPct: 17,
   });
-  assert.deepEqual(newSimulation(), { targetSuccessPct: 90 });
+  assert.deepEqual(newSimulation(), { targetSuccessPct: 90, spendMorePct: 20 });
   assert.equal(newEconomy().inflationPct, 2.5);
 });
 
@@ -439,4 +439,24 @@ test("v8 → v9 drops rental properties, adds swings and the success target, and
   const kept = migrate(custom).state;
   assert.equal(kept.buckets.equitiesReturnPct, 7.25, "a rate you changed is kept");
   assert.equal(kept.buckets.preservationReturnPct, 2.5);
+});
+
+test("v9 → v10: spending lines get a Variable flag (fixed-sounding names unchecked) and the spend-more percent", () => {
+  const base = placeholderState();
+  const v9 = {
+    ...base,
+    schemaVersion: 9,
+    simulation: { targetSuccessPct: 85 },
+    spending: [
+      { name: "Housing", monthly: 3000, fromYear: null, toYear: null, growthPct: null },
+      { name: "Property tax", monthly: 900, fromYear: null, toYear: null, growthPct: null },
+      { name: "Childcare", monthly: 1500, fromYear: null, toYear: null, growthPct: null },
+      { name: "Dining out", monthly: 600, fromYear: null, toYear: null, growthPct: null },
+      { name: "Travel", monthly: 800, fromYear: null, toYear: null, growthPct: null },
+    ],
+  };
+  const { state } = migrate(v9);
+  assert.deepEqual(validate(state).errors, []);
+  assert.deepEqual(state.spending.map((c) => c.variable), [false, false, false, true, true]);
+  assert.deepEqual(state.simulation, { targetSuccessPct: 85, spendMorePct: 20 }, "the success target is kept");
 });

@@ -314,8 +314,8 @@ test("modeled-elsewhere flags apply case-insensitively to categories AND descrip
 test("each apply mode produces the expected spending array on a shared fixture", () => {
   const state = defaultState();
   state.spending = [
-    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null },
-    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null },
+    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null, variable: true },
   ];
   const cats = [
     { name: "groceries", monthly: 100 },
@@ -326,26 +326,26 @@ test("each apply mode produces the expected spending array on a shared fixture",
   // inflation-tracking growth.
   const replaced = applyDerived(state, cats, "replace-all");
   assert.deepEqual(replaced.spending, [
-    { name: "groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null },
-    { name: "fun", monthly: 15, fromYear: null, toYear: null, growthPct: null },
+    { name: "groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "fun", monthly: 15, fromYear: null, toYear: null, growthPct: null, variable: true },
   ]);
 
   const updated = applyDerived(state, cats, "update-matching-names");
   assert.deepEqual(updated.spending, [
-    { name: "Groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null }, // matched case-insensitively, keeps its own name + window
-    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null },
+    { name: "Groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null, variable: true }, // matched case-insensitively, keeps its own name + window
+    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null, variable: true },
   ]);
 
   const added = applyDerived(state, cats, "add-new-only");
   assert.deepEqual(added.spending, [
-    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null },
-    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null },
-    { name: "fun", monthly: 15, fromYear: null, toYear: null, growthPct: null }, // appended as v2
+    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "fun", monthly: 15, fromYear: null, toYear: null, growthPct: null, variable: true }, // appended as v2
   ]);
 
   assert.deepEqual(state.spending, [
-    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null },
-    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null },
+    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null, variable: true },
   ], "applyDerived is pure — the input state is untouched");
   assert.throws(() => applyDerived(state, cats, "nuke"), /unknown apply mode/);
 });
@@ -455,8 +455,8 @@ test("preview → apply: rev threading, 409 stale, 410 bad token, 400 bad mode/c
   // Seed real data so the import has something to update (and snapshot).
   const seeded = defaultState();
   seeded.spending = [
-    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null },
-    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null },
+    { name: "Groceries", monthly: 999, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null, variable: true },
   ];
   const put = await sendJson("PUT", "/api/state", { state: seeded, baseRev: await currentRev() });
   assert.equal(put.status, 200);
@@ -510,8 +510,8 @@ test("preview → apply: rev threading, 409 stale, 410 bad token, 400 bad mode/c
 
   const state = (await getJson("/api/state")).body.state;
   assert.deepEqual(state.spending, [
-    { name: "Groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null }, // updated from real behavior, name + window kept
-    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null }, // no derived match → untouched
+    { name: "Groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null, variable: true }, // updated from real behavior, name + window kept
+    { name: "rent", monthly: 2000, fromYear: null, toYear: null, growthPct: null, variable: true }, // no derived match → untouched
   ]);
 
   // transactions.json: versioned envelope, all 9 normalized rows stored.
@@ -561,9 +561,9 @@ test("saved mapping reused on second preview; re-import dedupes; replace-all app
 
   const state = (await getJson("/api/state")).body.state;
   assert.deepEqual(state.spending, [
-    { name: "groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null },
-    { name: "fun", monthly: 18.33, fromYear: null, toYear: null, growthPct: null },
-    { name: "books", monthly: 8.33, fromYear: null, toYear: null, growthPct: null },
+    { name: "groceries", monthly: 100, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "fun", monthly: 18.33, fromYear: null, toYear: null, growthPct: null, variable: true },
+    { name: "books", monthly: 8.33, fromYear: null, toYear: null, growthPct: null, variable: true },
   ]);
 
   // Transactions always MERGE (apply mode shapes spending only): 9 + 2.
@@ -613,7 +613,7 @@ test("write order pinned by failure injection: transactions.json commits BEFORE 
   assert.equal(retry.status, 200);
   assert.equal(txnFile().transactions.length, 12, "idempotent rewrite — no duplicated rows");
   const spending = (await getJson("/api/state")).body.state.spending;
-  assert.deepEqual(spending[spending.length - 1], { name: "auto", monthly: 18.33, fromYear: null, toYear: null, growthPct: null }, "55/3 over the 3-month window");
+  assert.deepEqual(spending[spending.length - 1], { name: "auto", monthly: 18.33, fromYear: null, toYear: null, growthPct: null, variable: true }, "55/3 over the 3-month window");
 });
 
 test("incomplete mapping: no token, explicit missing roles; explicit query mapping + sign override completes the preview", async () => {

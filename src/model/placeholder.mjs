@@ -23,9 +23,9 @@ export function placeholderState() {
       { name: "Example take-home pay", annual: 150_000, fromYear: 2026, toYear: 2035, growthPct: null },
     ],
     spending: [
-      { name: "housing (own)", monthly: 3500, fromYear: null, toYear: null, growthPct: null },
-      { name: "living", monthly: 3000, fromYear: null, toYear: null, growthPct: null },
-      { name: "travel/fun", monthly: 1200, fromYear: null, toYear: null, growthPct: null },
+      { name: "housing (own)", monthly: 3500, fromYear: null, toYear: null, growthPct: null, variable: false },
+      { name: "living", monthly: 3000, fromYear: null, toYear: null, growthPct: null, variable: true },
+      { name: "travel/fun", monthly: 1200, fromYear: null, toYear: null, growthPct: null, variable: true },
     ],
     social: { startAge: 67, monthly: 2800, haircutPct: 25 },
     health: { preMedicareAnnual: 16_000, postMedicareAnnual: 7_500, employerCoverageUntilAge: 55 },

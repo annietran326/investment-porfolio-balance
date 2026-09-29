@@ -150,7 +150,9 @@
     <h2>Spending <span class="hint">$/mo, excluding healthcare</span></h2>
     <div class="itemlist" id="spendList"></div>
     <button id="addSpend" type="button" class="small">+ category</button>
-    <div class="footnote">Leave the increase blank to rise with inflation, or enter your own rate (for example, 3.5 if you expect this cost to rise faster). Set start/end years for costs that stop, like a car loan.</div>
+    <div class="field narrow spend-more"><label for="f-spendMore">Spend more scenario: increase variable spending by %</label><input id="f-spendMore" type="number" min="0" step="1" data-path="simulation.spendMorePct"><div class="issue"></div></div>
+    <div class="footnote">Leave the increase blank to rise with inflation, or enter your own rate (for example, 3.5 if you expect this cost to rise faster). Set start/end years for costs that stop, like a car loan.<br>
+      <b>Variable</b> marks flexible spending (dining, travel, shopping). The spend more scenario raises only those lines, every year from now on; fixed costs like housing or property tax, household support costs like childcare, and healthcare stay as entered.</div>
   </section>
 
   <section class="card">
@@ -209,7 +211,7 @@
       <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Own funds</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
       <tbody id="glideRows"></tbody>
     </table>
-    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Once fewer than 15 years remain, nothing is in equities; in the last 8, everything is in capital preservation. Percentages are of the money in your three-bucket plan; "Own funds" and "Balance" are in today's dollars, and the return is for everything combined.</div>
+    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Once fewer than 15 years remain, nothing is sold: equity gains move to capital preservation each year, and in the last 8 years high income's gains do too. Percentages are of the money in your three-bucket plan; "Own funds" and "Balance" are in today's dollars, and the return is for everything combined.</div>
   </section>
 
   <section class="card">
@@ -218,7 +220,7 @@
       <thead><tr><th>Scenario</th><th class="num">Chance of success</th><th class="num" id="thGap">Gap today</th><th class="num">50% outcome</th><th class="num">80% outcome</th><th class="num">90% outcome</th></tr></thead>
       <tbody id="scenarioRows"></tbody>
     </table>
-    <div class="footnote">Chance of success = the share of 1,000 simulated futures in which the plan reaches your goal without running out. Gap today = how much more you'd need invested now (today's dollars) to succeed in your target share of futures. Outcomes are the balance left at the end, in today's dollars: the 50% outcome is the middle future; 80% (or 90%) of futures end at least as well as the 80% (or 90%) outcome.</div>
+    <div class="footnote">Chance of success = the share of 1,000 simulated futures in which the plan reaches your goal without running out. The spend more scenario raises your variable spending lines by the % set under Spending. Gap today = how much more you'd need invested now (today's dollars) to succeed in your target share of futures. Outcomes are the balance left at the end, in today's dollars: the 50% outcome is the middle future; 80% (or 90%) of futures end at least as well as the 80% (or 90%) outcome.</div>
   </section>
 
   <section class="card">
@@ -256,7 +258,7 @@
       <div class="math-doc">
         <p><strong>Dollars.</strong> You enter amounts in today's dollars. The engine runs in actual future dollars: every cost and income rises at its own rate (or at inflation if you leave the rate blank). Every result is converted back to today's dollars, so $1M at age 80 means what $1M buys today.</p>
         <p><strong>Cash flow each year</strong> = income + Social Security − spending − healthcare. Social Security and healthcare rise with inflation. You and your spouse each live to the plan-to age; the plan runs until the younger of you reaches it, and the survivor keeps the larger Social Security check.</p>
-        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: the next years (through your capital preservation cutoff) to capital preservation, the following years (through your high income cutoff) to high income. Each is valued at what it costs today. The buckets fill in that order: capital preservation first, then high income, then everything else in equities. With fewer years left than the high income cutoff, everything else goes to high income; in the final capital-preservation years, everything is in capital preservation. Own-fund accounts (like a target-date 401(k)) aren't part of the split; they count as long-term money.</p>
+        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: the next years (through your capital preservation cutoff) to capital preservation, the following years (through your high income cutoff) to high income. Each is valued at what it costs today. The buckets fill in that order: capital preservation first, then high income, then everything else in equities. Late in the plan nothing is sold to rebalance: once fewer years remain than the high income cutoff, each year's equity gains move to capital preservation; in the final capital-preservation years, high income's gains move too. New money in those years goes to capital preservation. Own-fund accounts (like a target-date 401(k)) aren't part of the split; they count as long-term money.</p>
         <p><strong>Each year</strong>, in order: (1) every bucket and own fund earns its return, (2) contributions are added, (3) the year's cash flow lands. Leftover income is saved to the taxable account; a shortfall is withdrawn from accounts, and on the bucket side it comes out of capital preservation first, then high income. (4) <strong>Refilling:</strong> after a year equities rose, the buckets are reset to their targets. After a year equities fell, nothing is sold to refill; the plan keeps spending from the safe buckets and lets equities recover.</p>
         <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, bucket-plan money before own-fund money. Enough is taken to cover tax:</p>
         <ul>
@@ -333,6 +335,7 @@
   <div class="item">
     <div class="head">
       <input type="text" data-key="name" placeholder="category" aria-label="spending category name">
+      <label class="checkline variable-check" title="Variable spending is what the spend more scenario increases"><input type="checkbox" data-key="variable"> variable</label>
       <button type="button" class="small danger remove" aria-label="remove spending category">✕</button>
     </div>
     <div class="issue"></div>

@@ -307,8 +307,8 @@ async function sendMonteCarlo(job) {
   // No worker available: run on the page, after letting the screen paint.
   await new Promise((r) => setTimeout(r, 30));
   const { monteCarlo } = await import("/engine/montecarlo.mjs");
-  const { SCENARIOS } = await import("/engine/scenarios.mjs");
-  const results = SCENARIOS.map((sc) => ({ key: sc.key, label: sc.label, ...monteCarlo(job.state, sc.overlay) }));
+  const { SCENARIOS, scenarioLabel } = await import("/engine/scenarios.mjs");
+  const results = SCENARIOS.map((sc) => ({ key: sc.key, label: scenarioLabel(sc, job.state), ...monteCarlo(job.state, sc.overlay) }));
   onMonteCarlo({ id: job.id, results });
 }
 
@@ -332,7 +332,7 @@ function onMonteCarlo(data) {
   renderMonteCarlo(data.results);
 }
 
-/** @param {any[]} results base first, then +20% spending */
+/** @param {any[]} results base first, then the spend more scenario */
 function renderMonteCarlo(results) {
   const base = results[0];
   const copy = mcVerdictCopy(base, state);
@@ -380,8 +380,8 @@ function renderMonteCarlo(results) {
     { key: "p90", label: "90% outcome", path: line(base.bands, "p90") },
     ...(spend
       ? [
-          { key: "s50", label: "+20% spending, 50%", path: line(spend.bands, "p50") },
-          { key: "s90", label: "+20% spending, 90%", path: line(spend.bands, "p90") },
+          { key: "s50", label: "Spend more, 50%", path: line(spend.bands, "p50") },
+          { key: "s90", label: "Spend more, 90%", path: line(spend.bands, "p90") },
         ]
       : []),
   ]);
@@ -421,7 +421,7 @@ function renderSplit(sim, gap) {
   } else if (dollars.preservation === 0 && dollars.income === 0) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {
-    note = "Capital preservation holds your next years of withdrawals and high income the years after that. Everything else is long-term money in global equities, until fewer years remain than the high income cutoff.";
+    note = "Capital preservation holds your next years of withdrawals and high income the years after that. Everything else is long-term money in global equities. Late in the plan, equity gains are moved into capital preservation each year instead of selling.";
   }
   if (own > 0) {
     note += ` Not included: ${fmtMoney(own)} in accounts held in their own fund. That money is counted as long-term money, so it lowers how much the plan needs in equities.`;

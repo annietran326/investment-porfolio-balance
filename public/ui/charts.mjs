@@ -185,12 +185,12 @@ export function readoutAt(series, year) {
 /** Legend/readout copy — the full scenario labels are too long for chips. */
 const SHORT_LABELS = {
   base: "base",
-  spend: "spend +20%",
+  spend: "spend more",
   p50: "50%",
   p80: "80%",
   p90: "90%",
-  s50: "+20% spend 50%",
-  s90: "+20% spend 90%",
+  s50: "spend more 50%",
+  s90: "spend more 90%",
 };
 
 /** @param {string} key @param {string} label fallback for unknown keys */
