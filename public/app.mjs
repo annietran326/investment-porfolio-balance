@@ -442,6 +442,12 @@ function renderSplit(sim, gap) {
   if (dedTotal > 0) {
     const parts = BUCKET_KEYS.filter((k) => ded[k] > 0).map((k) => `${fmtMoney(ded[k])} of ${BUCKET_LABELS[k].toLowerCase()}`);
     note += ` Accounts dedicated to one bucket already hold ${parts.join(", ")}; the bucket plan allocation covers the rest.`;
+    const short = sim.startSafeShort;
+    const canMove = ded.equities + ded.income;
+    if (short.preservation + short.income > 0.5 && canMove > 0) {
+      const needs = [short.preservation > 0.5 ? `${fmtMoney(short.preservation)} of capital preservation` : "", short.income > 0.5 ? `${fmtMoney(short.income)} of high income` : ""].filter(Boolean).join(" and ");
+      note += ` Your bucket-plan accounts can't fill the safe buckets on their own: they're short ${needs}. Consider moving that from your dedicated accounts into capital preservation / high income inside the same account (no tax inside an IRA or 401(k)). The simulation does this after the first year stocks don't fall.`;
+    }
   }
   setText(qs("#splitNote"), note);
 }

@@ -279,11 +279,36 @@ test("within a tax type, spending comes from dedicated capital preservation, the
     newAccount({ name: "CP", type: "traditional_ira", balance: 5_000, invest: "preservation" }),
   ] });
   const sim = simulate(t);
-  // Start of year 1: CP gone, plan has $3k left, equities untouched → 3k plan of 103k.
-  near(sim.path[1].bal, 103_000, "year 0: $5k dedicated capital preservation, then $7k of the plan");
-  assert.ok(sim.rows[1].mix.equities >= 100_000 / 103_000 - 1e-12, "dedicated equities untouched");
-  near(sim.rows[2].mix.preservation + sim.rows[2].mix.income, 0, "year 2: only dedicated equities remain", 1e-12);
+  // Year 0: $5k dedicated capital preservation, then $7k of the plan → plan $3k left.
+  near(sim.path[1].bal, 103_000);
+  // The plan alone can't hold the next 2 years ($24k) in capital preservation,
+  // so after that (flat, not down) year $21k moves over from dedicated equities.
+  near(sim.rows[1].mix.preservation, 24_000 / 103_000, "", 1e-12);
+  near(sim.rows[1].mix.equities, 79_000 / 103_000, "", 1e-12);
+  // Year 1 spends $12k of it; dedicated equities are untouched.
   near(sim.path[2].bal, 91_000);
+  near(sim.rows[2].mix.equities, 79_000 / 91_000, "", 1e-12);
+});
+
+test("when the bucket plan can't fill the safe buckets, money moves over from dedicated accounts after an up year (not after a down year)", () => {
+  // Cutoffs 1 / 2, all returns 0, $12k/yr for 3 years → targets 12k / 12k / 12k.
+  const s = flat({ spendMonthly: 1000, accounts: [
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 12_000 }),
+    newAccount({ name: "401k", type: "401k", balance: 100_000, invest: "equities" }),
+  ] });
+  s.buckets = { ...s.buckets, preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
+  const P = prepare(s);
+  const up = runPlan(P, { path: path([0, 0, 0]) });
+  assert.deepEqual(up.startSafeShort, { preservation: 0, income: 12_000 }, "today the plan's $12k covers only capital preservation");
+  // Year 0 spends the plan's $12k. After the (flat) year, $12k each moves from the
+  // 401(k)'s dedicated equities into capital preservation and high income.
+  near(up.rows[1].mix.preservation, 12 / 100, "", 1e-12);
+  near(up.rows[1].mix.income, 12 / 100, "", 1e-12);
+  near(up.rows[1].mix.equities, 76 / 100, "", 1e-12);
+  // After a down year for equities nothing is sold.
+  const down = runPlan(P, { path: path([-0.1, 0, 0]) });
+  near(down.rows[1].mix.preservation, 0, "", 1e-12);
+  near(down.rows[1].mix.equities, 1, "", 1e-12);
 });
 
 // ---------------------------------------------------------------------------

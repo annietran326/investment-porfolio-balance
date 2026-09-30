@@ -38,7 +38,11 @@
 //      capital preservation first, then high income, then equities.
 //   4. Refill: after a year equities went UP (or didn't fall), the bucket
 //      plan is reset to its targets for next year (each bucket's target less
-//      what dedicated accounts already hold). Dedicated accounts are never moved. After a year equities FELL,
+//      what dedicated accounts already hold). If the bucket plan alone can't
+//      fill capital preservation and high income, the rest is moved out of
+//      dedicated accounts (equities first, then high income for capital
+//      preservation), staying inside the same account type, so it's tax-free
+//      (like selling a fund and buying another inside an IRA). After a year equities FELL,
 //      nothing is sold to refill: the plan keeps spending from capital
 //      preservation and high income and lets equities recover. (With
 //      expected returns every year is an up year, so the plan rebalances
@@ -163,6 +167,8 @@ function ssAnnualOf(social) {
  * @property {number} startYear
  * @property {Mix} startMix    the bucket plan allocation today: what the bucket-plan money should hold, as dollars (today's $)
  * @property {Mix} startDedicated money already in dedicated accounts today, by bucket (today's $)
+ * @property {{preservation: number, income: number}} startSafeShort how far the bucket plan alone falls short of
+ *   the safe buckets' targets today (today's $); the simulation moves this from dedicated accounts after a good year
  * @property {number[]} earlyDeferredYears years a traditional IRA/401(k) was tapped before 59 1/2 (penalty applied)
  * @property {number[]} earlyRothYears    years the Roth was tapped before 59 1/2 (flag only)
  */
@@ -294,6 +300,9 @@ export function prepare(s, overlay = {}) {
   /** @type {Holding[]} */
   const holdings = [managed("taxable"), managed("deferred"), managed("roth"), managed("deferred", "spouse")];
   const MANAGED_IDX = { taxable: 0, deferred: 1, roth: 2, deferredSpouse: 3 };
+  // The bucket-plan holding with the same tax treatment (and owner) as a holding.
+  /** @param {Holding} h */
+  const planIdx = (h) => (h.pool === "deferred" && h.owner === "spouse" ? MANAGED_IDX.deferredSpouse : MANAGED_IDX[h.pool]);
   const holdingOf = s.accounts.map((a) => {
     const pool = poolOf(a.type);
     const owner = a.owner === "spouse" && sp0 ? "spouse" : "self";
@@ -332,6 +341,7 @@ export function prepare(s, overlay = {}) {
     withdrawOrder,
     contribs,
     rmdDivisors,
+    planIdx,
     planReturns,
     ordinaryRate: s.taxes.ordinaryIncomePct / 100,
     gainsRate: s.taxes.capitalGainsPct / 100,
@@ -379,7 +389,7 @@ function addToBuckets(B, amount, targets) {
  *   skips them for speed and reads `balances` instead).
  */
 export function runPlan(P, opts = {}) {
-  const { s, years, deflators, flows, targetsByYear, withdrawOrder, contribs, rmdDivisors, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
+  const { s, years, deflators, flows, targetsByYear, withdrawOrder, contribs, rmdDivisors, planIdx, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
   const path = opts.path ?? null;
   const detail = opts.detail ?? true;
   const holdings = P.holdings.map((h) => ({ ...h }));
@@ -402,6 +412,28 @@ export function runPlan(P, opts = {}) {
     return m;
   };
   /**
+   * Move up to `amount` out of dedicated accounts (from the listed buckets, in
+   * order) into the bucket plan, inside the same account type (and owner).
+   * @param {BucketKey[]} from @param {number} amount @returns {number} moved
+   */
+  const moveFromDedicated = (from, amount) => {
+    let moved = 0;
+    for (const k of from) {
+      for (const h of holdings) {
+        if (h.bucket !== k || !(h.v > 0) || !(amount - moved > 1e-9)) continue;
+        const m = Math.min(h.v, amount - moved);
+        const to = holdings[planIdx(h)];
+        const basisMoved = h.pool === "taxable" ? h.basis * (m / h.v) : 0;
+        h.basis -= basisMoved;
+        h.v -= m;
+        to.v += m;
+        to.basis += basisMoved;
+        moved += m;
+      }
+    }
+    return moved;
+  };
+  /**
    * The bucket plan's split of `total` dollars at the start of year i: each
    * bucket's target less what dedicated accounts already hold.
    */
@@ -421,6 +453,10 @@ export function runPlan(P, opts = {}) {
   let B = splitAt(0, Math.max(0, sumOf(false))).split;
   const startMix = { ...B };
   const startDedicated = dedicatedMix();
+  const startSafeShort = {
+    preservation: Math.max(0, targetsByYear[0].preservation - startDedicated.preservation - B.preservation),
+    income: Math.max(0, targetsByYear[0].income - startDedicated.income - B.income),
+  };
 
   const balances = new Float64Array(years + 1);
   let bal = sumOf(false) + sumOf(true);
@@ -530,8 +566,16 @@ export function runPlan(P, opts = {}) {
     if (delta < 0) drawFromBuckets(B, -delta);
     else if (delta > 0) addToBuckets(B, delta, targets);
 
-    // 4. Refill: after a year equities didn't fall, reset to next year's targets.
-    if (rE >= 0) B = allocate(managedNow, targets);
+    // 4. Refill: after a year equities didn't fall, reset to next year's targets,
+    // topping up the safe buckets from dedicated accounts if the plan is short.
+    if (rE >= 0) {
+      B = allocate(managedNow, targets);
+      const T = targetsByYear[i + 1];
+      const needP = T.preservation - dedicatedMix().preservation - B.preservation;
+      if (needP > 1e-9) B.preservation += moveFromDedicated(["equities", "income"], needP);
+      const needI = T.income - dedicatedMix().income - B.income;
+      if (needI > 1e-9) B.income += moveFromDedicated(["equities"], needI);
+    }
 
     bal = (sumOf(false) + sumOf(true)) / deflators[i + 1];
     balances[i + 1] = bal;
@@ -571,6 +615,7 @@ export function runPlan(P, opts = {}) {
     startYear: P.startYear,
     startMix,
     startDedicated,
+    startSafeShort,
     earlyDeferredYears,
     earlyRothYears,
   };
