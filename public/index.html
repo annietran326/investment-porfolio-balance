@@ -75,7 +75,7 @@
       <div class="field"><label for="f-vInc">High income</label><input id="f-vInc" type="number" step="0.5" min="0" data-path="buckets.incomeVolPct"><div class="issue"></div></div>
       <div class="field"><label for="f-vEq">Global equities</label><input id="f-vEq" type="number" step="0.5" min="0" data-path="buckets.equitiesVolPct"><div class="issue"></div></div>
     </div>
-    <div class="footnote">The expected return is what money compounds at over the long run; the swing is how bumpy the individual years are. With equities at 8% and a 17% swing, about 2 years in 3 land between −8% and +26%, and about 1 year in 20 is −17% or worse. The simulation draws 1,000 possible futures this way; equities and high income tend to move together. Defaults are a little cautious vs. what investment firms use on average (cash 1.1%, core bonds 5.9%, high-yield bonds 9.9%, US stocks 16.5%, international stocks 18.1%).</div>
+    <div class="footnote">The expected return is what money compounds at over the long run; the swing is how bumpy the individual years are. With equities at 8% and a 17% swing, about 2 years in 3 land between −8% and +26%, and about 1 year in 20 is −17% or worse. Defaults are a little cautious vs. what investment firms use on average (cash 1.1%, core bonds 5.9%, high-yield bonds 9.9%, US stocks 16.5%, international stocks 18.1%).</div>
     <div class="subhead">Which years of withdrawals each bucket covers</div>
     <div class="grid2x2">
       <div class="field"><label for="f-cashYears">Capital preservation, cash: through year</label><input id="f-cashYears" type="number" min="0" step="1" data-path="buckets.cashYears"><div class="issue"></div></div>
@@ -219,14 +219,6 @@
 
   <div id="flags" class="banner banner-warn hidden"></div>
 
-  <section class="card">
-    <h2>How the split changes as you age <span class="hint">base case, expected returns</span></h2>
-    <table>
-      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
-      <tbody id="glideRows"></tbody>
-    </table>
-    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Percentages are of all your money, dedicated accounts included. "Balance" is in today's dollars, and the return is for everything combined.</div>
-  </section>
 
   <section class="card">
     <h2>Simulated futures <span class="hint" id="mcHint">1,000 per scenario</span></h2>
@@ -244,6 +236,15 @@
       <summary>Year-by-year cash flow (base case, expected returns)</summary>
       <div id="cashflowTable"></div>
     </details>
+  </section>
+
+  <section class="card">
+    <h2>How the split changes as you age <span class="hint">base case, expected returns</span></h2>
+    <table>
+      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
+      <tbody id="glideRows"></tbody>
+    </table>
+    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Percentages are of all your money, dedicated accounts included. "Balance" is in today's dollars, and the return is for everything combined.</div>
   </section>
 
   <section class="card">

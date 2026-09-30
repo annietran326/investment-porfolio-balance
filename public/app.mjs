@@ -150,7 +150,7 @@ function syncDerivedNotes() {
   if (typeof b.preservationYears === "number" && typeof b.incomeThroughYear === "number") {
     setText(
       qs("#bucketRuleNote"),
-      `Withdrawals in years 1–${b.preservationYears} sit in capital preservation (shown as cash, short-term bonds and medium-term by the cutoffs above; one return and swing for all of it), years ${b.preservationYears + 1}–${b.incomeThroughYear} in high income, and everything after year ${b.incomeThroughYear} in global equities. Money you need soonest is kept safe, so a market drop never forces you to sell stocks.`
+      `Withdrawals in years 1–${b.preservationYears} sit in capital preservation (one return and swing for all of it), years ${b.preservationYears + 1}–${b.incomeThroughYear} in high income, and everything else in global equities. Money you need soonest is kept safe, so a market drop never forces you to sell stocks.`
     );
   }
 }
