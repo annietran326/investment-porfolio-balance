@@ -392,6 +392,16 @@ function migrateV13(v13) {
   return { ...v13, schemaVersion: 14, buckets: { ...(v13.buckets ?? {}), cashYears: d.cashYears, shortBondYears: d.shortBondYears } };
 }
 
+/**
+ * v14 -> v15: the strict "retirement money never counts before 59½" rule
+ * becomes a rolling liquid window (the next 10 years by default).
+ * @param {any} v14
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV14(v14) {
+  return { ...v14, schemaVersion: 15, buckets: { ...(v14.buckets ?? {}), liquidYears: newBuckets().liquidYears } };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -408,6 +418,7 @@ const RUNGS = {
   11: migrateV11,
   12: migrateV12,
   13: migrateV13,
+  14: migrateV14,
 };
 
 /**

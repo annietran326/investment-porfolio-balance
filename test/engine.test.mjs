@@ -793,7 +793,7 @@ test("RMD money from a dedicated 401(k) lands in the bucket plan", () => {
 // retirement money before 59 1/2
 // ---------------------------------------------------------------------------
 
-test("retirement money only counts toward a bucket's years from its owner's 59½; earlier years must be taxable", () => {
+test("while under 59½, retirement money doesn't count toward the liquid years; it counts for later years", () => {
   // Age 50, cutoffs 8 / 15, $12k/yr from now on, 0% returns. Capital preservation
   // covers ages 50–57 ($96k), high income ages 58–64 ($84k). An IRA dedicated to
   // high income with $84k can only count for ages 59–64 ($72k).
@@ -809,14 +809,23 @@ test("retirement money only counts toward a bucket's years from its owner's 59½
   near(sim.startPlanTaxable, 500_000);
   near(sim.startPlanRetirement, 0);
 
-  // At 43 every capital preservation and high income year is before 59½: the IRA counts for none of them.
+  // At 43 with 10 liquid years (the default): the brokerage holds years 1–10
+  // (capital preservation, plus high income years 9–10); the IRA counts for years 11–15.
   const young = flat({ age: 43, years: 40, spendMonthly: 1000, accounts: [
     newAccount({ name: "Brokerage", type: "taxable", balance: 900_000 }),
     newAccount({ name: "IRA", type: "traditional_ira", balance: 84_000 }),
   ] });
+  assert.equal(young.buckets.liquidYears, 10);
   const y = simulate(young);
   near(y.startMix.preservation, 96_000);
-  near(y.startMix.income, 84_000, "the brokerage holds all of high income");
+  near(y.startMix.income, 24_000, "high income years 9–10 stay liquid in the brokerage");
+  assert.equal(y.liquidThroughAge, null, "the brokerage covers every year");
+  young.buckets.liquidYears = 8;
+  near(simulate(young).startMix.income, 0, "8 liquid years: the IRA covers all of high income");
+  young.buckets.liquidYears = 15;
+  near(simulate(young).startMix.income, 84_000, "15 liquid years: the brokerage holds all of high income");
+  young.accounts[0].balance = 30_000;
+  assert.equal(simulate(young).liquidThroughAge, 43 + 1, "$30k of brokerage covers the $12k years at 43 and 44");
 
   // At 60 everything is reachable: the IRA covers high income in full.
   const older = flat({ age: 60, years: 25, spendMonthly: 1000, accounts: [

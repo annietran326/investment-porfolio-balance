@@ -469,19 +469,24 @@ function renderSplit(sim, gap) {
   }
   if (dedTotal > 0) {
     const parts = BUCKET_KEYS.filter((k) => ded[k] > 0).map((k) => `${fmtMoney(ded[k])} of ${BUCKET_LABELS[k].toLowerCase()}`);
-    note += ` Accounts dedicated to one bucket hold ${parts.join(", ")}. IRA, 401(k) and Roth money only counts toward years from its owner's 59½ on; the bucket plan allocation covers the rest.`;
+    note += ` Accounts dedicated to one bucket hold ${parts.join(", ")}. Until its owner's 59½, IRA, 401(k) and Roth money doesn't count toward your liquid years; the bucket plan allocation covers the rest.`;
     const short = sim.startSafeShort;
     if (short.preservation + short.income > 0.5) {
       const needs = [short.preservation > 0.5 ? `${fmtMoney(short.preservation)} of capital preservation` : "", short.income > 0.5 ? `${fmtMoney(short.income)} of high income` : ""].filter(Boolean).join(" and ");
-      note += ` Your bucket-plan accounts can't fill the safe buckets on their own: they're short ${needs}. Years before 59½ can only be covered with more taxable money; for later years you can switch investments inside a dedicated account (no tax inside an IRA or 401(k)), which the simulation does after the first year stocks don't fall.`;
+      note += ` Your bucket-plan accounts can't fill the safe buckets on their own: they're short ${needs}. Liquid years can only be covered with more taxable money; for later years you can switch investments inside a dedicated account (no tax inside an IRA or 401(k)), which the simulation does after the first year stocks don't fall.`;
     }
   }
   const before = sim.startBeforeAccess;
   const beforeTotal = before.preservation + before.income;
   if (beforeTotal > 0.5 && sim.startPlanRetirement > 0.5) {
     const parts = [before.preservation > 0.5 ? `${fmtMoney(before.preservation)} of capital preservation` : "", before.income > 0.5 ? `${fmtMoney(before.income)} of high income` : ""].filter(Boolean).join(" and ");
-    note += ` Of the bucket plan, keep ${parts} in taxable accounts (your brokerage). That money covers years before 59½, when IRA and Roth money can't be spent without a penalty.`;
+    note += ` Of the bucket plan, keep ${parts} in taxable accounts (your brokerage). That money covers your liquid years, before IRA and Roth money can be spent without a penalty.`;
     if (sim.startPlanTaxable + 0.5 < beforeTotal) note += ` Your bucket-plan taxable money (${fmtMoney(sim.startPlanTaxable)}) isn't enough for that.`;
+  }
+  if (sim.startPlanRetirement + sim.startDedicated.preservation + sim.startDedicated.income + sim.startDedicated.equities > 0.5 && state.profile.currentAge < 59) {
+    note += sim.liquidThroughAge === null
+      ? " Your taxable accounts alone cover every year of withdrawals."
+      : ` Your taxable accounts alone cover withdrawals through age ${sim.liquidThroughAge}.`;
   }
   setText(qs("#splitNote"), note);
 }

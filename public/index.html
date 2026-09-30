@@ -83,6 +83,10 @@
       <div class="field"><label for="f-presYears">Capital preservation, medium-term: through year</label><input id="f-presYears" type="number" min="0" step="1" data-path="buckets.preservationYears"><div class="issue"></div></div>
       <div class="field"><label for="f-incYears">High income: through year</label><input id="f-incYears" type="number" min="0" step="1" data-path="buckets.incomeThroughYear"><div class="issue"></div></div>
     </div>
+    <div class="grid2">
+      <div class="field"><label for="f-liquidYears">Liquid years: keep years 1–N in your brokerage until 59½</label><input id="f-liquidYears" type="number" min="0" step="1" data-path="buckets.liquidYears"><div class="issue"></div></div>
+      <div class="field"><div class="hint liquid-hint">Retirement accounts (IRA, 401(k), Roth) count toward years after N. The window rolls forward each year and stops at 59½.</div></div>
+    </div>
     <div class="footnote" id="bucketRuleNote">Money you'll need soonest sits in capital preservation, so a market drop never forces you to sell stocks. Global equities hold everything needed further out.</div>
   </section>
 
@@ -136,7 +140,7 @@
       <b>How each type is taxed when you take money out:</b> taxable brokerage pays capital-gains tax on the gain part of what you sell; traditional IRA and 401(k) pay ordinary income tax on the whole withdrawal (plus a 10% penalty before 59½); Roth IRA is tax-free.<br>
       <b>Cost basis</b> (taxable only) is what you paid in total. Leave it blank if you don't know it; that assumes no gain yet.<br>
       <b>Invested in:</b> "Bucket plan" means this money follows the bucket plan allocation. Choose a single bucket for an account you keep in one kind of investment (say, an IRA entirely in high income). It earns that bucket's return and swing, and it counts toward that bucket's target, so the bucket plan only covers what's left.<br>
-      <b>Before 59½:</b> money in an IRA, 401(k) or Roth can't be spent without a penalty until its owner is 59½, so it only counts toward the part of a bucket that covers years from then on. The years before that have to be covered by taxable money (your brokerage). Required minimum distributions from a dedicated account pay the year's spending first; the rest is reinvested in the bucket plan, filling capital preservation first.<br>
+      <b>Liquid years:</b> money in an IRA, 401(k) or Roth can't be spent without a penalty until its owner is 59½. Until then, the next N liquid years of withdrawals (set under Market Returns and Inflation) have to be covered by taxable money (your brokerage); retirement accounts count toward the years after that. Required minimum distributions from a dedicated account pay the year's spending first; the rest is reinvested in the bucket plan, filling capital preservation first.<br>
       <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
     </div>
   </section>
@@ -275,7 +279,7 @@
         <p><strong>Cash flow each year</strong> = income + Social Security − spending − healthcare. Social Security and healthcare rise with inflation. You and your spouse each live to the plan-to age; the plan runs until the younger of you reaches it, and the survivor keeps the larger Social Security check.</p>
         <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: the next years (through your capital preservation cutoff) to capital preservation, the following years (through your high income cutoff) to high income. Each is valued at what it costs today. The buckets fill in that order: capital preservation first, then high income, then everything else in equities. The same rule applies every year to the end of the plan; there is no separate late-life shift. An account dedicated to one bucket counts toward that bucket's target, and the bucket plan fills whatever is left.</p>
         <p><strong>Each year</strong>, in order: (1) every bucket earns its return (dedicated accounts move with their bucket), (2) contributions are added, (3) required minimum distributions come out of traditional IRAs and 401(k)s, then the year's cash flow lands. Leftover income (and RMD money the year doesn't need) is saved to the taxable account; a shortfall is withdrawn from accounts, and on the bucket side it comes out of capital preservation first, then high income. (4) <strong>Refilling:</strong> after a year equities rose, the bucket plan is reset to its targets. If the bucket plan alone can't fill capital preservation and high income, the rest moves out of dedicated accounts (equities first), inside the same account, so no tax is due. After a year equities fell, nothing is sold to refill; the plan keeps spending from the safe buckets and lets equities recover.</p>
-        <p><strong>Before 59½.</strong> Retirement-account money (traditional IRA, 401(k), Roth) only counts toward the part of each bucket's target for years its owner is 59½ or older; the part for earlier years has to be held in taxable accounts. A traditional IRA or 401(k) withdrawal before the owner's 59½ pays a 10% penalty.</p>
+        <p><strong>Liquid years.</strong> While an account's owner is under 59½, retirement-account money (traditional IRA, 401(k), Roth) doesn't count toward the next N years of withdrawals (the liquid years setting); those have to be held in taxable accounts. It counts toward every later year, and toward every year once the owner is 59½. The window rolls forward each year. A traditional IRA or 401(k) withdrawal before the owner's 59½ pays a 10% penalty.</p>
         <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, dedicated capital preservation accounts first, then the bucket plan, then dedicated high income, then dedicated equities. Enough is taken to cover tax:</p>
         <ul>
           <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time.</li>
@@ -327,7 +331,7 @@
           <option value="self">Mine</option>
           <option value="spouse">My spouse's</option>
         </select><div class="issue"></div></div>
-      <div class="field only-deferred rmd-note"><div class="hint">Required minimum distributions start at 75 for the owner. Before the owner's 59½, this money only counts for later years.</div></div>
+      <div class="field only-deferred rmd-note"><div class="hint">Required minimum distributions start at 75 for the owner. Until the owner's 59½, this money doesn't count toward your liquid years.</div></div>
     </div>
     <div class="grid2x2 contrib">
       <div class="field"><label>your contribution $/yr</label><input type="number" data-key="contributionAnnual" placeholder="0"><div class="issue"></div></div>

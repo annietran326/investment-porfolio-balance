@@ -18,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -65,6 +65,8 @@ export const BASE_YEAR = 2026;
  *                                          capital preservation has one return and swing)
  * @property {number} shortBondYears        within capital preservation: years C+1..S in short-term bonds; S+1..N are
  *                                          medium-term (display only)
+ * @property {number} liquidYears           while under 59 1/2, the next L years of withdrawals must be covered by
+ *                                          taxable money; retirement accounts count toward later years
  * @property {number} incomeThroughYear     years N+1..M held in high income
  * @property {number} preservationVolPct    capital preservation's typical yearly swing (standard deviation), %
  * @property {number} incomeVolPct          high income's typical yearly swing, %
@@ -191,6 +193,9 @@ export function newBuckets() {
     // Layers inside capital preservation (shown in the results only): cash for
     // year 1, short-term bonds for years 2-4, medium-term for years 5-8.
     cashYears: 1, shortBondYears: 4,
+    // While under 59 1/2, keep the next 10 years of withdrawals in accessible
+    // (taxable) accounts; retirement accounts count toward years after that.
+    liquidYears: 10,
     // Typical yearly swings, a bit cautious vs. the 2024 Horizon Actuarial
     // survey averages (cash 1.1%, core bonds 5.9%, high yield 9.9%, US large
     // cap 16.5%, non-US developed 18.1%).
@@ -412,6 +417,7 @@ export function validate(s) {
   const pyOk = requireNumber(errors, b.preservationYears, "buckets.preservationYears");
   const iyOk = requireNumber(errors, b.incomeThroughYear, "buckets.incomeThroughYear");
   if (pyOk && b.preservationYears < 0) add(errors, "buckets.preservationYears", "can't be negative (0 = no capital preservation bucket)");
+  if (requireNumber(errors, b.liquidYears, "buckets.liquidYears") && b.liquidYears < 0) add(errors, "buckets.liquidYears", "can't be negative");
   const cyOk = requireNumber(errors, b.cashYears, "buckets.cashYears");
   const syOk = requireNumber(errors, b.shortBondYears, "buckets.shortBondYears");
   if (cyOk && b.cashYears < 0) add(errors, "buckets.cashYears", "can't be negative");

@@ -23,10 +23,12 @@
 //       * a DEDICATED account sits in one bucket (e.g. an IRA held entirely
 //         in high income). It earns that bucket's return and counts toward
 //         that bucket's target, so the bucket plan only fills what's left.
-//   - Retirement accounts (traditional IRA, 401(k), Roth) can't be spent
-//     before 59 1/2 without a penalty, so their money only counts toward the
-//     part of a bucket's target for years the account's owner is 59 1/2 or
-//     older. Earlier years must be covered by taxable money.
+//   - Liquid years: retirement accounts (traditional IRA, 401(k), Roth) can't
+//     be spent before 59 1/2 without a penalty, so while the owner is under
+//     59 1/2 their money doesn't count toward the next `liquidYears` years of
+//     withdrawals (a rolling window); those years must be covered by taxable
+//     money. Years beyond the window, and every year from 59 1/2 on, count
+//     normally.
 //
 // Each year, in order (pinned by tests):
 //   1. Every bucket (and each dedicated account, with its bucket) earns its return.
@@ -180,6 +182,9 @@ function ssAnnualOf(social) {
  * @property {{total: PresLayers, plan: PresLayers}} startPresLayers capital preservation today in layers (cash,
  *   short-term bonds, medium-term), for all the money and for the bucket plan, soonest years first (today's $)
  *
+ * @property {number|null} liquidThroughAge the last age whose withdrawals taxable accounts alone cover today (valued
+ *   at what each year costs today), or null if they cover the whole plan
+ *
  * @typedef {{cash: number, short: number, medium: number}} PresLayers
  * @property {number[]} earlyDeferredYears years a traditional IRA/401(k) was tapped before 59 1/2 (penalty applied)
  * @property {number[]} earlyRothYears    years the Roth was tapped before 59 1/2 (flag only)
@@ -311,9 +316,13 @@ export function prepare(s, overlay = {}) {
     self: Math.max(0, EARLY_WITHDRAWAL_START_AGE - s.profile.currentAge),
     spouse: Math.max(0, EARLY_WITHDRAWAL_START_AGE - /** @type {number} */ (sp0 ? sp0.currentAge : s.profile.currentAge)),
   };
+  // Standing at year i, retirement money counts for withdrawals from year
+  // i + liquidYears on (beyond the liquid window), or from the owner's 59 1/2
+  // if that comes first.
+  const liquid = Math.max(0, b.liquidYears ?? 0);
   const lateTargetsByYear = Array.from({ length: years + 1 }, (_, i) => ({
-    self: bucketTargets(needs, i, factors, b, accessFrom.self),
-    spouse: bucketTargets(needs, i, factors, b, accessFrom.spouse),
+    self: bucketTargets(needs, i, factors, b, Math.min(accessFrom.self, i + liquid)),
+    spouse: bucketTargets(needs, i, factors, b, Math.min(accessFrom.spouse, i + liquid)),
   }));
 
   // Holdings template (copied per run): bucket-plan money pooled by tax type
@@ -525,6 +534,21 @@ export function runPlan(P, opts = {}) {
   const startBeforeAccess = { preservation: startCoverage.early.preservation, income: startCoverage.early.income };
   const startPlanTaxable = Math.max(0, holdings[0].v);
   const startPlanRetirement = Math.max(0, holdings[1].v + holdings[2].v + holdings[3].v);
+  // How far taxable money alone reaches: the last age whose withdrawals it
+  // covers (each year valued at what it costs today), or null if it covers them all.
+  let taxableNow = 0;
+  for (const h of holdings) if (h.pool === "taxable") taxableNow += Math.max(0, h.v);
+  /** @type {number|null} */ let liquidThroughAge = null;
+  {
+    let acc = 0;
+    for (let j = 0; j < P.needs.length; j++) {
+      acc += P.needs[j] * P.factors[j + 1];
+      if (acc > taxableNow + 1e-6) {
+        liquidThroughAge = s.profile.currentAge + j - 1;
+        break;
+      }
+    }
+  }
   // Capital preservation in three layers (display only): what each layer's
   // years cost today, then the money filled in order, soonest years first.
   const bk = s.buckets;
@@ -713,6 +737,7 @@ export function runPlan(P, opts = {}) {
     startPlanTaxable,
     startPlanRetirement,
     startPresLayers,
+    liquidThroughAge,
     earlyDeferredYears,
     earlyRothYears,
   };

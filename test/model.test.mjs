@@ -265,7 +265,7 @@ test("default and placeholder states carry v6 sections that validate clean", () 
     assert.deepEqual(warnings, []);
   }
   assert.deepEqual(newBuckets(), {
-    preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15, cashYears: 1, shortBondYears: 4,
+    preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15, cashYears: 1, shortBondYears: 4, liquidYears: 10,
     preservationVolPct: 1, incomeVolPct: 8, equitiesVolPct: 17,
   });
   assert.deepEqual(newSimulation(), { targetSuccessPct: 90, spendMorePct: 20 });
@@ -528,4 +528,13 @@ test("v13 → v14 adds the capital preservation layer cutoffs; validation keeps 
   assert.ok(validate(state).errors.some((e) => e.path === "buckets.shortBondYears"));
   state.buckets.shortBondYears = 10;
   assert.ok(validate(state).warnings.some((w) => w.path === "buckets.shortBondYears"));
+});
+
+test("v14 → v15 adds the liquid years setting (10)", () => {
+  const base = placeholderState();
+  const { liquidYears, ...oldBuckets } = base.buckets;
+  void liquidYears;
+  const { state } = migrate({ ...base, schemaVersion: 14, buckets: oldBuckets });
+  assert.equal(state.buckets.liquidYears, 10);
+  assert.deepEqual(validate(state).errors, []);
 });
