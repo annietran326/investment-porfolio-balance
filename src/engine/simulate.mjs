@@ -39,12 +39,8 @@
 //      nothing is sold to refill: the plan keeps spending from capital
 //      preservation and high income and lets equities recover. (With
 //      expected returns every year is an up year, so the plan rebalances
-//      yearly.) Rebalancing is treated as tax-free.
-//      Late in the plan nothing is sold to rebalance: with fewer years left
-//      than the high income cutoff, each year's equity GAINS move to capital
-//      preservation; within the final capital-preservation years, high
-//      income's gains move too. A short safe bucket is still refilled after a
-//      year equities didn't fall, and new money goes to capital preservation.
+//      yearly.) Rebalancing is treated as tax-free. The same rule applies all
+//      the way to the end of the plan: there is no separate late-life shift.
 //
 // Withdrawal taxes:
 //   - taxable: capital-gains rate x the gain share of what's sold, where
@@ -70,7 +66,7 @@
 // Not modeled: Roth early-withdrawal rules, tax brackets, the still-working
 // exception for 401(k) RMDs. Income is entered after tax.
 import { grownValue, effectiveGrowthPct } from "./growth.mjs";
-import { bucketReturns, bucketTargets, allocate, pvFactor, shares, surplusShares } from "./buckets.mjs";
+import { bucketReturns, bucketTargets, allocate, pvFactor, shares } from "./buckets.mjs";
 
 const MEDICARE_AGE = 65;
 // Withdrawals from traditional IRAs / 401(k)s before 59 1/2 carry a 10% penalty.
@@ -282,7 +278,6 @@ export function prepare(s, overlay = {}) {
   const factors = [0];
   for (let t = 1; t <= years; t++) factors.push(pvFactor(t, b, planReturns));
   const targetsByYear = Array.from({ length: years + 1 }, (_, i) => bucketTargets(needs, i, factors, b));
-  const surplusByYear = Array.from({ length: years + 1 }, (_, i) => surplusShares(years - i, b));
 
   // Holdings template (copied per run): bucket-plan money pooled by tax type
   // (tax-deferred split by owner, for RMDs), then one holding per own-fund account.
@@ -326,7 +321,6 @@ export function prepare(s, overlay = {}) {
     flows,
     needs,
     targetsByYear,
-    surplusByYear,
     holdings,
     withdrawOrder,
     contribs,
@@ -357,11 +351,10 @@ function drawFromBuckets(B, amount) {
 
 /**
  * Add `amount` to the buckets, topping up toward `targets` in order
- * (capital preservation, then high income), with the rest in `restTo`.
+ * (capital preservation, then high income), with the rest in equities.
  * @param {Mix} B @param {number} amount @param {Mix} targets
- * @param {"preservation"|"income"|"equities"} [restTo]
  */
-function addToBuckets(B, amount, targets, restTo = "equities") {
+function addToBuckets(B, amount, targets) {
   for (const k of /** @type {const} */ (["preservation", "income"])) {
     if (amount <= 0) return;
     const room = Math.max(0, targets[k] - B[k]);
@@ -369,32 +362,7 @@ function addToBuckets(B, amount, targets, restTo = "equities") {
     B[k] += put;
     amount -= put;
   }
-  if (amount > 0) B[restTo] += amount;
-}
-
-/**
- * Move up to `amount` of one bucket's money into capital preservation.
- * @param {Mix} B @param {"income"|"equities"} from @param {number} amount
- */
-function moveToPreservation(B, from, amount) {
-  const m = Math.min(Math.max(0, amount), B[from]);
-  B[from] -= m;
-  B.preservation += m;
-}
-
-/**
- * Top a bucket up to its target by moving money from other buckets, in order.
- * @param {Mix} B @param {"preservation"|"income"} to @param {number} target
- * @param {("income"|"equities")[]} from
- */
-function topUp(B, to, target, from) {
-  for (const k of from) {
-    const need = target - B[to];
-    if (need <= 0) return;
-    const m = Math.min(need, B[k]);
-    B[k] -= m;
-    B[to] += m;
-  }
+  if (amount > 0) B.equities += amount;
 }
 
 /**
@@ -405,7 +373,7 @@ function topUp(B, to, target, from) {
  *   skips them for speed and reads `balances` instead).
  */
 export function runPlan(P, opts = {}) {
-  const { s, years, deflators, flows, targetsByYear, surplusByYear, withdrawOrder, contribs, rmdDivisors, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
+  const { s, years, deflators, flows, targetsByYear, withdrawOrder, contribs, rmdDivisors, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
   const path = opts.path ?? null;
   const detail = opts.detail ?? true;
   const holdings = P.holdings.map((h) => ({ ...h }));
@@ -424,7 +392,7 @@ export function runPlan(P, opts = {}) {
   const splitAt = (/** @type {number} */ i, /** @type {number} */ total) => {
     const t = targetsByYear[i];
     const targets = { preservation: t.preservation, income: t.income, equities: Math.max(0, t.equities - Math.max(0, sumOf(true))) };
-    return { split: allocate(total, targets, surplusByYear[i]), targets };
+    return { split: allocate(total, targets), targets };
   };
 
   // Start of the plan: the bucket-plan money sits in its target split.
@@ -457,8 +425,6 @@ export function runPlan(P, opts = {}) {
     const rI = path ? path.income[i] : planReturns.income;
     const rE = path ? path.equities[i] : planReturns.equities;
     const bucketsBefore = B.preservation + B.income + B.equities;
-    const gainI = B.income * rI; // this year's gains, for the late-life sweep
-    const gainE = B.equities * rE;
     B.preservation *= 1 + rP;
     B.income *= 1 + rI;
     B.equities *= 1 + rE;
@@ -534,29 +500,12 @@ export function runPlan(P, opts = {}) {
     // safe buckets toward next year's targets first.
     const managedNow = Math.max(0, sumOf(false));
     const delta = managedNow - (B.preservation + B.income + B.equities);
-    const next = i + 1;
-    const yearsLeft = years - next;
-    const phase = yearsLeft > s.buckets.incomeThroughYear ? "long" : yearsLeft > s.buckets.preservationYears ? "income" : "final";
-    const { targets } = splitAt(next, managedNow);
+    const { targets } = splitAt(i + 1, managedNow);
     if (delta < 0) drawFromBuckets(B, -delta);
-    else if (delta > 0) addToBuckets(B, delta, targets, phase === "long" ? "equities" : "preservation");
+    else if (delta > 0) addToBuckets(B, delta, targets);
 
-    // 4. Refill and late-life sweep.
-    if (phase === "long") {
-      // Plenty of years left: after a year equities didn't fall, reset to targets.
-      if (rE >= 0) B = allocate(managedNow, targets);
-    } else {
-      // Fewer years left than the high income cutoff: nothing is sold to
-      // rebalance; this year's equity gains move to capital preservation. In
-      // the final capital-preservation years, high income's gains move too.
-      moveToPreservation(B, "equities", gainE);
-      if (phase === "final") moveToPreservation(B, "income", gainI);
-      // Still refill a short safe bucket after a year equities didn't fall.
-      if (rE >= 0) {
-        topUp(B, "preservation", targets.preservation, ["equities", "income"]);
-        if (phase === "income") topUp(B, "income", targets.income, ["equities"]);
-      }
-    }
+    // 4. Refill: after a year equities didn't fall, reset to next year's targets.
+    if (rE >= 0) B = allocate(managedNow, targets);
 
     bal = (sumOf(false) + sumOf(true)) / deflators[i + 1];
     balances[i + 1] = bal;

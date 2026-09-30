@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { simulate, prepare, runPlan, EARLY_WITHDRAWAL_START_AGE, rmdStartAge, rmdDivisor } from "../src/engine/simulate.mjs";
 import { monteCarlo, makePaths, runFutures, gapToTarget, drawReturn } from "../src/engine/montecarlo.mjs";
 import { goalMet } from "../src/engine/solver.mjs";
-import { pvFactor, bucketTargets, allocate, bucketFor, shares, surplusShares } from "../src/engine/buckets.mjs";
+import { pvFactor, bucketTargets, allocate, bucketFor, shares } from "../src/engine/buckets.mjs";
 import { placeholderState } from "../src/model/placeholder.mjs";
 import { newAccount, newBuckets, newTaxes, validate } from "../src/model/schema.mjs";
 
@@ -287,29 +287,18 @@ test("bucketFor and pvFactor follow the time-based rule (hand-computed)", () => 
   near(pvFactor(20, b, r), 1 / (1.025 ** 8 * 1.055 ** 7 * 1.095 ** 5), "20 years out: 5 in equities, 7 in high income, 8 in preservation", 1e-12);
 });
 
-test("allocate: safe buckets hold exactly their targets; extra money follows the glide; a shortfall scales every bucket", () => {
+test("allocate: safe buckets hold exactly their targets; extra money goes to equities", () => {
   // Cutoffs 2 / 4, all returns 0 → each bucket's target is just the sum of its needs.
   const b = { ...newBuckets(), preservationYears: 2, incomeThroughYear: 4 };
   const needs = [10, 10, 10, 10, 10, 10].map((x) => x * 1000);
   const factors = [0, 1, 1, 1, 1, 1, 1];
   const targets = bucketTargets(needs, 0, factors, b);
   assert.deepEqual(targets, { preservation: 20_000, income: 20_000, equities: 20_000 });
-  assert.deepEqual(allocate(90_000, targets), { preservation: 20_000, income: 20_000, equities: 50_000 }, "extra money defaults to equities");
-  assert.deepEqual(allocate(90_000, targets, { preservation: 0.5, income: 0.5, equities: 0 }), { preservation: 35_000, income: 35_000, equities: 20_000 }, "or follows the shares given");
+  assert.deepEqual(allocate(90_000, targets), { preservation: 20_000, income: 20_000, equities: 50_000 }, "extra money goes to equities");
   assert.deepEqual(allocate(0, targets), { preservation: 0, income: 0, equities: 0 });
   assert.deepEqual(allocate(5_000, { preservation: 0, income: 0, equities: 0 }), { preservation: 0, income: 0, equities: 5_000 }, "no withdrawals ahead → all equities");
   // Standing at year 3, only years 3..5 remain: 20k preservation, 10k income.
   assert.deepEqual(bucketTargets(needs, 3, factors, b), { preservation: 20_000, income: 10_000, equities: 0 });
-});
-
-test("surplusShares: extra money goes to equities with >15 years left, high income with 9–15, capital preservation with 8 or fewer", () => {
-  const b = newBuckets(); // 8 / 15
-  assert.deepEqual(surplusShares(30, b), { preservation: 0, income: 0, equities: 1 });
-  assert.deepEqual(surplusShares(16, b), { preservation: 0, income: 0, equities: 1 });
-  assert.deepEqual(surplusShares(15, b), { preservation: 0, income: 1, equities: 0 });
-  assert.deepEqual(surplusShares(9, b), { preservation: 0, income: 1, equities: 0 });
-  assert.deepEqual(surplusShares(8, b), { preservation: 1, income: 0, equities: 0 });
-  assert.deepEqual(surplusShares(1, b), { preservation: 1, income: 0, equities: 0 });
 });
 
 test("allocate fills in order: capital preservation, then high income, then equities", () => {
@@ -318,25 +307,18 @@ test("allocate fills in order: capital preservation, then high income, then equi
   assert.deepEqual(allocate(15_000, targets), { preservation: 15_000, income: 0, equities: 0 });
 });
 
-test("a well-funded plan keeps capital preservation at its fixed cushion; late in the plan, gains move to it instead of selling", () => {
+test("a well-funded plan keeps capital preservation at its fixed cushion, all the way to the end", () => {
   // Retired at 60 with far more than needed: capital preservation holds the
-  // next 8 years of withdrawals only (a modest share), equities hold the rest.
-  // With 15 or fewer years left, equities stop growing (their gains move to
-  // capital preservation) but aren't sold; in the last 8, high income's gains move too.
+  // next 8 years of withdrawals only (a modest share), equities hold the rest,
+  // and that doesn't change late in the plan.
   const s = flat({ age: 60, years: 35, returnPct: 5, spendMonthly: 4000, accounts: [newAccount({ name: "b", type: "taxable", balance: 5_000_000 })] });
   const sim = simulate(s);
   const first = sim.rows[0].mix;
   near(sim.startMix.preservation, 48_000 * (1 / 1.05 + 1 / 1.05 ** 2 + 1 / 1.05 ** 3 + 1 / 1.05 ** 4 + 1 / 1.05 ** 5 + 1 / 1.05 ** 6 + 1 / 1.05 ** 7 + 1 / 1.05 ** 8), "exactly 8 years of withdrawals", 1e-6);
   assert.ok(first.preservation < 0.1 && first.equities > 0.8, "a small cushion; the rest is long-term money");
-  // Equities in dollars (nominal): share × balance × inflation factor (inflation is 0 here).
-  const eqDollars = (/** @type {any} */ r, /** @type {number} */ k) => sim.path[k].bal * r.mix.equities;
-  const late = sim.rows.map((r, k) => ({ r, k })).filter(({ r }) => r.age > 60 + 35 - 15);
-  for (let j = 1; j < late.length; j++) {
-    near(eqDollars(late[j].r, late[j].k), eqDollars(late[j - 1].r, late[j - 1].k), `equities held steady at age ${late[j].r.age} (not sold, not grown)`, 1);
-  }
-  assert.ok((late.at(-1)?.r.mix.equities ?? 0) > 0.2, "equities are never sold off late in the plan");
-  const cp = late.map(({ r }) => r.mix.preservation);
-  assert.ok(cp.every((x, j) => j === 0 || x >= cp[j - 1] - 1e-9), "capital preservation's share only grows late in the plan");
+  for (const r of sim.rows) assert.ok(r.mix.equities > 0.8, `still mostly equities at age ${r.age}`);
+  const last = sim.rows.at(-1);
+  near(last.mix.preservation * (last.bal + 48_000) / 1.05, 48_000 / 1.05, "the final year: just that year's withdrawal is in capital preservation", 1);
 });
 
 test("the year's return is the split-weighted blend of the bucket returns", () => {
@@ -550,59 +532,22 @@ test("after a DOWN year for equities, nothing is sold to refill: spending comes 
   near(res.rows[2].mix.preservation, 1, "refilled after the up year", 1e-9);
 });
 
-test("with many years left, an UP year for equities refills the buckets to their targets", () => {
-  // Cutoffs 1 / 1 so year 1's vantage point (2 years left) is still "long".
-  const s = threeYears();
-  s.buckets.incomeThroughYear = 1;
-  const P = prepare(s);
-  // Targets today: 12k preservation (year 1), 24k equities (years 2–3).
-  // Year 0: equities +10% → 12 / 0 / 26.4; withdraw 12 from preservation → 0 / 0 / 26.4,
-  // refill for year 1 (targets 12 / 0 / 12, extra → equities) → 12 / 0 / 14.4.
-  const res = runPlan(P, { path: path([0.1, 0, 0]) });
-  near(res.rows[0].mix.equities, 24 / 36, "", 1e-9);
-  near(res.rows[1].mix.preservation, 12 / 26.4, "", 1e-9);
-  near(res.rows[1].mix.equities, 14.4 / 26.4, "", 1e-9);
-});
-
-test("with fewer years left than the high income cutoff, equity gains move to capital preservation; nothing is sold", () => {
-  const P = prepare(threeYears()); // cutoffs 1 / 2: at year 1 there are 2 years left
-  // Year 0: equities +10% → 12 / 12 / 13.2 (gain 1.2); withdraw 12 from preservation → 0 / 12 / 13.2.
-  // Sweep the 1.2 gain → 1.2 / 12 / 12; preservation is short of its 12 target, so after this
-  // up year it's topped up from equities → 12 / 12 / 1.2.
-  const res = runPlan(P, { path: path([0.1, 0, 0]) });
-  near(res.rows[1].mix.preservation, 12 / 25.2, "", 1e-9);
-  near(res.rows[1].mix.income, 12 / 25.2, "high income isn't raided", 1e-9);
-  near(res.rows[1].mix.equities, 1.2 / 25.2, "", 1e-9);
-});
-
-test("once capital preservation is full late in the plan, only GAINS move; principal stays put", () => {
-  // 3-year plan, cutoffs 1 / 2, plenty of money: $100k beyond the need sits in equities.
+test("after an UP year for equities, the buckets are refilled to their targets, late in the plan too; extra money stays in equities", () => {
+  // 3-year plan, cutoffs 1 / 2, $100k beyond the need.
   const s = threeYears();
   s.accounts[0].balance = 136_000;
   const P = prepare(s);
-  // Year 0: preservation 12, income 12, equities 112 (12 needed + 100 extra); equities +10% (gain 11.2).
-  // Withdraw 12 from preservation → 0 / 12 / 123.2. Sweep 11.2 → 11.2 / 12 / 112. Top preservation
-  // up to its 12 target from equities → 12 / 12 / 111.2.
-  const res = runPlan(P, { path: path([0.1, 0, 0]) });
-  const total = 135.2;
-  near(res.rows[1].mix.preservation, 12 / total, "", 1e-9);
-  near(res.rows[1].mix.income, 12 / total, "", 1e-9);
-  near(res.rows[1].mix.equities, 111.2 / total, "equities keep their principal", 1e-9);
-});
-
-test("in the final capital-preservation years, high income's gains move to capital preservation too", () => {
-  const s = threeYears();
-  s.accounts[0].balance = 136_000;
-  const P = prepare(s);
-  // Year 1 (1 year left after it, the final phase): high income +5% → its gain moves to preservation.
+  // Year 0: 12 / 12 / 112, equities +10% → 12 / 12 / 123.2; withdraw 12 → 0 / 12 / 123.2;
+  // refill for year 1 (targets 12 / 12, rest equities) → 12 / 12 / 111.2.
+  // Year 1: high income +5% → 12 / 12.6 / 111.2; withdraw 12 → 0 / 12.6 / 111.2;
+  // refill for year 2 (target 12 preservation, rest equities) → 12 / 0 / 111.8.
   const res = runPlan(P, { path: path([0.1, 0, 0], [0, 0.05, 0]) });
-  // Start of year 1: 12 / 12 / 111.2. Growth: income 12.6 (gain 0.6), equities flat.
-  // Withdraw 12 from preservation → 0 / 12.6 / 111.2. Sweep income gain 0.6 → 0.6 / 12 / 111.2.
-  // Top preservation up to next year's 12 target from equities → 12 / 12 / 99.8.
-  const total = 123.8;
-  near(res.rows[2].mix.preservation, 12 / total, "", 1e-9);
-  near(res.rows[2].mix.income, 12 / total, "", 1e-9);
-  near(res.rows[2].mix.equities, 99.8 / total, "", 1e-9);
+  near(res.rows[1].mix.preservation, 12 / 135.2, "", 1e-9);
+  near(res.rows[1].mix.income, 12 / 135.2, "", 1e-9);
+  near(res.rows[1].mix.equities, 111.2 / 135.2, "", 1e-9);
+  near(res.rows[2].mix.preservation, 12 / 123.8, "", 1e-9);
+  near(res.rows[2].mix.income, 0, "", 1e-9);
+  near(res.rows[2].mix.equities, 111.8 / 123.8, "the extra stays in equities to the end", 1e-9);
 });
 
 test("with expected returns every year is an up year, so the plan rebalances yearly", () => {

@@ -421,7 +421,7 @@ function renderSplit(sim, gap) {
   } else if (dollars.preservation === 0 && dollars.income === 0) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {
-    note = "Capital preservation holds your next years of withdrawals and high income the years after that. Everything else is long-term money in global equities. Late in the plan, equity gains are moved into capital preservation each year instead of selling.";
+    note = "Capital preservation holds your next years of withdrawals and high income the years after that. Everything else is long-term money in global equities.";
   }
   if (own > 0) {
     note += ` Not included: ${fmtMoney(own)} in accounts held in their own fund. That money is counted as long-term money, so it lowers how much the plan needs in equities.`;
