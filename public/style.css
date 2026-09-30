@@ -562,7 +562,6 @@ button.linklike {
 .item.account[data-type="traditional_ira"] .not-ira-match,
 .item.account[data-type="roth_ira"] .not-ira-match { display: none; }
 
-.item.account:not([data-invest="own"]) .only-own { visibility: hidden; }
 .item.account .invest { margin-top: 10px; }
 .subhead .hint { text-transform: none; letter-spacing: 0; margin-left: 6px; }
 .inline-field { margin-bottom: 10px; }
@@ -575,7 +574,6 @@ button.linklike {
 
 /* while the simulation reruns after an edit, fade its numbers slightly */
 #results.mc-running #verdict, #results.mc-running #scenarioRows, #results.mc-running .kpi:not(.kpi3) { opacity: .6; transition: opacity .2s; }
-.item.account:not([data-invest="own"]) .only-own-row { display: none; }
 .item.account:not([data-type="traditional_ira"]):not([data-type="401k"]) .owner-row { display: none; }
 .item.account .owner-row { margin-top: 10px; }
 .item.account .rmd-note .hint { font-size: 12px; color: var(--dim); padding-top: 18px; }

@@ -10,7 +10,7 @@
 // .value / .textContent — never innerHTML.
 import { simulate } from "/engine/simulate.mjs";
 import { requiredSavings } from "/engine/solver.mjs";
-import { BUCKET_KEYS } from "/engine/buckets.mjs";
+import { BUCKET_KEYS, BUCKET_LABELS } from "/engine/buckets.mjs";
 import { validate, PLAN_TO_AGE_PRESETS, totalBalance } from "/model/schema.mjs";
 import { qs, el, setText, show } from "./ui/dom.mjs";
 import { mcVerdictCopy, expectedLine, fmtCompact, fmtMoney, fmtPct, gapCell, errorsText } from "./ui/verdict.mjs";
@@ -389,17 +389,14 @@ function renderMonteCarlo(results) {
 }
 
 /**
- * The recommended split: shares and dollars for the money you have today. When
- * there's a gap (to the success target), also say what each bucket would hold
- * with the gap closed.
- * @param {any} sim the expected-return run @param {any} gap the Monte Carlo gap, once known
+ * Fill one row of three bucket boxes and its bar with dollars per bucket.
+ * @param {Record<string, [string, string]>} ids @param {string} barSel
+ * @param {{preservation: number, income: number, equities: number}} dollars
+ * @returns {number} the total
  */
-function renderSplit(sim, gap) {
-  const dollars = sim.startMix;
+function fillSplitRow(ids, barSel, dollars) {
   const total = dollars.preservation + dollars.income + dollars.equities;
-  /** @type {Record<string, [string, string]>} */
-  const ids = { preservation: ["#kpiPres", "#kpiPresAmt"], income: ["#kpiInc", "#kpiIncAmt"], equities: ["#kpiEq", "#kpiEqAmt"] };
-  const bar = qs("#splitBar");
+  const bar = qs(barSel);
   bar.textContent = "";
   for (const k of BUCKET_KEYS) {
     const share = total > 0 ? dollars[k] / total : 0;
@@ -409,22 +406,42 @@ function renderSplit(sim, gap) {
     seg.style.width = `${share * 100}%`;
     bar.appendChild(seg);
   }
-  const own = sim.startOwn;
-  setText(qs("#splitHint"), own > 0 ? `of the ${fmtCompact(total)} in your three-bucket plan` : `of the ${fmtCompact(total)} you have today`);
+  return total;
+}
+
+/**
+ * The recommended split for the money you have today: the total asset
+ * allocation (everything, dedicated accounts included) and, when some accounts
+ * are dedicated to one bucket, the bucket plan allocation (how to invest the
+ * rest). When there's a gap (to the success target), also say what the bucket
+ * plan would hold with the gap closed.
+ * @param {any} sim the expected-return run @param {any} gap the Monte Carlo gap, once known
+ */
+function renderSplit(sim, gap) {
+  const plan = sim.startMix;
+  const ded = sim.startDedicated;
+  const dedTotal = ded.preservation + ded.income + ded.equities;
+  const all = { preservation: plan.preservation + ded.preservation, income: plan.income + ded.income, equities: plan.equities + ded.equities };
+  const grand = fillSplitRow({ preservation: ["#kpiPres", "#kpiPresAmt"], income: ["#kpiInc", "#kpiIncAmt"], equities: ["#kpiEq", "#kpiEqAmt"] }, "#splitBar", all);
+  setText(qs("#splitHint"), grand > 0 ? `of the ${fmtCompact(grand)} you have today` : "");
+  const total = fillSplitRow({ preservation: ["#planPres", "#planPresAmt"], income: ["#planInc", "#planIncAmt"], equities: ["#planEq", "#planEqAmt"] }, "#planBar", plan);
+  setText(qs("#planHint"), `how to invest the ${fmtCompact(total)} in bucket-plan accounts`);
+  show(qs("#planSplit"), dedTotal > 0);
 
   let note = "";
   if (!(total > 0)) {
     note = "Add your accounts to see a recommended split.";
   } else if (gap?.kind === "value") {
     const funded = simulate(state, {}, gap.amount).startMix;
-    note = `There's a gap. The buckets fill in order (capital preservation first), so any shortfall is in the later buckets. With the gap closed you'd hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
-  } else if (dollars.preservation === 0 && dollars.income === 0) {
+    note = `There's a gap. The buckets fill in order (capital preservation first), so any shortfall is in the later buckets. With the gap closed the bucket plan would hold ${fmtMoney(funded.preservation)} in capital preservation, ${fmtMoney(funded.income)} in high income, and ${fmtMoney(funded.equities)} in global equities.`;
+  } else if (all.preservation === 0 && all.income === 0) {
     note = "The plan doesn't need to withdraw anything in the years the safe buckets cover, so everything can sit in equities for now. That changes as withdrawals get closer.";
   } else {
     note = "Capital preservation holds your next years of withdrawals and high income the years after that. Everything else is long-term money in global equities.";
   }
-  if (own > 0) {
-    note += ` Not included: ${fmtMoney(own)} in accounts held in their own fund. That money is counted as long-term money, so it lowers how much the plan needs in equities.`;
+  if (dedTotal > 0) {
+    const parts = BUCKET_KEYS.filter((k) => ded[k] > 0).map((k) => `${fmtMoney(ded[k])} of ${BUCKET_LABELS[k].toLowerCase()}`);
+    note += ` Accounts dedicated to one bucket already hold ${parts.join(", ")}; the bucket plan allocation covers the rest.`;
   }
   setText(qs("#splitNote"), note);
 }
@@ -461,7 +478,6 @@ function renderGlide(sim) {
         pct(r.mix.preservation),
         pct(r.mix.income),
         pct(r.mix.equities),
-        el("td", { class: "num" }, r.ownBal > 0 ? fmtCompact(r.ownBal) : "—"),
         el("td", { class: "num dim" }, `${r.returnPct.toFixed(1)}%`),
         el("td", { class: r.bal < 0 ? "num neg" : "num" }, fmtCompact(r.bal))
       )

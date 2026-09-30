@@ -224,50 +224,66 @@ test("contributions rise with inflation when the increase is blank, and 0 years 
   assert.ok(validate(none).warnings.some((w) => w.path === "accounts[0].contributeYears"), "contributions with 0 years is flagged");
 });
 
-test("an own-fund account earns its own return and stays out of the split", () => {
-  // Bucket plan earns 0%; the 401(k) sits in its own fund at 7%. No spending.
+test("a dedicated account earns its bucket's return; the total and bucket plan splits are reported separately", () => {
+  // High income earns 6%, everything else 0%. No spending, so the bucket plan is all equities.
   const s = flat({
     accounts: [
       newAccount({ name: "Brokerage", type: "taxable", balance: 100_000 }),
-      newAccount({ name: "401k", type: "401k", balance: 50_000, invest: "own", ownReturnPct: 7 }),
+      newAccount({ name: "IRA", type: "traditional_ira", balance: 50_000, invest: "income" }),
     ],
   });
+  s.buckets.incomeReturnPct = 6;
   const sim = simulate(s);
-  near(sim.startOwn, 50_000);
-  const split = sim.startMix;
-  near(split.preservation + split.income + split.equities, 100_000, "the split covers only bucket-plan money");
-  near(sim.rows[0].bal, 100_000 + 50_000 * 1.07);
-  near(sim.rows[0].returnPct, ((150_000 + 3_500) / 150_000 - 1) * 100, "row return is for everything combined", 1e-9);
-  near(sim.rows[1].ownBal, 53_500);
+  assert.deepEqual(sim.startDedicated, { preservation: 0, income: 50_000, equities: 0 });
+  assert.deepEqual(sim.startMix, { preservation: 0, income: 0, equities: 100_000 }, "the bucket plan allocation covers only bucket-plan money");
+  near(sim.rows[0].mix.income, 50_000 / 150_000, "the row split is of ALL the money", 1e-12);
+  near(sim.rows[0].bal, 100_000 + 50_000 * 1.06);
+  near(sim.rows[0].returnPct, (3_000 / 150_000) * 100, "row return is for everything combined", 1e-9);
 });
 
-test("own-fund money counts as long-term: it reduces the equities target first", () => {
+test("dedicated money counts toward its bucket's target; the bucket plan fills what's left", () => {
   // Cutoffs 1 / 2, all returns 0, $12k/yr for 3 years → targets 12k / 12k / 12k.
   const s = flat({ spendMonthly: 1000, accounts: [newAccount({ name: "b", type: "taxable", balance: 36_000 })] });
-  s.buckets = { preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
+  s.buckets = { ...s.buckets, preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
   assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 });
-  // Add $12k in an own fund: it covers the equities need, so the bucket plan's
-  // targets become 12k / 12k / 0, and its extra $12k follows the glide: with
-  // 3 years left (more than the 2-year cutoff) extra money is all equities.
-  s.accounts.push(newAccount({ name: "401k", type: "401k", balance: 12_000, invest: "own", ownReturnPct: 0 }));
-  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 12_000 });
+  // An IRA dedicated to high income with $8k: the bucket plan needs only $4k more there.
+  s.accounts.push(newAccount({ name: "IRA", type: "traditional_ira", balance: 8_000, invest: "income" }));
+  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 4_000, equities: 20_000 });
+  // $20k dedicated: more than high income needs, so the plan puts nothing there.
+  s.accounts[1].balance = 20_000;
+  assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 0, equities: 24_000 });
+  // A dedicated equities account covers the equities need first.
+  s.accounts[1] = newAccount({ name: "401k", type: "401k", balance: 12_000, invest: "equities" });
   s.accounts[0].balance = 24_000;
   assert.deepEqual(simulate(s).startMix, { preservation: 12_000, income: 12_000, equities: 0 });
 });
 
-test("withdrawals use bucket-plan money before own-fund money of the same tax type", () => {
+test("within a tax type, spending comes from dedicated capital preservation, then the bucket plan, then dedicated high income, then dedicated equities", () => {
   const s = flat({
-    spendMonthly: 1000,
     accounts: [
-      newAccount({ name: "401k (own)", type: "401k", balance: 100_000, invest: "own", ownReturnPct: 0 }),
-      newAccount({ name: "IRA", type: "traditional_ira", balance: 15_000 }),
+      newAccount({ name: "EQ 401k", type: "401k", balance: 1, invest: "equities" }),
+      newAccount({ name: "HI IRA", type: "traditional_ira", balance: 1, invest: "income" }),
+      newAccount({ name: "IRA", type: "traditional_ira", balance: 1 }),
+      newAccount({ name: "CP IRA", type: "traditional_ira", balance: 1, invest: "preservation" }),
+      newAccount({ name: "Brokerage", type: "taxable", balance: 1, invest: "equities" }),
     ],
   });
-  const sim = simulate(s);
-  // Year 0 takes $12k from the IRA; year 1 takes the IRA's last $3k then $9k from the 401(k).
-  near(sim.rows[0].ownBal, 100_000);
-  near(sim.rows[1].ownBal, 100_000, "own fund untouched in year 0");
-  near(sim.rows[2].ownBal, 91_000);
+  const P = prepare(s);
+  const order = P.withdrawOrder.map((k) => `${P.holdings[k].pool}:${P.holdings[k].bucket ?? "plan"}`);
+  assert.deepEqual(order, ["taxable:plan", "taxable:equities", "deferred:preservation", "deferred:plan", "deferred:plan", "deferred:income", "deferred:equities", "roth:plan"]);
+
+  // In dollars: $12k/yr from $5k dedicated capital preservation, $10k bucket plan, $100k dedicated equities.
+  const t = flat({ spendMonthly: 1000, accounts: [
+    newAccount({ name: "EQ", type: "traditional_ira", balance: 100_000, invest: "equities" }),
+    newAccount({ name: "plan", type: "traditional_ira", balance: 10_000 }),
+    newAccount({ name: "CP", type: "traditional_ira", balance: 5_000, invest: "preservation" }),
+  ] });
+  const sim = simulate(t);
+  // Start of year 1: CP gone, plan has $3k left, equities untouched → 3k plan of 103k.
+  near(sim.path[1].bal, 103_000, "year 0: $5k dedicated capital preservation, then $7k of the plan");
+  assert.ok(sim.rows[1].mix.equities >= 100_000 / 103_000 - 1e-12, "dedicated equities untouched");
+  near(sim.rows[2].mix.preservation + sim.rows[2].mix.income, 0, "year 2: only dedicated equities remain", 1e-12);
+  near(sim.path[2].bal, 91_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -517,7 +533,7 @@ function threeYears() {
 }
 /** A hand-made return path. */
 function path(eq, inc = eq.map(() => 0), pres = eq.map(() => 0)) {
-  return { preservation: Float64Array.from(pres), income: Float64Array.from(inc), equities: Float64Array.from(eq), own: [] };
+  return { preservation: Float64Array.from(pres), income: Float64Array.from(inc), equities: Float64Array.from(eq) };
 }
 
 test("after a DOWN year for equities, nothing is sold to refill: spending comes from capital preservation, then high income", () => {
@@ -583,7 +599,6 @@ test("simulated futures are repeatable: the same inputs give the same answer", (
 test("with no swings, every simulated future is the expected-return plan", () => {
   const s = state();
   s.buckets = { ...s.buckets, preservationVolPct: 0, incomeVolPct: 0, equitiesVolPct: 0 };
-  s.accounts = s.accounts.map((a) => ({ ...a, ownVolPct: 0, owner: "self" }));
   const expected = simulate(s);
   const mc = monteCarlo(s, {}, { runs: 20 });
   assert.equal(mc.successRate, goalMet(s, expected) ? 1 : 0);
@@ -739,8 +754,8 @@ test("a spouse's account follows the spouse's age, then the survivor's after a d
   assert.deepEqual(mine.rows.slice(0, 3).map((r) => r.rmd), [0, 0, 0]);
 });
 
-test("RMD money from an own-fund 401(k) lands in the bucket plan", () => {
-  const s = flat({ age: 75, years: 1, accounts: [newAccount({ name: "401k", type: "401k", balance: 246_000, invest: "own", ownReturnPct: 0 })] });
+test("RMD money from a dedicated 401(k) lands in the bucket plan", () => {
+  const s = flat({ age: 75, years: 1, accounts: [newAccount({ name: "401k", type: "401k", balance: 246_000, invest: "equities" })] });
   const sim = simulate(s);
   near(sim.rows[0].rmd, 10_000);
   near(sim.path[1].bal, 246_000);

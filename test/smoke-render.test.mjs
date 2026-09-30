@@ -143,6 +143,11 @@ test("the app renders in a real browser (boot runs, verdict + rows paint, no fai
     await sleep(4000); // let the module graph load, fetch /api/state, and render
 
     const ev = async (expr) => (await client.send("Runtime.evaluate", { expression: expr, returnByValue: true })).result?.value;
+    // The simulated futures run in a worker; give a slow machine up to 20s more.
+    for (let waited = 0; waited < 20_000; waited += 500) {
+      if ((await ev('document.querySelectorAll("#scenarioRows > tr").length')) >= 2) break;
+      await sleep(500);
+    }
 
     const presetButtons = await ev('document.querySelectorAll("#agePresets button").length');
     const verdict = await ev('document.getElementById("verdictHeadline")?.textContent ?? ""');

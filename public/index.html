@@ -132,7 +132,7 @@
     <div class="footnote">
       <b>How each type is taxed when you take money out:</b> taxable brokerage pays capital-gains tax on the gain part of what you sell; traditional IRA and 401(k) pay ordinary income tax on the whole withdrawal (plus a 10% penalty before 59½); Roth IRA is tax-free.<br>
       <b>Cost basis</b> (taxable only) is what you paid in total. In Fidelity it's the "Cost Basis Total" on the Positions page. Leave it blank if you don't know it; that assumes no gain yet.<br>
-      <b>Invested in:</b> "Bucket plan" means this money follows the recommended split. "Own fund" is for money you leave alone, like a 401(k) in a target-date fund: it earns its own return (7% before inflation by default, a rough figure for a stock-heavy target-date fund), isn't part of the split, and counts as long-term money, so the rest of your accounts need less in equities.<br>
+      <b>Invested in:</b> "Bucket plan" means this money follows the bucket plan allocation. Choose a single bucket for an account you keep in one kind of investment (say, an IRA entirely in high income). It earns that bucket's return and swing, and it counts toward that bucket's target, so the bucket plan only covers what's left.<br>
       <b>Contributions</b> are money added from outside your take-home pay, like 401(k) payroll deferrals and the employer match, starting this year for the number of years you enter. Leftover income after spending is added to your taxable account automatically, so don't list it again here.
     </div>
   </section>
@@ -193,13 +193,23 @@
   </div>
 
   <section class="card">
-    <h2>Recommended split <span class="hint" id="splitHint">for your money today</span></h2>
+    <h2>Recommended split <span class="hint">for your money today</span></h2>
+    <div class="subhead">Total asset allocation <span class="hint" id="splitHint"></span></div>
     <div class="kpi kpi3">
       <div class="box bucket-preservation"><div class="v" id="kpiPres"></div><div class="amt" id="kpiPresAmt"></div><div class="l">capital preservation</div></div>
       <div class="box bucket-income"><div class="v" id="kpiInc"></div><div class="amt" id="kpiIncAmt"></div><div class="l">high income</div></div>
       <div class="box bucket-equities"><div class="v" id="kpiEq"></div><div class="amt" id="kpiEqAmt"></div><div class="l">global equities</div></div>
     </div>
     <div id="splitBar" class="splitbar" aria-hidden="true"></div>
+    <div id="planSplit" class="hidden">
+      <div class="subhead">Bucket plan allocation <span class="hint" id="planHint"></span></div>
+      <div class="kpi kpi3">
+        <div class="box bucket-preservation"><div class="v" id="planPres"></div><div class="amt" id="planPresAmt"></div><div class="l">capital preservation</div></div>
+        <div class="box bucket-income"><div class="v" id="planInc"></div><div class="amt" id="planIncAmt"></div><div class="l">high income</div></div>
+        <div class="box bucket-equities"><div class="v" id="planEq"></div><div class="amt" id="planEqAmt"></div><div class="l">global equities</div></div>
+      </div>
+      <div id="planBar" class="splitbar" aria-hidden="true"></div>
+    </div>
     <div class="footnote" id="splitNote"></div>
   </section>
 
@@ -208,10 +218,10 @@
   <section class="card">
     <h2>How the split changes as you age <span class="hint">base case, expected returns</span></h2>
     <table>
-      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Own funds</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
+      <thead><tr><th>Age</th><th class="num">Capital pres.</th><th class="num">High income</th><th class="num">Equities</th><th class="num">Return</th><th class="num">Balance</th></tr></thead>
       <tbody id="glideRows"></tbody>
     </table>
-    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Percentages are of the money in your three-bucket plan; "Own funds" and "Balance" are in today's dollars, and the return is for everything combined.</div>
+    <div class="footnote">Each year the buckets roll forward: the next years of withdrawals move into capital preservation, and the split is rebalanced. Percentages are of all your money, dedicated accounts included. "Balance" is in today's dollars, and the return is for everything combined.</div>
   </section>
 
   <section class="card">
@@ -258,16 +268,16 @@
       <div class="math-doc">
         <p><strong>Dollars.</strong> You enter amounts in today's dollars. The engine runs in actual future dollars: every cost and income rises at its own rate (or at inflation if you leave the rate blank). Every result is converted back to today's dollars, so $1M at age 80 means what $1M buys today.</p>
         <p><strong>Cash flow each year</strong> = income + Social Security − spending − healthcare. Social Security and healthcare rise with inflation. You and your spouse each live to the plan-to age; the plan runs until the younger of you reaches it, and the survivor keeps the larger Social Security check.</p>
-        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: the next years (through your capital preservation cutoff) to capital preservation, the following years (through your high income cutoff) to high income. Each is valued at what it costs today. The buckets fill in that order: capital preservation first, then high income, then everything else in equities. The same rule applies every year to the end of the plan; there is no separate late-life shift. Own-fund accounts (like a target-date 401(k)) aren't part of the split; they count as long-term money.</p>
-        <p><strong>Each year</strong>, in order: (1) every bucket and own fund earns its return, (2) contributions are added, (3) required minimum distributions come out of traditional IRAs and 401(k)s, then the year's cash flow lands. Leftover income (and RMD money the year doesn't need) is saved to the taxable account; a shortfall is withdrawn from accounts, and on the bucket side it comes out of capital preservation first, then high income. (4) <strong>Refilling:</strong> after a year equities rose, the buckets are reset to their targets. After a year equities fell, nothing is sold to refill; the plan keeps spending from the safe buckets and lets equities recover.</p>
-        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, bucket-plan money before own-fund money. Enough is taken to cover tax:</p>
+        <p><strong>The split.</strong> Every future withdrawal is assigned to a bucket by how far away it is: the next years (through your capital preservation cutoff) to capital preservation, the following years (through your high income cutoff) to high income. Each is valued at what it costs today. The buckets fill in that order: capital preservation first, then high income, then everything else in equities. The same rule applies every year to the end of the plan; there is no separate late-life shift. An account dedicated to one bucket counts toward that bucket's target, and the bucket plan fills whatever is left.</p>
+        <p><strong>Each year</strong>, in order: (1) every bucket earns its return (dedicated accounts move with their bucket), (2) contributions are added, (3) required minimum distributions come out of traditional IRAs and 401(k)s, then the year's cash flow lands. Leftover income (and RMD money the year doesn't need) is saved to the taxable account; a shortfall is withdrawn from accounts, and on the bucket side it comes out of capital preservation first, then high income. (4) <strong>Refilling:</strong> after a year equities rose, the bucket plan is reset to its targets; dedicated accounts are never moved. After a year equities fell, nothing is sold to refill; the plan keeps spending from the safe buckets and lets equities recover.</p>
+        <p><strong>Withdrawals and tax.</strong> Money comes out of the taxable account first, then traditional IRA / 401(k), then Roth; within each type, dedicated capital preservation accounts first, then the bucket plan, then dedicated high income, then dedicated equities. Enough is taken to cover tax:</p>
         <ul>
           <li><strong>Taxable</strong>: capital-gains rate × the gain share of what's sold. Gain share = (value − cost basis) ÷ value. Growth raises the value but not the basis, so the taxed share rises over time.</li>
           <li><strong>Traditional IRA / 401(k)</strong>: ordinary income rate on the whole amount, plus a 10% penalty before age 59½.</li>
           <li><strong>Roth</strong>: tax-free.</li>
         </ul>
         <p><strong>Required minimum distributions (RMDs).</strong> From the owner's RMD age (73 if born 1951–1959, 75 if born 1960 or later), each traditional IRA and 401(k) must pay out at least last year-end's balance ÷ the IRS Uniform Lifetime Table divisor for the owner's age (24.6 at 75, 20.2 at 80, 12.2 at 90). RMDs are taxed at the ordinary income rate and first pay for the year's spending; the rest is reinvested in the taxable account. When the owner dies, the survivor treats the account as their own, so RMDs follow the survivor's age. Roth IRAs have no RMDs.</p>
-        <p><strong>Simulated futures (Monte Carlo).</strong> The plan is run through 1,000 futures. In each, every year's return for each bucket is drawn at random: the expected return you entered is what money compounds at in a typical future, and the swing sets how bumpy the years are. Equities and high income tend to move together; capital preservation moves on its own; a target-date own fund follows equities closely. Inflation is fixed. The draws are repeatable, so the same inputs always give the same answer.</p>
+        <p><strong>Simulated futures (Monte Carlo).</strong> The plan is run through 1,000 futures. In each, every year's return for each bucket is drawn at random: the expected return you entered is what money compounds at in a typical future, and the swing sets how bumpy the years are. Equities and high income tend to move together; capital preservation moves on its own; a dedicated account moves exactly with its bucket. Inflation is fixed. The draws are repeatable, so the same inputs always give the same answer.</p>
         <p><strong>Chance of success</strong> is the share of futures that reach your goal (spend down to zero, leave an amount, or never drop below a floor) without running out. The <strong>gap</strong> is the smallest extra amount, invested today in the recommended split, that lifts the chance of success to your target. The <strong>50% / 80% / 90% outcomes</strong> are balances that half, 80%, and 90% of futures end at least as well as.</p>
         <p>The recommended split, the by-age table, and the year-by-year cash flow use the expected returns (every year exactly average), so they're easy to read.</p>
         <p class="dim"><strong>What it doesn't do (yet):</strong> no tax brackets (one effective rate each, and Social Security is treated as tax-free), rebalancing is treated as tax-free, and inflation doesn't vary.</p>
@@ -299,9 +309,11 @@
       <div class="field"><label>invested in</label>
         <select data-key="invest" aria-label="how this account is invested">
           <option value="buckets">Bucket plan</option>
-          <option value="own">Own fund</option>
+          <option value="preservation">Capital preservation only</option>
+          <option value="income">High income only</option>
+          <option value="equities">Global equities only</option>
         </select><div class="issue"></div></div>
-      <div class="field only-own"><label>its return %/yr, before inflation</label><input type="number" step="0.1" data-key="ownReturnPct"><div class="issue"></div></div>
+      <div class="field"></div>
     </div>
     <div class="grid2 owner-row">
       <div class="field only-deferred"><label>whose account</label>
@@ -310,10 +322,6 @@
           <option value="spouse">My spouse's</option>
         </select><div class="issue"></div></div>
       <div class="field only-deferred rmd-note"><div class="hint">Required minimum distributions start at 73 (born 1951–59) or 75 (born 1960+) for the owner.</div></div>
-    </div>
-    <div class="grid2 only-own-row">
-      <div class="field"></div>
-      <div class="field only-own"><label>its typical yearly swing %</label><input type="number" step="0.5" min="0" data-key="ownVolPct"><div class="issue"></div></div>
     </div>
     <div class="grid2x2 contrib">
       <div class="field"><label>your contribution $/yr</label><input type="number" data-key="contributionAnnual" placeholder="0"><div class="issue"></div></div>

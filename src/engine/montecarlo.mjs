@@ -11,8 +11,8 @@
 //     sets how far a year strays: in about 2 years out of 3 a bucket lands
 //     within one swing of its rate.
 //   - Global equities and high income tend to move together (correlation
-//     0.5); capital preservation moves on its own. An own-fund account (a
-//     target-date fund) follows equities closely (correlation 0.9).
+//     0.5); capital preservation moves on its own. A dedicated account moves
+//     exactly with its bucket.
 //   - Inflation is fixed.
 import { prepare, runPlan } from "./simulate.mjs";
 import { goalMet } from "./solver.mjs";
@@ -20,7 +20,6 @@ import { goalMet } from "./solver.mjs";
 export const MC_RUNS = 1000;
 export const MC_SEED = 20260928;
 export const EQUITY_INCOME_CORRELATION = 0.5;
-export const OWN_FUND_EQUITY_CORRELATION = 0.9;
 // The gap search's ceiling: more than $50M short is "unreachable".
 export const MC_GAP_CAP = 50_000_000;
 export const MC_GAP_ROUND_TO = 1000;
@@ -75,15 +74,12 @@ export function makePaths(P, opts = {}) {
   const runs = opts.runs ?? MC_RUNS;
   const z = normals(rng(opts.seed ?? MC_SEED));
   const b = P.s.buckets;
-  const own = P.holdings.filter((h) => h.own);
   const rho = EQUITY_INCOME_CORRELATION;
-  const rhoOwn = OWN_FUND_EQUITY_CORRELATION;
   const paths = [];
   for (let r = 0; r < runs; r++) {
     const pres = new Float64Array(P.years);
     const inc = new Float64Array(P.years);
     const eq = new Float64Array(P.years);
-    const ownRets = own.map(() => new Float64Array(P.years));
     for (let i = 0; i < P.years; i++) {
       const zEq = z();
       const zInc = rho * zEq + Math.sqrt(1 - rho * rho) * z();
@@ -91,12 +87,8 @@ export function makePaths(P, opts = {}) {
       eq[i] = drawReturn(b.equitiesReturnPct / 100, b.equitiesVolPct / 100, zEq);
       inc[i] = drawReturn(b.incomeReturnPct / 100, b.incomeVolPct / 100, zInc);
       pres[i] = drawReturn(b.preservationReturnPct / 100, b.preservationVolPct / 100, zPres);
-      own.forEach((h, k) => {
-        const zOwn = rhoOwn * zEq + Math.sqrt(1 - rhoOwn * rhoOwn) * z();
-        ownRets[k][i] = drawReturn(h.ownRate, h.ownVol, zOwn);
-      });
     }
-    paths.push({ preservation: pres, income: inc, equities: eq, own: ownRets });
+    paths.push({ preservation: pres, income: inc, equities: eq });
   }
   return paths;
 }

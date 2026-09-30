@@ -10,7 +10,11 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation, DEFAULT_OWN_RETURN_PCT, DEFAULT_OWN_VOL_PCT } from "./schema.mjs";
+import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation } from "./schema.mjs";
+
+// Old "own fund" defaults, used only by the rungs that created and then retired own funds.
+const DEFAULT_OWN_RETURN_PCT = 7;
+const DEFAULT_OWN_VOL_PCT = 15;
 
 export class MissingVersionError extends Error {
   constructor() {
@@ -333,6 +337,35 @@ function migrateV10(v10) {
   return { ...v10, schemaVersion: 11, accounts: arr(v10.accounts).map((/** @type {any} */ a) => ({ ...a, owner: a.owner ?? "self" })) };
 }
 
+/**
+ * v11 -> v12: "own fund" accounts (their own return and swing) are replaced by
+ * accounts dedicated to one bucket, which earn that bucket's return and count
+ * toward its target. Each own-fund account moves to the bucket whose swing is
+ * closest to its own (ties: the closest return); review the choice.
+ * @param {any} v11
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV11(v11) {
+  const b = { ...newBuckets(), ...(v11.buckets ?? {}) };
+  const options = /** @type {const} */ ([
+    ["preservation", b.preservationVolPct, b.preservationReturnPct],
+    ["income", b.incomeVolPct, b.incomeReturnPct],
+    ["equities", b.equitiesVolPct, b.equitiesReturnPct],
+  ]);
+  return {
+    ...v11,
+    schemaVersion: 12,
+    accounts: arr(v11.accounts).map((/** @type {any} */ a) => {
+      const { ownReturnPct, ownVolPct, ...rest } = a;
+      if (a.invest !== "own") return rest;
+      const vol = num(ownVolPct, DEFAULT_OWN_VOL_PCT);
+      const ret = num(ownReturnPct, DEFAULT_OWN_RETURN_PCT);
+      const best = [...options].sort((x, y) => Math.abs(x[1] - vol) - Math.abs(y[1] - vol) || Math.abs(x[2] - ret) - Math.abs(y[2] - ret))[0];
+      return { ...rest, invest: best[0] };
+    }),
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -346,6 +379,7 @@ const RUNGS = {
   8: migrateV8,
   9: migrateV9,
   10: migrateV10,
+  11: migrateV11,
 };
 
 /**

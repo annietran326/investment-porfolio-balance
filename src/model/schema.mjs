@@ -8,8 +8,9 @@
 //     "rises with inflation".
 //   - Money lives in accounts (taxable, traditional IRA, 401(k), Roth IRA). The
 //     account type decides how withdrawals are taxed. Each account is either
-//     invested in the household's three-bucket plan or held in its own fund
-//     (e.g. a target-date 401(k)) at its own return.
+//     invested in the household's three-bucket plan or dedicated to one bucket
+//     (e.g. an IRA held entirely in high income), which counts toward that
+//     bucket's target.
 //   - Spending lines carry an optional [fromYear, toYear] window (null = open).
 //   - The household is self (profile/social/health) plus `household.people` for a
 //     spouse and dependents. You and a spouse each live to the plan-to age;
@@ -17,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -34,7 +35,7 @@ export const BASE_YEAR = 2026;
  * @property {number} inflationPct the one inflation assumption, %/yr
  *
  * @typedef {"taxable"|"traditional_ira"|"401k"|"roth_ira"} AccountType
- * @typedef {"buckets"|"own"} AccountInvest
+ * @typedef {"buckets"|"preservation"|"income"|"equities"} AccountInvest
  * @typedef {Object} Account
  * @property {string} name
  * @property {AccountType} type
@@ -44,9 +45,8 @@ export const BASE_YEAR = 2026;
  * @property {number} employerMatchAnnual  employer match, $/yr in today's dollars
  * @property {number} contributeYears     how many more years contributions continue (0 = none), starting this year
  * @property {number|null} contributionGrowthPct how fast contributions rise, %/yr; null = with inflation
- * @property {AccountInvest} invest        "buckets" = part of the three-bucket plan; "own" = its own fund, left alone
- * @property {number} ownReturnPct         the own fund's return, %/yr before inflation (used when invest is "own")
- * @property {number} ownVolPct            the own fund's typical yearly swing (volatility), % (used when invest is "own")
+ * @property {AccountInvest} invest        "buckets" = follows the bucket plan's split; otherwise the one bucket this
+ *                                         account is dedicated to (it earns that bucket's return and counts toward its target)
  * @property {AccountOwner} owner          whose account it is; sets when required minimum distributions start (traditional IRA / 401(k))
  *
  * @typedef {"self"|"spouse"} AccountOwner
@@ -139,12 +139,8 @@ export const BASE_YEAR = 2026;
 const RATE_SANITY_ABS = 25;
 
 export const ACCOUNT_TYPES = /** @type {AccountType[]} */ (["taxable", "traditional_ira", "401k", "roth_ira"]);
-export const ACCOUNT_INVEST = /** @type {AccountInvest[]} */ (["buckets", "own"]);
+export const ACCOUNT_INVEST = /** @type {AccountInvest[]} */ (["buckets", "preservation", "income", "equities"]);
 export const ACCOUNT_OWNERS = /** @type {AccountOwner[]} */ (["self", "spouse"]);
-// A stock-heavy target-date fund's rough long-run return, before inflation.
-export const DEFAULT_OWN_RETURN_PCT = 7;
-// ...and its typical yearly swing: a little calmer than pure global equities.
-export const DEFAULT_OWN_VOL_PCT = 15;
 export const ACCOUNT_TYPE_LABELS = {
   taxable: "Taxable brokerage",
   traditional_ira: "Traditional IRA",
@@ -168,7 +164,7 @@ export function newAccount(o = {}) {
     name: o.name ?? "", type: o.type ?? "taxable", balance: o.balance ?? 0, costBasis: o.costBasis ?? null,
     contributionAnnual: o.contributionAnnual ?? 0, employerMatchAnnual: o.employerMatchAnnual ?? 0,
     contributeYears: o.contributeYears ?? 0, contributionGrowthPct: o.contributionGrowthPct ?? null,
-    invest: o.invest ?? "buckets", ownReturnPct: o.ownReturnPct ?? DEFAULT_OWN_RETURN_PCT, ownVolPct: o.ownVolPct ?? DEFAULT_OWN_VOL_PCT,
+    invest: o.invest ?? "buckets",
     owner: o.owner ?? "self",
   };
 }
@@ -428,8 +424,6 @@ export function validate(s) {
     requireNumberOrNull(errors, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
     warnIfExtremeRate(warnings, a.contributionGrowthPct, `${at}.contributionGrowthPct`);
     if (!ACCOUNT_INVEST.includes(a.invest)) add(errors, `${at}.invest`, `must be one of ${ACCOUNT_INVEST.join(", ")}`);
-    if (requireNumber(errors, a.ownReturnPct, `${at}.ownReturnPct`)) warnIfExtremeRate(warnings, a.ownReturnPct, `${at}.ownReturnPct`);
-    if (requireNumber(errors, a.ownVolPct, `${at}.ownVolPct`) && (a.ownVolPct < 0 || a.ownVolPct > 60)) add(errors, `${at}.ownVolPct`, "swing must be between 0 and 60%");
     if (!ACCOUNT_OWNERS.includes(a.owner)) add(errors, `${at}.owner`, `must be one of ${ACCOUNT_OWNERS.join(", ")}`);
     else if (a.owner === "spouse" && !(s.household?.people ?? []).some((p) => p.role === "spouse" && typeof p.currentAge === "number")) {
       add(warnings, `${at}.owner`, "no spouse with an age is set up under Household profile, so this account is treated as yours");

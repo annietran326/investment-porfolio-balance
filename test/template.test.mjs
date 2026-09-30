@@ -136,8 +136,8 @@ test("the committed template artifact parses clean (parser and template can't dr
 // ---------------------------------------------------------------------------
 
 test("round-trip: accounts, spouse + dependent, growing income, time-boxed spending, and simulation inputs survive export→reimport", () => {
-  // A state that touches every field: accounts of each kind (incl. an own
-  // fund), a time-boxed spending line, a household with a spouse (SS +
+  // A state that touches every field: accounts of each kind (incl. a dedicated
+  // account), a time-boxed spending line, a household with a spouse (SS +
   // healthcare) and a dependent with a support-cost window, and the
   // simulation's swings and success target.
   const state = defaultState();
@@ -148,9 +148,9 @@ test("round-trip: accounts, spouse + dependent, growing income, time-boxed spend
     { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5, variable: true }, // open-ended from a future year
   ];
   state.accounts = [
-    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
-    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "own", ownReturnPct: 6.5, ownVolPct: 12, owner: "self" },
-    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
+    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", owner: "self" },
+    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "equities", owner: "self" },
+    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", owner: "self" },
   ];
   state.economy.inflationPct = 3;
   state.simulation.targetSuccessPct = 85;
@@ -305,7 +305,7 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
   assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null, variable: true }]);
   assert.deepEqual(applied.accounts, [
-    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
+    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", owner: "self" },
   ]);
 });
 
@@ -347,18 +347,18 @@ test("empty nullable cells stay null (open / same as balance / with inflation), 
 test('coercion: "$1,200" → 1200, "25%" → 25, "1,200" → 1200, Excel percent format → plain number', () => {
   const parsed = parseTemplate(
     wbBuffer({
-      Accounts: [HEADERS.Accounts, ["IRA", "Traditional_IRA", "$1,200", null, "1,000", null, null, "25%", "OWN", null]],
+      Accounts: [HEADERS.Accounts, ["IRA", "Traditional_IRA", "$1,200", null, "1,000", null, null, "25%", "INCOME", null]],
       Spending: [HEADERS.Spending, ["food", "1,200"]],
     })
   );
   assert.deepEqual(parsed.perTab.accounts.errors, []);
   // Type/invest are case-insensitive; blank contribution-style cells → 0; blank
-  // basis/increase → null; a blank own-fund return is left out (the factory's 7% applies).
+  // basis/increase → null; a blank owner is left out (the factory's "self" applies).
   assert.deepEqual(parsed.perTab.accounts.rows[0], {
     name: "IRA", type: "traditional_ira", balance: 1200, costBasis: null, contributionAnnual: 1000,
-    employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: 25, invest: "own",
+    employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: 25, invest: "income",
   });
-  assert.equal(applyTabs(defaultState(), parsed, ["accounts"]).accounts[0].ownReturnPct, 7);
+  assert.equal(applyTabs(defaultState(), parsed, ["accounts"]).accounts[0].owner, "self");
   // Blank window cells → null; blank increase cell → null (with inflation).
   assert.deepEqual(parsed.perTab.spending.rows[0], { name: "food", monthly: 1200, fromYear: null, toYear: null, growthPct: null });
 

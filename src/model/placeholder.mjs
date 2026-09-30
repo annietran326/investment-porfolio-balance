@@ -2,7 +2,7 @@
 // run; NEVER written to disk until the user's first real edit (R13), since a
 // saved placeholder would pollute the trend line with fiction forever.
 // Shows off: one account of each type, a 401(k) still being contributed to
-// (in its own fund), a spouse, and a time-boxed dependent cost.
+// (held entirely in global equities), a spouse, and a time-boxed dependent cost.
 import { SCHEMA_VERSION, newBuckets, newEconomy, newTaxes, newSimulation } from "./schema.mjs";
 
 /** @returns {import("./schema.mjs").RunwayState} */
@@ -12,10 +12,10 @@ export function placeholderState() {
     profile: { currentAge: 45, endAge: 95, currentYear: 2026 },
     economy: newEconomy(),
     accounts: [
-      { name: "Example brokerage", type: "taxable", balance: 600_000, costBasis: 380_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
-      { name: "Example spouse's IRA", type: "traditional_ira", balance: 250_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "spouse" },
-      { name: "Example 401(k)", type: "401k", balance: 180_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 6_000, contributeYears: 10, contributionGrowthPct: null, invest: "own", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
-      { name: "Example Roth IRA", type: "roth_ira", balance: 40_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
+      { name: "Example brokerage", type: "taxable", balance: 600_000, costBasis: 380_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", owner: "self" },
+      { name: "Example spouse's IRA", type: "traditional_ira", balance: 250_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", owner: "spouse" },
+      { name: "Example 401(k)", type: "401k", balance: 180_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 6_000, contributeYears: 10, contributionGrowthPct: null, invest: "equities", owner: "self" },
+      { name: "Example Roth IRA", type: "roth_ira", balance: 40_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", owner: "self" },
     ],
     buckets: newBuckets(),
     taxes: newTaxes(),

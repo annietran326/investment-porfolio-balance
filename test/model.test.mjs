@@ -43,11 +43,9 @@ test("text in a numeric field is an error naming the path", () => {
 test("simulation inputs: swings 0–60%, success target 50–99%", () => {
   const s = placeholderState();
   s.buckets.equitiesVolPct = 70;
-  s.accounts[2].ownVolPct = -1;
   s.simulation.targetSuccessPct = 100;
   const paths = validate(s).errors.map((e) => e.path);
   assert.ok(paths.includes("buckets.equitiesVolPct"));
-  assert.ok(paths.includes("accounts[2].ownVolPct"));
   assert.ok(paths.includes("simulation.targetSuccessPct"));
   const ok = placeholderState();
   ok.buckets.preservationVolPct = 0; // a perfectly steady bucket is allowed
@@ -395,8 +393,8 @@ test("v6 → v7: contribute-until age becomes years; a 401(k) moves to its own f
   assert.equal(brk.contributeYears, 0, "no contributions → 0 years");
   assert.equal(k401.contributeYears, 6, "ages 45..50 → 6 years");
   assert.equal(roth.contributeYears, 11, "blank age meant 'until work-until age' (55) → ages 45..55");
-  assert.equal(k401.invest, "own");
-  assert.equal(k401.ownReturnPct, 7);
+  assert.equal(k401.invest, "equities", "the v7 own fund (15% swing) becomes a dedicated equities account in v12");
+  assert.ok(!("ownReturnPct" in k401));
   assert.equal(brk.invest, "buckets");
   assert.equal(roth.invest, "buckets");
   assert.ok(!("contributeUntilAge" in k401));
@@ -425,14 +423,14 @@ test("v8 → v9 drops rental properties, adds swings and the success target, and
     schemaVersion: 8,
     properties: [{ name: "Rental", rentMonthly: 2000, costsMonthly: 500, mortgageMonthly: 1000, payoffYear: 2040, saleYear: null, saleNetProceeds: null, rentGrowthPct: null, costsGrowthPct: null }],
     buckets: { preservationReturnPct: 2.5, incomeReturnPct: 5.5, equitiesReturnPct: 9.5, preservationYears: 8, incomeThroughYear: 15 },
-    accounts: base.accounts.map(({ ownVolPct, ...a }) => (void ownVolPct, a)),
+    accounts: base.accounts,
   };
   const { state, fromVersion } = migrate(v8);
   assert.equal(fromVersion, 8);
   assert.deepEqual(validate(state).errors, []);
   assert.ok(!("properties" in state));
   assert.deepEqual(state.buckets, newBuckets(), "old default returns → new defaults, swings added");
-  assert.ok(state.accounts.every((a) => a.ownVolPct === 15));
+  assert.ok(state.accounts.every((a) => !("ownVolPct" in a)));
   assert.deepEqual(state.simulation, newSimulation());
 
   const custom = { ...v8, buckets: { ...v8.buckets, equitiesReturnPct: 7.25 } };
@@ -479,4 +477,23 @@ test("an account owned by a spouse who isn't set up is flagged and treated as yo
   assert.ok(v.warnings.some((w) => w.path === "accounts[1].owner"));
   s.accounts[1].owner = /** @type {any} */ ("partner");
   assert.ok(validate(s).errors.some((e) => e.path === "accounts[1].owner"));
+});
+
+test("v11 → v12: own-fund accounts become dedicated to the bucket with the closest swing", () => {
+  const base = placeholderState();
+  const acct = (/** @type {any} */ o) => ({ ...base.accounts[0], ...o });
+  const v11 = {
+    ...base,
+    schemaVersion: 11,
+    accounts: [
+      acct({ name: "plan", invest: "buckets" }),
+      acct({ name: "target-date", invest: "own", ownReturnPct: 7, ownVolPct: 15 }),
+      acct({ name: "forced high income", invest: "own", ownReturnPct: 6, ownVolPct: 8 }),
+      acct({ name: "cash-like", invest: "own", ownReturnPct: 3, ownVolPct: 1 }),
+    ],
+  };
+  const { state } = migrate(v11);
+  assert.deepEqual(validate(state).errors, []);
+  assert.deepEqual(state.accounts.map((a) => a.invest), ["buckets", "equities", "income", "preservation"]);
+  assert.ok(state.accounts.every((a) => !("ownReturnPct" in a) && !("ownVolPct" in a)));
 });
