@@ -381,6 +381,17 @@ function migrateV12(v12) {
   };
 }
 
+/**
+ * v13 -> v14: capital preservation is shown in three layers (cash, short-term
+ * bonds, medium-term); the layer cutoffs are added at their defaults.
+ * @param {any} v13
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV13(v13) {
+  const d = newBuckets();
+  return { ...v13, schemaVersion: 14, buckets: { ...(v13.buckets ?? {}), cashYears: d.cashYears, shortBondYears: d.shortBondYears } };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -396,6 +407,7 @@ const RUNGS = {
   10: migrateV10,
   11: migrateV11,
   12: migrateV12,
+  13: migrateV13,
 };
 
 /**

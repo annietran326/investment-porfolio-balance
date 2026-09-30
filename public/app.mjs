@@ -150,7 +150,7 @@ function syncDerivedNotes() {
   if (typeof b.preservationYears === "number" && typeof b.incomeThroughYear === "number") {
     setText(
       qs("#bucketRuleNote"),
-      `Withdrawals in years 1–${b.preservationYears} sit in capital preservation, years ${b.preservationYears + 1}–${b.incomeThroughYear} in high income, and everything after year ${b.incomeThroughYear} in global equities. Money you need soonest is kept safe, so a market drop never forces you to sell stocks.`
+      `Withdrawals in years 1–${b.preservationYears} sit in capital preservation (shown as cash, short-term bonds and medium-term by the cutoffs above; one return and swing for all of it), years ${b.preservationYears + 1}–${b.incomeThroughYear} in high income, and everything after year ${b.incomeThroughYear} in global equities. Money you need soonest is kept safe, so a market drop never forces you to sell stocks.`
     );
   }
 }
@@ -412,6 +412,30 @@ function fillSplitRow(ids, barSel, dollars) {
 }
 
 /**
+ * Capital preservation's three layers under its box: cash, short-term bonds,
+ * medium-term, with the years each covers.
+ * @param {string} sel @param {{cash: number, short: number, medium: number}} layers
+ */
+function renderLayers(sel, layers) {
+  const box = qs(sel);
+  box.textContent = "";
+  const b = state.buckets;
+  const p = b.preservationYears;
+  const c = Math.min(b.cashYears, p);
+  const sh = Math.min(Math.max(b.shortBondYears, c), p);
+  const span = (/** @type {number} */ a, /** @type {number} */ z) => (a > z ? "" : a === z ? `yr ${a}` : `yrs ${a}–${z}`);
+  const rows = [
+    ["cash", span(1, c), layers.cash],
+    ["short-term", span(c + 1, sh), layers.short],
+    ["medium-term", span(sh + 1, p), layers.medium],
+  ];
+  for (const [label, years, amount] of rows) {
+    if (!years && !(Number(amount) > 0.5)) continue;
+    box.appendChild(el("div", {}, el("span", {}, `${label}${years ? ` (${years})` : ""}`), el("span", {}, fmtMoney(Number(amount)))));
+  }
+}
+
+/**
  * The recommended split for the money you have today: the total asset
  * allocation (everything, dedicated accounts included) and, when some accounts
  * are dedicated to one bucket, the bucket plan allocation (how to invest the
@@ -429,6 +453,8 @@ function renderSplit(sim, gap) {
   const total = fillSplitRow({ preservation: ["#planPres", "#planPresAmt"], income: ["#planInc", "#planIncAmt"], equities: ["#planEq", "#planEqAmt"] }, "#planBar", plan);
   setText(qs("#planHint"), sim.startPlanRetirement > 0.5 ? `how to invest the ${fmtCompact(total)} in bucket-plan accounts` : `how to invest the ${fmtCompact(total)} in your bucket-plan (taxable) accounts`);
   show(qs("#planSplit"), dedTotal > 0);
+  renderLayers("#kpiPresLayers", sim.startPresLayers.total);
+  renderLayers("#planPresLayers", sim.startPresLayers.plan);
 
   let note = "";
   if (!(total > 0)) {

@@ -582,3 +582,6 @@ button.linklike {
 .itemlist .item .head .variable-check { flex: 0 0 auto; font-size: 12px; color: var(--dim); white-space: nowrap; }
 .itemlist .item .head .variable-check input { flex: none; }
 .spend-more { margin-top: 12px; }
+
+.kpi .box .layers { margin-top: 6px; font: 12px var(--mono); color: var(--dim); display: grid; gap: 2px; }
+.kpi .box .layers div { display: flex; justify-content: space-between; gap: 8px; }

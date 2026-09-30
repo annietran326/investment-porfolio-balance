@@ -177,6 +177,10 @@ function ssAnnualOf(social) {
  *   for years before 59 1/2, which must be in taxable accounts (today's $)
  * @property {number} startPlanTaxable bucket-plan money in taxable accounts today (today's $)
  * @property {number} startPlanRetirement bucket-plan money in retirement accounts today (today's $)
+ * @property {{total: PresLayers, plan: PresLayers}} startPresLayers capital preservation today in layers (cash,
+ *   short-term bonds, medium-term), for all the money and for the bucket plan, soonest years first (today's $)
+ *
+ * @typedef {{cash: number, short: number, medium: number}} PresLayers
  * @property {number[]} earlyDeferredYears years a traditional IRA/401(k) was tapped before 59 1/2 (penalty applied)
  * @property {number[]} earlyRothYears    years the Roth was tapped before 59 1/2 (flag only)
  */
@@ -357,6 +361,7 @@ export function prepare(s, overlay = {}) {
     needs,
     targetsByYear,
     holdings,
+    factors,
     lateTargetsByYear,
     accessFrom,
     withdrawOrder,
@@ -520,6 +525,28 @@ export function runPlan(P, opts = {}) {
   const startBeforeAccess = { preservation: startCoverage.early.preservation, income: startCoverage.early.income };
   const startPlanTaxable = Math.max(0, holdings[0].v);
   const startPlanRetirement = Math.max(0, holdings[1].v + holdings[2].v + holdings[3].v);
+  // Capital preservation in three layers (display only): what each layer's
+  // years cost today, then the money filled in order, soonest years first.
+  const bk = s.buckets;
+  const pYears = bk.preservationYears;
+  const cashTo = Math.min(bk.cashYears ?? 0, pYears);
+  const shortTo = Math.min(Math.max(bk.shortBondYears ?? 0, cashTo), pYears);
+  const layerNeed = { cash: 0, short: 0, medium: 0 };
+  for (let t = 1; t <= pYears && t - 1 < P.needs.length; t++) {
+    const need = P.needs[t - 1];
+    if (!(need > 0)) continue;
+    layerNeed[t <= cashTo ? "cash" : t <= shortTo ? "short" : "medium"] += need * P.factors[t];
+  }
+  /** @param {number} amount */
+  const layersOf = (amount) => {
+    const cash = Math.min(Math.max(0, amount), layerNeed.cash);
+    const short = Math.min(Math.max(0, amount - cash), layerNeed.short);
+    return { cash, short, medium: Math.max(0, amount - cash - short) };
+  };
+  const startPresLayers = {
+    total: layersOf(B.preservation + startDedicated.preservation),
+    plan: layersOf(B.preservation),
+  };
 
   const balances = new Float64Array(years + 1);
   let bal = sumOf(false) + sumOf(true);
@@ -685,6 +712,7 @@ export function runPlan(P, opts = {}) {
     startBeforeAccess,
     startPlanTaxable,
     startPlanRetirement,
+    startPresLayers,
     earlyDeferredYears,
     earlyRothYears,
   };

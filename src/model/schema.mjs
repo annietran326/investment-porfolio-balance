@@ -18,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -61,6 +61,10 @@ export const BASE_YEAR = 2026;
  * @property {number} incomeReturnPct       high income return, %/yr (before inflation)
  * @property {number} equitiesReturnPct     global equities return, %/yr (before inflation)
  * @property {number} preservationYears     years 1..N of withdrawals held in capital preservation
+ * @property {number} cashYears             within capital preservation: years 1..C held as cash (display only;
+ *                                          capital preservation has one return and swing)
+ * @property {number} shortBondYears        within capital preservation: years C+1..S in short-term bonds; S+1..N are
+ *                                          medium-term (display only)
  * @property {number} incomeThroughYear     years N+1..M held in high income
  * @property {number} preservationVolPct    capital preservation's typical yearly swing (standard deviation), %
  * @property {number} incomeVolPct          high income's typical yearly swing, %
@@ -184,6 +188,9 @@ export function newBuckets() {
     // Expected returns before inflation, near 2026 professional forecasts
     // (e.g. J.P. Morgan global equities 7.0%, high yield ~6%, cash ~3.3%).
     preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15,
+    // Layers inside capital preservation (shown in the results only): cash for
+    // year 1, short-term bonds for years 2-4, medium-term for years 5-8.
+    cashYears: 1, shortBondYears: 4,
     // Typical yearly swings, a bit cautious vs. the 2024 Horizon Actuarial
     // survey averages (cash 1.1%, core bonds 5.9%, high yield 9.9%, US large
     // cap 16.5%, non-US developed 18.1%).
@@ -405,6 +412,13 @@ export function validate(s) {
   const pyOk = requireNumber(errors, b.preservationYears, "buckets.preservationYears");
   const iyOk = requireNumber(errors, b.incomeThroughYear, "buckets.incomeThroughYear");
   if (pyOk && b.preservationYears < 0) add(errors, "buckets.preservationYears", "can't be negative (0 = no capital preservation bucket)");
+  const cyOk = requireNumber(errors, b.cashYears, "buckets.cashYears");
+  const syOk = requireNumber(errors, b.shortBondYears, "buckets.shortBondYears");
+  if (cyOk && b.cashYears < 0) add(errors, "buckets.cashYears", "can't be negative");
+  if (cyOk && syOk && b.shortBondYears < b.cashYears) add(errors, "buckets.shortBondYears", `must be at least the cash years (${b.cashYears})`);
+  if (syOk && pyOk && b.shortBondYears > b.preservationYears) {
+    add(warnings, "buckets.shortBondYears", `capital preservation only covers ${b.preservationYears} years, so short-term bonds stop there`);
+  }
   if (pyOk && iyOk && b.incomeThroughYear < b.preservationYears) {
     add(errors, "buckets.incomeThroughYear", `must be at least the capital preservation years (${b.preservationYears})`);
   }

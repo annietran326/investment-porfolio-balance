@@ -265,7 +265,7 @@ test("default and placeholder states carry v6 sections that validate clean", () 
     assert.deepEqual(warnings, []);
   }
   assert.deepEqual(newBuckets(), {
-    preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15,
+    preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8, preservationYears: 8, incomeThroughYear: 15, cashYears: 1, shortBondYears: 4,
     preservationVolPct: 1, incomeVolPct: 8, equitiesVolPct: 17,
   });
   assert.deepEqual(newSimulation(), { targetSuccessPct: 90, spendMorePct: 20 });
@@ -513,4 +513,19 @@ test("v12 → v13: traditional IRAs in the bucket plan move to high income (the 
   const { state } = migrate(v12);
   assert.deepEqual(validate(state).errors, []);
   assert.deepEqual(state.accounts.map((a) => a.invest), ["income", "equities", "buckets", "buckets"]);
+});
+
+test("v13 → v14 adds the capital preservation layer cutoffs; validation keeps them in order", () => {
+  const base = placeholderState();
+  const { cashYears, shortBondYears, ...oldBuckets } = base.buckets;
+  void cashYears;
+  void shortBondYears;
+  const { state } = migrate({ ...base, schemaVersion: 13, buckets: oldBuckets });
+  assert.equal(state.buckets.cashYears, 1);
+  assert.equal(state.buckets.shortBondYears, 4);
+  assert.deepEqual(validate(state).errors, []);
+  state.buckets.shortBondYears = 0;
+  assert.ok(validate(state).errors.some((e) => e.path === "buckets.shortBondYears"));
+  state.buckets.shortBondYears = 10;
+  assert.ok(validate(state).warnings.some((w) => w.path === "buckets.shortBondYears"));
 });

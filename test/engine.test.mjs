@@ -860,3 +860,19 @@ test("topping up capital preservation from a dedicated IRA only covers years fro
   const total = res.path[1].bal;
   near(res.rows[1].mix.preservation * total, 60_000, "", 1e-6);
 });
+
+test("capital preservation is shown in three layers by year: cash, short-term bonds, medium-term", () => {
+  // Age 60, $12k/yr, 0% returns, cutoffs: cash year 1, short-term through 4, capital preservation through 8.
+  const s = flat({ age: 60, years: 25, spendMonthly: 1000, accounts: [newAccount({ name: "Brokerage", type: "taxable", balance: 1_000_000 })] });
+  const sim = simulate(s);
+  assert.deepEqual(sim.startPresLayers.plan, { cash: 12_000, short: 36_000, medium: 48_000 });
+  assert.deepEqual(sim.startPresLayers.total, sim.startPresLayers.plan);
+  // Short of money: the soonest layers fill first.
+  s.accounts[0].balance = 30_000;
+  assert.deepEqual(simulate(s).startPresLayers.plan, { cash: 12_000, short: 18_000, medium: 0 });
+  // A dedicated capital preservation IRA (59½+, so it counts) adds to the total; the plan's layers fill soonest first.
+  s.accounts = [newAccount({ name: "Brokerage", type: "taxable", balance: 1_000_000 }), newAccount({ name: "IRA", type: "traditional_ira", balance: 60_000, invest: "preservation" })];
+  const d = simulate(s);
+  assert.deepEqual(d.startPresLayers.total, { cash: 12_000, short: 36_000, medium: 48_000 });
+  assert.deepEqual(d.startPresLayers.plan, { cash: 12_000, short: 24_000, medium: 0 });
+});

@@ -118,8 +118,10 @@
     </div>
     <div class="footnote">The expected return is what money compounds at over the long run; the swing is how bumpy the individual years are. With equities at 8% and a 17% swing, about 2 years in 3 land between −8% and +26%, and about 1 year in 20 is −17% or worse. The simulation draws 1,000 possible futures this way; equities and high income tend to move together. Defaults are a little cautious vs. what investment firms use on average (cash 1.1%, core bonds 5.9%, high-yield bonds 9.9%, US stocks 16.5%, international stocks 18.1%).</div>
     <div class="subhead">Which years of withdrawals each bucket covers</div>
-    <div class="grid2">
-      <div class="field"><label for="f-presYears">Capital preservation: through year</label><input id="f-presYears" type="number" min="0" step="1" data-path="buckets.preservationYears"><div class="issue"></div></div>
+    <div class="grid2x2">
+      <div class="field"><label for="f-cashYears">Capital preservation, cash: through year</label><input id="f-cashYears" type="number" min="0" step="1" data-path="buckets.cashYears"><div class="issue"></div></div>
+      <div class="field"><label for="f-shortYears">Capital preservation, short-term bonds: through year</label><input id="f-shortYears" type="number" min="0" step="1" data-path="buckets.shortBondYears"><div class="issue"></div></div>
+      <div class="field"><label for="f-presYears">Capital preservation, medium-term: through year</label><input id="f-presYears" type="number" min="0" step="1" data-path="buckets.preservationYears"><div class="issue"></div></div>
       <div class="field"><label for="f-incYears">High income: through year</label><input id="f-incYears" type="number" min="0" step="1" data-path="buckets.incomeThroughYear"><div class="issue"></div></div>
     </div>
     <div class="footnote" id="bucketRuleNote">Money you'll need soonest sits in capital preservation, so a market drop never forces you to sell stocks. Global equities hold everything needed further out.</div>
@@ -197,7 +199,7 @@
     <h2>Recommended split <span class="hint">for your money today</span></h2>
     <div class="subhead">Total asset allocation <span class="hint" id="splitHint"></span></div>
     <div class="kpi kpi3">
-      <div class="box bucket-preservation"><div class="v" id="kpiPres"></div><div class="amt" id="kpiPresAmt"></div><div class="l">capital preservation</div></div>
+      <div class="box bucket-preservation"><div class="v" id="kpiPres"></div><div class="amt" id="kpiPresAmt"></div><div class="l">capital preservation</div><div class="layers" id="kpiPresLayers"></div></div>
       <div class="box bucket-income"><div class="v" id="kpiInc"></div><div class="amt" id="kpiIncAmt"></div><div class="l">high income</div></div>
       <div class="box bucket-equities"><div class="v" id="kpiEq"></div><div class="amt" id="kpiEqAmt"></div><div class="l">global equities</div></div>
     </div>
@@ -205,7 +207,7 @@
     <div id="planSplit" class="hidden">
       <div class="subhead">Bucket plan allocation <span class="hint" id="planHint"></span></div>
       <div class="kpi kpi3">
-        <div class="box bucket-preservation"><div class="v" id="planPres"></div><div class="amt" id="planPresAmt"></div><div class="l">capital preservation</div></div>
+        <div class="box bucket-preservation"><div class="v" id="planPres"></div><div class="amt" id="planPresAmt"></div><div class="l">capital preservation</div><div class="layers" id="planPresLayers"></div></div>
         <div class="box bucket-income"><div class="v" id="planInc"></div><div class="amt" id="planIncAmt"></div><div class="l">high income</div></div>
         <div class="box bucket-equities"><div class="v" id="planEq"></div><div class="amt" id="planEqAmt"></div><div class="l">global equities</div></div>
       </div>

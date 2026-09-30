@@ -132,6 +132,8 @@ export const TEMPLATE_DEF = {
         { key: "buckets.incomeReturnPct", type: "number", doc: "high income return %/yr, before inflation" },
         { key: "buckets.equitiesReturnPct", type: "number", doc: "global equities return %/yr, before inflation" },
         { key: "buckets.preservationYears", type: "number", doc: "years of withdrawals held in capital preservation (years 1 to N)" },
+        { key: "buckets.cashYears", type: "number", doc: "within capital preservation: years 1 to C as cash (shown in the results only)" },
+        { key: "buckets.shortBondYears", type: "number", doc: "within capital preservation: years C+1 to S in short-term bonds; the rest medium-term (shown in the results only)" },
         { key: "buckets.incomeThroughYear", type: "number", doc: "high income holds years N+1 through this year; equities hold the rest" },
         { key: "buckets.preservationVolPct", type: "number", doc: "capital preservation's typical yearly swing %, for the simulation" },
         { key: "buckets.incomeVolPct", type: "number", doc: "high income's typical yearly swing %" },
