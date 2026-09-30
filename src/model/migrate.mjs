@@ -366,6 +366,21 @@ function migrateV11(v11) {
   };
 }
 
+/**
+ * v12 -> v13: traditional IRAs in the bucket plan move to high income (the new
+ * default for traditional IRAs: ordinary-income withdrawals make them a
+ * natural home for income investments, not stocks). Review the choice.
+ * @param {any} v12
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV12(v12) {
+  return {
+    ...v12,
+    schemaVersion: 13,
+    accounts: arr(v12.accounts).map((/** @type {any} */ a) => (a.type === "traditional_ira" && a.invest === "buckets" ? { ...a, invest: "income" } : a)),
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -380,6 +395,7 @@ const RUNGS = {
   9: migrateV9,
   10: migrateV10,
   11: migrateV11,
+  12: migrateV12,
 };
 
 /**

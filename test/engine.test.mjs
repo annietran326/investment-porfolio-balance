@@ -263,7 +263,7 @@ test("within a tax type, spending comes from dedicated capital preservation, the
     accounts: [
       newAccount({ name: "EQ 401k", type: "401k", balance: 1, invest: "equities" }),
       newAccount({ name: "HI IRA", type: "traditional_ira", balance: 1, invest: "income" }),
-      newAccount({ name: "IRA", type: "traditional_ira", balance: 1 }),
+      newAccount({ name: "IRA", type: "traditional_ira", balance: 1, invest: "buckets" }),
       newAccount({ name: "CP IRA", type: "traditional_ira", balance: 1, invest: "preservation" }),
       newAccount({ name: "Brokerage", type: "taxable", balance: 1, invest: "equities" }),
     ],
@@ -275,7 +275,7 @@ test("within a tax type, spending comes from dedicated capital preservation, the
   // In dollars: $12k/yr from $5k dedicated capital preservation, $10k bucket plan, $100k dedicated equities.
   const t = flat({ spendMonthly: 1000, accounts: [
     newAccount({ name: "EQ", type: "traditional_ira", balance: 100_000, invest: "equities" }),
-    newAccount({ name: "plan", type: "traditional_ira", balance: 10_000 }),
+    newAccount({ name: "plan", type: "traditional_ira", balance: 10_000, invest: "buckets" }),
     newAccount({ name: "CP", type: "traditional_ira", balance: 5_000, invest: "preservation" }),
   ] });
   const sim = simulate(t);
@@ -293,7 +293,7 @@ test("within a tax type, spending comes from dedicated capital preservation, the
 test("when the bucket plan can't fill the safe buckets, money moves over from dedicated accounts after an up year (not after a down year)", () => {
   // Cutoffs 1 / 2, all returns 0, $12k/yr for 3 years → targets 12k / 12k / 12k.
   const s = flat({ spendMonthly: 1000, accounts: [
-    newAccount({ name: "IRA", type: "traditional_ira", balance: 12_000 }),
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 12_000, invest: "buckets" }),
     newAccount({ name: "401k", type: "401k", balance: 100_000, invest: "equities" }),
   ] });
   s.buckets = { ...s.buckets, preservationReturnPct: 0, incomeReturnPct: 0, equitiesReturnPct: 0, preservationYears: 1, incomeThroughYear: 2 };
@@ -787,4 +787,76 @@ test("RMD money from a dedicated 401(k) lands in the bucket plan", () => {
   const P = prepare(s);
   const res = runPlan(P);
   near(res.balances[1], 246_000);
+});
+
+// ---------------------------------------------------------------------------
+// retirement money before 59 1/2
+// ---------------------------------------------------------------------------
+
+test("retirement money only counts toward a bucket's years from its owner's 59½; earlier years must be taxable", () => {
+  // Age 50, cutoffs 8 / 15, $12k/yr from now on, 0% returns. Capital preservation
+  // covers ages 50–57 ($96k), high income ages 58–64 ($84k). An IRA dedicated to
+  // high income with $84k can only count for ages 59–64 ($72k).
+  const s = flat({ age: 50, years: 25, spendMonthly: 1000, accounts: [
+    newAccount({ name: "Brokerage", type: "taxable", balance: 500_000 }),
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 84_000 }),
+  ] });
+  assert.equal(s.accounts[1].invest, "income", "a traditional IRA defaults to high income");
+  const sim = simulate(s);
+  near(sim.startMix.preservation, 96_000, "all of capital preservation is before 59½");
+  near(sim.startMix.income, 12_000, "the age-58 year of high income still has to be in the brokerage");
+  assert.deepEqual(sim.startBeforeAccess, { preservation: 96_000, income: 12_000 });
+  near(sim.startPlanTaxable, 500_000);
+  near(sim.startPlanRetirement, 0);
+
+  // At 43 every capital preservation and high income year is before 59½: the IRA counts for none of them.
+  const young = flat({ age: 43, years: 40, spendMonthly: 1000, accounts: [
+    newAccount({ name: "Brokerage", type: "taxable", balance: 900_000 }),
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 84_000 }),
+  ] });
+  const y = simulate(young);
+  near(y.startMix.preservation, 96_000);
+  near(y.startMix.income, 84_000, "the brokerage holds all of high income");
+
+  // At 60 everything is reachable: the IRA covers high income in full.
+  const older = flat({ age: 60, years: 25, spendMonthly: 1000, accounts: [
+    newAccount({ name: "Brokerage", type: "taxable", balance: 500_000 }),
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 84_000 }),
+  ] });
+  near(simulate(older).startMix.income, 0);
+});
+
+test("a taxable account dedicated to a bucket counts toward every year", () => {
+  const s = flat({ age: 43, years: 40, spendMonthly: 1000, accounts: [
+    newAccount({ name: "Brokerage", type: "taxable", balance: 900_000 }),
+    newAccount({ name: "Brokerage HI", type: "taxable", balance: 84_000, invest: "income" }),
+  ] });
+  near(simulate(s).startMix.income, 0);
+});
+
+test("the early-withdrawal penalty follows the account owner's age", () => {
+  // You're 50; the only money is an IRA. Owned by your 60-year-old spouse: no penalty.
+  const s = flat({ age: 50, years: 1, spendMonthly: 1000, accounts: [newAccount({ name: "IRA", type: "traditional_ira", balance: 100_000, owner: "spouse" })] });
+  s.household.people = [spouseAged(60)];
+  const theirs = simulate(s);
+  near(theirs.rows[0].withdrawn, 12_000);
+  assert.deepEqual(theirs.earlyDeferredYears, []);
+  s.accounts[0].owner = "self";
+  const mine = simulate(s);
+  near(mine.rows[0].withdrawn, 12_000 / 0.9, "yours: 10% penalty");
+  assert.deepEqual(mine.earlyDeferredYears, [2026]);
+});
+
+test("topping up capital preservation from a dedicated IRA only covers years from 59½", () => {
+  // Age 55, cutoffs 8 / 15 → capital preservation covers ages 55–62: 4 years before 59½, 4 after.
+  // The bucket plan (a small brokerage) is empty after year 0; the IRA holds equities.
+  const s = flat({ age: 55, years: 20, spendMonthly: 1000, accounts: [
+    newAccount({ name: "Brokerage", type: "taxable", balance: 12_000 }),
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 500_000, invest: "equities" }),
+  ] });
+  const res = runPlan(prepare(s), { path: path(Array(20).fill(0)) });
+  // Start of year 1 (age 56): capital preservation covers ages 56–63; ages 59–63 (5 years, $60k)
+  // can come from the IRA, ages 56–58 can't. So capital preservation holds $60k.
+  const total = res.path[1].bal;
+  near(res.rows[1].mix.preservation * total, 60_000, "", 1e-6);
 });

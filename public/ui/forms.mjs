@@ -78,7 +78,11 @@ export function removeRow(state, kind, index) {
 /** @param {RunwayState} state @param {ListKind} kind @param {number} index @param {string} key @param {unknown} value */
 export function setRowValue(state, kind, index, key, value) {
   const next = structuredClone(state);
-  /** @type {any} */ (next[kind][index])[key] = value;
+  const row = /** @type {any} */ (next[kind][index]);
+  // An account switched to traditional IRA while still in the bucket plan takes
+  // the traditional IRA default (high income).
+  if (kind === "accounts" && key === "type" && value === "traditional_ira" && row.invest === "buckets") row.invest = "income"; // matches defaultInvest in schema.mjs
+  row[key] = value;
   return next;
 }
 

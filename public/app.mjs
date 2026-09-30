@@ -128,6 +128,8 @@ function syncAccountRows() {
     if (!row) return;
     row.dataset.type = a.type;
     row.dataset.invest = a.invest;
+    const investSel = /** @type {HTMLSelectElement|null} */ (row.querySelector('[data-key="invest"]'));
+    if (investSel && document.activeElement !== investSel && investSel.value !== a.invest) investSel.value = a.invest;
     const readout = row.querySelector('[data-readout="gainShare"]');
     if (readout) {
       const g = gainShareOf(a);
@@ -425,7 +427,7 @@ function renderSplit(sim, gap) {
   const grand = fillSplitRow({ preservation: ["#kpiPres", "#kpiPresAmt"], income: ["#kpiInc", "#kpiIncAmt"], equities: ["#kpiEq", "#kpiEqAmt"] }, "#splitBar", all);
   setText(qs("#splitHint"), grand > 0 ? `of the ${fmtCompact(grand)} you have today` : "");
   const total = fillSplitRow({ preservation: ["#planPres", "#planPresAmt"], income: ["#planInc", "#planIncAmt"], equities: ["#planEq", "#planEqAmt"] }, "#planBar", plan);
-  setText(qs("#planHint"), `how to invest the ${fmtCompact(total)} in bucket-plan accounts`);
+  setText(qs("#planHint"), sim.startPlanRetirement > 0.5 ? `how to invest the ${fmtCompact(total)} in bucket-plan accounts` : `how to invest the ${fmtCompact(total)} in your bucket-plan (taxable) accounts`);
   show(qs("#planSplit"), dedTotal > 0);
 
   let note = "";
@@ -441,13 +443,19 @@ function renderSplit(sim, gap) {
   }
   if (dedTotal > 0) {
     const parts = BUCKET_KEYS.filter((k) => ded[k] > 0).map((k) => `${fmtMoney(ded[k])} of ${BUCKET_LABELS[k].toLowerCase()}`);
-    note += ` Accounts dedicated to one bucket already hold ${parts.join(", ")}; the bucket plan allocation covers the rest.`;
+    note += ` Accounts dedicated to one bucket hold ${parts.join(", ")}. IRA, 401(k) and Roth money only counts toward years from its owner's 59½ on; the bucket plan allocation covers the rest.`;
     const short = sim.startSafeShort;
-    const canMove = ded.equities + ded.income;
-    if (short.preservation + short.income > 0.5 && canMove > 0) {
+    if (short.preservation + short.income > 0.5) {
       const needs = [short.preservation > 0.5 ? `${fmtMoney(short.preservation)} of capital preservation` : "", short.income > 0.5 ? `${fmtMoney(short.income)} of high income` : ""].filter(Boolean).join(" and ");
-      note += ` Your bucket-plan accounts can't fill the safe buckets on their own: they're short ${needs}. Consider moving that from your dedicated accounts into capital preservation / high income inside the same account (no tax inside an IRA or 401(k)). The simulation does this after the first year stocks don't fall.`;
+      note += ` Your bucket-plan accounts can't fill the safe buckets on their own: they're short ${needs}. Years before 59½ can only be covered with more taxable money; for later years you can switch investments inside a dedicated account (no tax inside an IRA or 401(k)), which the simulation does after the first year stocks don't fall.`;
     }
+  }
+  const before = sim.startBeforeAccess;
+  const beforeTotal = before.preservation + before.income;
+  if (beforeTotal > 0.5 && sim.startPlanRetirement > 0.5) {
+    const parts = [before.preservation > 0.5 ? `${fmtMoney(before.preservation)} of capital preservation` : "", before.income > 0.5 ? `${fmtMoney(before.income)} of high income` : ""].filter(Boolean).join(" and ");
+    note += ` Of the bucket plan, keep ${parts} in taxable accounts (your brokerage). That money covers years before 59½, when IRA and Roth money can't be spent without a penalty.`;
+    if (sim.startPlanTaxable + 0.5 < beforeTotal) note += ` Your bucket-plan taxable money (${fmtMoney(sim.startPlanTaxable)}) isn't enough for that.`;
   }
   setText(qs("#splitNote"), note);
 }

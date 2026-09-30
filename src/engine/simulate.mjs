@@ -23,6 +23,10 @@
 //       * a DEDICATED account sits in one bucket (e.g. an IRA held entirely
 //         in high income). It earns that bucket's return and counts toward
 //         that bucket's target, so the bucket plan only fills what's left.
+//   - Retirement accounts (traditional IRA, 401(k), Roth) can't be spent
+//     before 59 1/2 without a penalty, so their money only counts toward the
+//     part of a bucket's target for years the account's owner is 59 1/2 or
+//     older. Earlier years must be covered by taxable money.
 //
 // Each year, in order (pinned by tests):
 //   1. Every bucket (and each dedicated account, with its bucket) earns its return.
@@ -169,6 +173,10 @@ function ssAnnualOf(social) {
  * @property {Mix} startDedicated money already in dedicated accounts today, by bucket (today's $)
  * @property {{preservation: number, income: number}} startSafeShort how far the bucket plan alone falls short of
  *   the safe buckets' targets today (today's $); the simulation moves this from dedicated accounts after a good year
+ * @property {{preservation: number, income: number}} startBeforeAccess the part of the bucket plan's safe buckets
+ *   for years before 59 1/2, which must be in taxable accounts (today's $)
+ * @property {number} startPlanTaxable bucket-plan money in taxable accounts today (today's $)
+ * @property {number} startPlanRetirement bucket-plan money in retirement accounts today (today's $)
  * @property {number[]} earlyDeferredYears years a traditional IRA/401(k) was tapped before 59 1/2 (penalty applied)
  * @property {number[]} earlyRothYears    years the Roth was tapped before 59 1/2 (flag only)
  */
@@ -292,6 +300,17 @@ export function prepare(s, overlay = {}) {
   const factors = [0];
   for (let t = 1; t <= years; t++) factors.push(pvFactor(t, b, planReturns));
   const targetsByYear = Array.from({ length: years + 1 }, (_, i) => bucketTargets(needs, i, factors, b));
+  // Retirement-account money can be spent penalty-free from the year its owner
+  // starts at 59 or older (59 1/2 by mid-year). Each bucket's target for those
+  // years only, by owner:
+  const accessFrom = {
+    self: Math.max(0, EARLY_WITHDRAWAL_START_AGE - s.profile.currentAge),
+    spouse: Math.max(0, EARLY_WITHDRAWAL_START_AGE - /** @type {number} */ (sp0 ? sp0.currentAge : s.profile.currentAge)),
+  };
+  const lateTargetsByYear = Array.from({ length: years + 1 }, (_, i) => ({
+    self: bucketTargets(needs, i, factors, b, accessFrom.self),
+    spouse: bucketTargets(needs, i, factors, b, accessFrom.spouse),
+  }));
 
   // Holdings template (copied per run): bucket-plan money pooled by tax type
   // (tax-deferred split by owner, for RMDs), then one holding per dedicated account.
@@ -338,6 +357,8 @@ export function prepare(s, overlay = {}) {
     needs,
     targetsByYear,
     holdings,
+    lateTargetsByYear,
+    accessFrom,
     withdrawOrder,
     contribs,
     rmdDivisors,
@@ -389,7 +410,7 @@ function addToBuckets(B, amount, targets) {
  *   skips them for speed and reads `balances` instead).
  */
 export function runPlan(P, opts = {}) {
-  const { s, years, deflators, flows, targetsByYear, withdrawOrder, contribs, rmdDivisors, planIdx, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
+  const { s, years, deflators, flows, targetsByYear, lateTargetsByYear, accessFrom, withdrawOrder, contribs, rmdDivisors, planIdx, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
   const path = opts.path ?? null;
   const detail = opts.detail ?? true;
   const holdings = P.holdings.map((h) => ({ ...h }));
@@ -412,23 +433,59 @@ export function runPlan(P, opts = {}) {
     return m;
   };
   /**
-   * Move up to `amount` out of dedicated accounts (from the listed buckets, in
-   * order) into the bucket plan, inside the same account type (and owner).
-   * @param {BucketKey[]} from @param {number} amount @returns {number} moved
+   * How much of each bucket's target (at the start of year i) dedicated
+   * accounts cover. Taxable money counts toward the whole target; retirement
+   * money only toward the part for years its owner is 59 1/2 or older.
+   * @param {number} i
    */
-  const moveFromDedicated = (from, amount) => {
+  const coverage = (i) => {
+    const T = targetsByYear[i];
+    const late = lateTargetsByYear[i];
+    /** @type {Mix} */ const taxable = { preservation: 0, income: 0, equities: 0 };
+    const ret = { self: { preservation: 0, income: 0, equities: 0 }, spouse: { preservation: 0, income: 0, equities: 0 } };
+    for (const h of holdings) {
+      if (h.bucket === null || !(h.v > 0)) continue;
+      if (h.pool === "taxable") taxable[h.bucket] += h.v;
+      else ret[h.owner][h.bucket] += h.v;
+    }
+    /** @type {Mix} */ const covered = { preservation: 0, income: 0, equities: 0 };
+    /** @type {Mix} */ const retRoom = { preservation: 0, income: 0, equities: 0 };
+    /** @type {Mix} */ const early = { preservation: 0, income: 0, equities: 0 };
+    for (const k of BUCKETS) {
+      const lateMax = Math.max(late.self[k], late.spouse[k]);
+      const retCredit = Math.min(lateMax, Math.min(ret.self[k], late.self[k]) + Math.min(ret.spouse[k], late.spouse[k]));
+      covered[k] = taxable[k] + retCredit;
+      retRoom[k] = Math.max(0, lateMax - retCredit);
+      early[k] = Math.max(0, T[k] - lateMax - taxable[k]);
+    }
+    return { covered, retRoom, early };
+  };
+  /**
+   * Move up to `amount` out of dedicated accounts (from the listed buckets, in
+   * order; taxable accounts first) into the bucket plan, inside the same
+   * account type (and owner). At most `retCap` comes from retirement accounts.
+   * @param {BucketKey[]} from @param {number} amount @param {number} retCap @returns {number} moved
+   */
+  const moveFromDedicated = (from, amount, retCap) => {
     let moved = 0;
+    let retMoved = 0;
     for (const k of from) {
-      for (const h of holdings) {
-        if (h.bucket !== k || !(h.v > 0) || !(amount - moved > 1e-9)) continue;
-        const m = Math.min(h.v, amount - moved);
+      for (const pass of ["taxable", "retirement"]) {
+        for (const h of holdings) {
+          if (h.bucket !== k || !(h.v > 0) || !(amount - moved > 1e-9)) continue;
+          const isTaxable = h.pool === "taxable";
+          if ((pass === "taxable") !== isTaxable) continue;
+          const m = Math.min(h.v, amount - moved, isTaxable ? Infinity : Math.max(0, retCap - retMoved));
+          if (!(m > 0)) continue;
+          if (!isTaxable) retMoved += m;
         const to = holdings[planIdx(h)];
         const basisMoved = h.pool === "taxable" ? h.basis * (m / h.v) : 0;
-        h.basis -= basisMoved;
-        h.v -= m;
-        to.v += m;
-        to.basis += basisMoved;
-        moved += m;
+          h.basis -= basisMoved;
+          h.v -= m;
+          to.v += m;
+          to.basis += basisMoved;
+          moved += m;
+        }
       }
     }
     return moved;
@@ -439,11 +496,11 @@ export function runPlan(P, opts = {}) {
    */
   const splitAt = (/** @type {number} */ i, /** @type {number} */ total) => {
     const t = targetsByYear[i];
-    const ded = dedicatedMix();
+    const { covered } = coverage(i);
     const targets = {
-      preservation: Math.max(0, t.preservation - ded.preservation),
-      income: Math.max(0, t.income - ded.income),
-      equities: Math.max(0, t.equities - ded.equities),
+      preservation: Math.max(0, t.preservation - covered.preservation),
+      income: Math.max(0, t.income - covered.income),
+      equities: Math.max(0, t.equities - covered.equities),
     };
     return { split: allocate(total, targets), targets };
   };
@@ -453,10 +510,16 @@ export function runPlan(P, opts = {}) {
   let B = splitAt(0, Math.max(0, sumOf(false))).split;
   const startMix = { ...B };
   const startDedicated = dedicatedMix();
+  const startCoverage = coverage(0);
   const startSafeShort = {
-    preservation: Math.max(0, targetsByYear[0].preservation - startDedicated.preservation - B.preservation),
-    income: Math.max(0, targetsByYear[0].income - startDedicated.income - B.income),
+    preservation: Math.max(0, targetsByYear[0].preservation - startCoverage.covered.preservation - B.preservation),
+    income: Math.max(0, targetsByYear[0].income - startCoverage.covered.income - B.income),
   };
+  // The part of the bucket plan's safe buckets for years before 59 1/2: it has
+  // to sit in taxable accounts (the brokerage), not in an IRA or Roth.
+  const startBeforeAccess = { preservation: startCoverage.early.preservation, income: startCoverage.early.income };
+  const startPlanTaxable = Math.max(0, holdings[0].v);
+  const startPlanRetirement = Math.max(0, holdings[1].v + holdings[2].v + holdings[3].v);
 
   const balances = new Float64Array(years + 1);
   let bal = sumOf(false) + sumOf(true);
@@ -537,10 +600,11 @@ export function runPlan(P, opts = {}) {
       managedTaxable.basis += cash;
     } else {
       let short = -cash;
-      const early = f.age < EARLY_WITHDRAWAL_START_AGE;
       for (const idx of withdrawOrder) {
         const h = holdings[idx];
         if (!(short > 1e-9) || !(h.v > 0)) continue;
+        // Before the account owner's 59 1/2: a traditional IRA / 401(k) withdrawal is penalized.
+        const early = i < accessFrom[h.owner];
         let rate = 0;
         if (h.pool === "taxable") rate = Math.max(0, 1 - h.basis / h.v) * gainsRate;
         else if (h.pool === "deferred") rate = ordinaryRate + (early ? EARLY_WITHDRAWAL_PENALTY_PCT / 100 : 0);
@@ -571,10 +635,12 @@ export function runPlan(P, opts = {}) {
     if (rE >= 0) {
       B = allocate(managedNow, targets);
       const T = targetsByYear[i + 1];
-      const needP = T.preservation - dedicatedMix().preservation - B.preservation;
-      if (needP > 1e-9) B.preservation += moveFromDedicated(["equities", "income"], needP);
-      const needI = T.income - dedicatedMix().income - B.income;
-      if (needI > 1e-9) B.income += moveFromDedicated(["equities"], needI);
+      const cP = coverage(i + 1);
+      const needP = T.preservation - cP.covered.preservation - B.preservation;
+      if (needP > 1e-9) B.preservation += moveFromDedicated(["equities", "income"], needP, cP.retRoom.preservation);
+      const cI = coverage(i + 1);
+      const needI = T.income - cI.covered.income - B.income;
+      if (needI > 1e-9) B.income += moveFromDedicated(["equities"], needI, cI.retRoom.income);
     }
 
     bal = (sumOf(false) + sumOf(true)) / deflators[i + 1];
@@ -616,6 +682,9 @@ export function runPlan(P, opts = {}) {
     startMix,
     startDedicated,
     startSafeShort,
+    startBeforeAccess,
+    startPlanTaxable,
+    startPlanRetirement,
     earlyDeferredYears,
     earlyRothYears,
   };

@@ -81,12 +81,14 @@ export function pvFactor(t, b, r) {
  * @param {number} fromIdx    the year we're standing at the start of
  * @param {number[]} factors  factors[t] = pvFactor(t, ...) for t = 1..needs.length
  * @param {import("../model/schema.mjs").Buckets} b
+ * @param {number} [onlyFrom] count only withdrawals in year `onlyFrom` or later
+ *   (e.g. the years retirement-account money can be spent without a penalty)
  * @returns {BucketAmounts}
  */
-export function bucketTargets(needs, fromIdx, factors, b) {
+export function bucketTargets(needs, fromIdx, factors, b, onlyFrom = 0) {
   /** @type {BucketAmounts} */
   const out = { preservation: 0, income: 0, equities: 0 };
-  for (let j = fromIdx; j < needs.length; j++) {
+  for (let j = Math.max(fromIdx, onlyFrom); j < needs.length; j++) {
     const need = needs[j];
     if (!(need > 0)) continue;
     const t = j - fromIdx + 1;

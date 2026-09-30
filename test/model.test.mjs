@@ -497,3 +497,20 @@ test("v11 → v12: own-fund accounts become dedicated to the bucket with the clo
   assert.deepEqual(state.accounts.map((a) => a.invest), ["buckets", "equities", "income", "preservation"]);
   assert.ok(state.accounts.every((a) => !("ownReturnPct" in a) && !("ownVolPct" in a)));
 });
+
+test("v12 → v13: traditional IRAs in the bucket plan move to high income (the new default); others stay", () => {
+  const base = placeholderState();
+  const v12 = {
+    ...base,
+    schemaVersion: 12,
+    accounts: [
+      { ...base.accounts[0], name: "IRA in plan", type: "traditional_ira", invest: "buckets" },
+      { ...base.accounts[0], name: "IRA in equities", type: "traditional_ira", invest: "equities" },
+      { ...base.accounts[0], name: "401k in plan", type: "401k", invest: "buckets" },
+      { ...base.accounts[0], name: "Brokerage", type: "taxable", invest: "buckets" },
+    ],
+  };
+  const { state } = migrate(v12);
+  assert.deepEqual(validate(state).errors, []);
+  assert.deepEqual(state.accounts.map((a) => a.invest), ["income", "equities", "buckets", "buckets"]);
+});

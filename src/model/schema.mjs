@@ -18,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -48,6 +48,7 @@ export const BASE_YEAR = 2026;
  * @property {AccountInvest} invest        "buckets" = follows the bucket plan's split; otherwise the one bucket this
  *                                         account is dedicated to (it earns that bucket's return and counts toward its target)
  * @property {AccountOwner} owner          whose account it is; sets when required minimum distributions start (traditional IRA / 401(k))
+ *                                         and when the money can be spent without a penalty (59 1/2, retirement accounts)
  *
  * @typedef {"self"|"spouse"} AccountOwner
  *
@@ -158,13 +159,22 @@ export function newSpendingCategory(o = {}) {
 export function newIncome(o = {}) {
   return { name: o.name ?? "", annual: o.annual ?? 0, fromYear: o.fromYear ?? 0, toYear: o.toYear ?? 0, growthPct: o.growthPct ?? null };
 }
+/**
+ * Where a new account is invested by default: traditional IRAs in high income
+ * (their withdrawals are taxed as ordinary income, so they're a natural home
+ * for income investments rather than stocks); everything else in the bucket plan.
+ * @param {AccountType} type @returns {AccountInvest}
+ */
+export function defaultInvest(type) {
+  return type === "traditional_ira" ? "income" : "buckets";
+}
 /** @param {Partial<Account>} [o] @returns {Account} */
 export function newAccount(o = {}) {
   return {
     name: o.name ?? "", type: o.type ?? "taxable", balance: o.balance ?? 0, costBasis: o.costBasis ?? null,
     contributionAnnual: o.contributionAnnual ?? 0, employerMatchAnnual: o.employerMatchAnnual ?? 0,
     contributeYears: o.contributeYears ?? 0, contributionGrowthPct: o.contributionGrowthPct ?? null,
-    invest: o.invest ?? "buckets",
+    invest: o.invest ?? defaultInvest(o.type ?? "taxable"),
     owner: o.owner ?? "self",
   };
 }

@@ -570,6 +570,18 @@ test("account rows: add, change type, blank contributions read as $0", () => {
   assert.equal(s.accounts.length, placeholderState().accounts.length, "input never mutated");
 });
 
+test("switching a bucket-plan account to traditional IRA moves it to high income; an explicit choice is kept", () => {
+  const s = placeholderState();
+  let next = addRow(s, "accounts");
+  const i = next.accounts.length - 1;
+  next = setRowValue(next, "accounts", i, "type", "traditional_ira");
+  assert.equal(next.accounts[i].invest, "income");
+  next = setRowValue(next, "accounts", i, "invest", "equities");
+  next = setRowValue(next, "accounts", i, "type", "401k");
+  next = setRowValue(next, "accounts", i, "type", "traditional_ira");
+  assert.equal(next.accounts[i].invest, "equities", "a choice you made isn't overridden");
+});
+
 test("gainShareOf: taxable only; blank basis means no gain", () => {
   assert.equal(gainShareOf({ type: "taxable", balance: 100_000, costBasis: 60_000 }), 0.4);
   assert.equal(gainShareOf({ type: "taxable", balance: 100_000, costBasis: null }), 0);

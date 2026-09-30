@@ -58,7 +58,7 @@ export const TEMPLATE_DEF = {
         { header: "Contribute for how many more years", field: "contributeYears", type: "number", emptyZero: true, optional: true },
         { header: "Contribution increase %/yr (blank = inflation)", field: "contributionGrowthPct", type: "number", nullable: true, optional: true },
         { header: "Invested in (buckets, preservation, income, or equities)", field: "invest", type: "text", choices: ["buckets", "preservation", "income", "equities"], optional: true },
-        { header: "Owner (self or spouse; for RMDs)", field: "owner", type: "text", choices: ["self", "spouse"], optional: true },
+        { header: "Owner (self or spouse; for RMDs and 59½)", field: "owner", type: "text", choices: ["self", "spouse"], optional: true },
       ],
     },
     {
