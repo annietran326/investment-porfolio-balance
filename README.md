@@ -39,7 +39,7 @@ Open the printed `http://localhost:4207`. The app starts with obviously fake exa
 
 ### Known simplifications
 
-- **No required minimum distributions** (slightly optimistic). **No tax brackets**: one effective rate each. **Rebalancing is tax-free.** **Every bucket-plan account holds the same mix.** **Inflation doesn't vary.** Returns are lognormal, so real markets' occasional extreme years are somewhat more common than the model assumes. Income is entered after tax.
+- **Required minimum distributions** come out of traditional IRAs and 401(k)s from the owner's RMD age (73 if born 1951–1959, 75 if born 1960+), using the IRS Uniform Lifetime Table; money the year doesn't need is reinvested in the taxable account. **No tax brackets**: one effective rate each, and Social Security is treated as tax-free. **Rebalancing is tax-free.** **Every bucket-plan account holds the same mix.** **Inflation doesn't vary.** Returns are lognormal, so real markets' occasional extreme years are somewhat more common than the model assumes. Income is entered after tax.
 
 ## Privacy posture and threat model
 

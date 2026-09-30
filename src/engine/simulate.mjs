@@ -27,8 +27,10 @@
 // Each year, in order (pinned by tests):
 //   1. Every bucket and own fund earns its return for the year.
 //   2. Contributions land.
-//   3. The year's net cash flow lands: a surplus is saved to the taxable
-//      account; a shortfall is withdrawn from accounts (taxable, then
+//   3. Required minimum distributions come out of traditional IRAs and
+//      401(k)s (see below). Then the year's net cash flow lands, with the
+//      RMDs' after-tax money counted as cash on hand: a surplus is saved to
+//      the taxable account; a shortfall is withdrawn from accounts (taxable, then
 //      tax-deferred, then Roth; bucket-plan money before own-fund money),
 //      grossed up for tax. On the bucket side, withdrawals come out of
 //      capital preservation first, then high income, then equities.
@@ -52,13 +54,21 @@
 //     penalty before age 59 1/2.
 //   - Roth: tax-free (withdrawals before 59 1/2 are flagged, not penalized).
 //
+// Required minimum distributions (RMDs): each traditional IRA / 401(k) belongs
+// to you or your spouse. From the owner's RMD age (73 if born 1951-1959, 75 if
+// born 1960 or later), at least last year-end's balance / the IRS Uniform
+// Lifetime Table divisor for their age must come out each year, taxed as
+// ordinary income. Whatever the year doesn't need is reinvested in the taxable
+// account. After the owner's death the survivor treats the account as their
+// own (a spousal rollover), so RMDs follow the survivor's age.
+//
 // Lifespans: you and a spouse each live to the plan-to age; the plan runs
 // until the younger of you reaches it. Each person's Social Security and
 // healthcare stop after that age; the survivor keeps the larger Social
 // Security check (from age 60). Household spending is unchanged after a death.
 //
-// Not modeled: required minimum distributions (slightly optimistic), Roth
-// early-withdrawal rules, tax brackets. Income is entered after tax.
+// Not modeled: Roth early-withdrawal rules, tax brackets, the still-working
+// exception for 401(k) RMDs. Income is entered after tax.
 import { grownValue, effectiveGrowthPct } from "./growth.mjs";
 import { bucketReturns, bucketTargets, allocate, pvFactor, shares, surplusShares } from "./buckets.mjs";
 
@@ -69,6 +79,33 @@ export const EARLY_WITHDRAWAL_START_AGE = 59;
 export const EARLY_WITHDRAWAL_PENALTY_PCT = 10;
 // A surviving spouse can collect the late spouse's Social Security from age 60.
 export const SURVIVOR_MIN_AGE = 60;
+
+/**
+ * IRS Uniform Lifetime Table (in effect since 2022): the divisor for an RMD at
+ * each age, starting at 72. Ages past the table use its last entry.
+ */
+export const UNIFORM_LIFETIME = [
+  27.4, 26.5, 25.5, 24.6, 23.7, 22.9, 22.0, 21.1, 20.2, 19.4, // 72-81
+  18.5, 17.7, 16.8, 16.0, 15.2, 14.4, 13.7, 12.9, 12.2, 11.5, // 82-91
+  10.8, 10.1, 9.5, 8.9, 8.4, 7.8, 7.3, 6.8, 6.4, 6.0, // 92-101
+  5.6, 5.2, 4.9, 4.6, 4.3, 4.1, 3.9, 3.7, 3.5, 3.4, // 102-111
+  3.3, 3.1, 3.0, 2.9, 2.8, 2.7, 2.5, 2.3, 2.0, // 112-120
+];
+export const UNIFORM_LIFETIME_FIRST_AGE = 72;
+
+/** RMD starting age by birth year (SECURE 2.0). @param {number} birthYear */
+export function rmdStartAge(birthYear) {
+  if (birthYear >= 1960) return 75;
+  if (birthYear >= 1951) return 73;
+  return 72;
+}
+
+/** The RMD divisor at an age, or 0 when no RMD is due yet. @param {number} age @param {number} startAge */
+export function rmdDivisor(age, startAge) {
+  if (age < startAge) return 0;
+  const k = Math.min(UNIFORM_LIFETIME.length - 1, Math.max(0, age - UNIFORM_LIFETIME_FIRST_AGE));
+  return UNIFORM_LIFETIME[k];
+}
 
 /**
  * Annual healthcare cost for one person at a given age (today's $): $0 while
@@ -111,7 +148,8 @@ function ssAnnualOf(social) {
  * @property {number} health   healthcare cost this year
  * @property {number} spend    category spending + health
  * @property {number} contrib  contributions into accounts (incl. employer match)
- * @property {number} withdrawn gross amount taken out of accounts (before tax)
+ * @property {number} withdrawn gross amount taken out of accounts (before tax), RMDs included
+ * @property {number} rmd      required minimum distributions (part of withdrawn)
  * @property {number} tax      tax + penalties on those withdrawals
  * @property {number} returnPct the return the whole portfolio earned this year, %
  * @property {Mix} mix         bucket shares of the bucket-plan money at the start of the year (sum to 1)
@@ -132,7 +170,7 @@ function ssAnnualOf(social) {
  * @property {number[]} earlyRothYears    years the Roth was tapped before 59 1/2 (flag only)
  */
 
-/** @typedef {{pool: "taxable"|"deferred"|"roth", own: boolean, v: number, basis: number, ownRate: number, ownVol: number, ownIdx: number}} Holding */
+/** @typedef {{pool: "taxable"|"deferred"|"roth", owner: "self"|"spouse", own: boolean, v: number, basis: number, ownRate: number, ownVol: number, ownIdx: number}} Holding */
 const POOL_ORDER = /** @type {const} */ (["taxable", "deferred", "roth"]);
 
 /** @param {import("../model/schema.mjs").AccountType} type @returns {"taxable"|"deferred"|"roth"} */
@@ -220,6 +258,24 @@ export function prepare(s, overlay = {}) {
     flows.push({ year, age, income, ss, health, spend, net: income + ss - spend });
   }
 
+  // Each year's RMD divisor for accounts owned by you and by your spouse (0 =
+  // none due). After an owner's death the survivor's age applies.
+  const sp0 = spouses[0];
+  const selfStart = rmdStartAge(startYear - s.profile.currentAge);
+  const spStart = sp0 ? rmdStartAge(startYear - /** @type {number} */ (sp0.currentAge)) : selfStart;
+  const rmdDivisors = flows.map((f, i) => {
+    const selfAge = f.age;
+    const spAge = sp0 ? /** @type {number} */ (sp0.currentAge) + i : null;
+    const selfAlive = selfAge < endAge;
+    const spAlive = spAge !== null && spAge < endAge;
+    const selfDiv = rmdDivisor(selfAge, selfStart);
+    const spDiv = spAge !== null ? rmdDivisor(spAge, spStart) : 0;
+    return {
+      self: selfAlive || !spAlive ? selfDiv : spDiv,
+      spouse: spAge === null ? selfDiv : spAlive || !selfAlive ? spDiv : selfDiv,
+    };
+  });
+
   // What the portfolio must supply at the end of each year, before tax, and
   // what each bucket needs today to cover it (from each year's vantage point).
   const needs = flows.map((f) => Math.max(0, -f.net));
@@ -228,26 +284,26 @@ export function prepare(s, overlay = {}) {
   const targetsByYear = Array.from({ length: years + 1 }, (_, i) => bucketTargets(needs, i, factors, b));
   const surplusByYear = Array.from({ length: years + 1 }, (_, i) => surplusShares(years - i, b));
 
-  // Holdings template (copied per run): bucket-plan money pooled by tax type,
-  // then one holding per own-fund account.
+  // Holdings template (copied per run): bucket-plan money pooled by tax type
+  // (tax-deferred split by owner, for RMDs), then one holding per own-fund account.
+  /** @type {(pool: Holding["pool"], owner?: Holding["owner"]) => Holding} */
+  const managed = (pool, owner = "self") => ({ pool, owner, own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 });
   /** @type {Holding[]} */
-  const holdings = [
-    { pool: "taxable", own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 },
-    { pool: "deferred", own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 },
-    { pool: "roth", own: false, v: 0, basis: 0, ownRate: 0, ownVol: 0, ownIdx: -1 },
-  ];
+  const holdings = [managed("taxable"), managed("deferred"), managed("roth"), managed("deferred", "spouse")];
+  const MANAGED_IDX = { taxable: 0, deferred: 1, roth: 2, deferredSpouse: 3 };
   let ownCount = 0;
   const holdingOf = s.accounts.map((a) => {
     const pool = poolOf(a.type);
+    const owner = a.owner === "spouse" && sp0 ? "spouse" : "self";
     const basis = pool === "taxable" ? a.costBasis ?? a.balance : 0;
     if (a.invest === "own") {
-      holdings.push({ pool, own: true, v: a.balance, basis, ownRate: a.ownReturnPct / 100, ownVol: (a.ownVolPct ?? 0) / 100, ownIdx: ownCount++ });
+      holdings.push({ pool, owner, own: true, v: a.balance, basis, ownRate: a.ownReturnPct / 100, ownVol: (a.ownVolPct ?? 0) / 100, ownIdx: ownCount++ });
       return holdings.length - 1;
     }
-    const h = holdings[POOL_ORDER.indexOf(pool)];
-    h.v += a.balance;
-    h.basis += basis;
-    return POOL_ORDER.indexOf(pool);
+    const idx = pool === "deferred" && owner === "spouse" ? MANAGED_IDX.deferredSpouse : MANAGED_IDX[pool];
+    holdings[idx].v += a.balance;
+    holdings[idx].basis += basis;
+    return idx;
   });
   const withdrawOrder = holdings
     .map((h, idx) => idx)
@@ -274,6 +330,7 @@ export function prepare(s, overlay = {}) {
     holdings,
     withdrawOrder,
     contribs,
+    rmdDivisors,
     ownCount,
     planReturns,
     ordinaryRate: s.taxes.ordinaryIncomePct / 100,
@@ -348,10 +405,11 @@ function topUp(B, to, target, from) {
  *   skips them for speed and reads `balances` instead).
  */
 export function runPlan(P, opts = {}) {
-  const { s, years, deflators, flows, targetsByYear, surplusByYear, withdrawOrder, contribs, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
+  const { s, years, deflators, flows, targetsByYear, surplusByYear, withdrawOrder, contribs, rmdDivisors, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
   const path = opts.path ?? null;
   const detail = opts.detail ?? true;
   const holdings = P.holdings.map((h) => ({ ...h }));
+  const yearStartV = new Float64Array(holdings.length); // last year-end balances, for RMDs
   const managedTaxable = holdings[0];
   if (opts.extraSavingsToday) {
     managedTaxable.v += opts.extraSavingsToday;
@@ -392,6 +450,7 @@ export function runPlan(P, opts = {}) {
     const managedStart = sumOf(false);
     const ownStart = sumOf(true);
     const mix = detail ? shares(B) : B;
+    for (let idx = 0; idx < holdings.length; idx++) yearStartV[idx] = holdings[idx].v;
 
     // 1. Returns.
     const rP = path ? path.preservation[i] : planReturns.preservation;
@@ -424,14 +483,32 @@ export function runPlan(P, opts = {}) {
       contribTotal += c[idx];
     }
 
-    // 3. Net cash flow.
+    // 3a. Required minimum distributions: last year-end balance / the divisor
+    // for the owner's age, taxed as ordinary income.
     let withdrawn = 0;
     let tax = 0;
-    if (f.net >= 0) {
-      managedTaxable.v += f.net;
-      managedTaxable.basis += f.net;
+    let rmd = 0;
+    let cash = f.net;
+    const div = rmdDivisors[i];
+    for (let idx = 0; idx < holdings.length; idx++) {
+      const h = holdings[idx];
+      if (h.pool !== "deferred" || !(h.v > 0)) continue;
+      const dv = div[h.owner];
+      if (!(dv > 0) || !(yearStartV[idx] > 0)) continue;
+      const take = Math.min(h.v, yearStartV[idx] / dv);
+      h.v -= take;
+      rmd += take;
+      tax += take * ordinaryRate;
+      cash += take * (1 - ordinaryRate);
+    }
+    withdrawn += rmd;
+
+    // 3b. Net cash flow (RMD money counts as cash on hand).
+    if (cash >= 0) {
+      managedTaxable.v += cash;
+      managedTaxable.basis += cash;
     } else {
-      let short = -f.net;
+      let short = -cash;
       const early = f.age < EARLY_WITHDRAWAL_START_AGE;
       for (const idx of withdrawOrder) {
         const h = holdings[idx];
@@ -499,6 +576,7 @@ export function runPlan(P, opts = {}) {
         spend: f.spend / d,
         contrib: contribTotal / d,
         withdrawn: withdrawn / d,
+        rmd: rmd / d,
         tax: tax / d,
         returnPct: portfolioReturn * 100,
         mix: /** @type {Mix} */ (mix),

@@ -27,7 +27,7 @@
  */
 export function blankRow(kind, state) {
   if (kind === "accounts") {
-    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 };
+    return { name: "new account", type: "taxable", balance: 0, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" };
   }
   if (kind === "incomes") {
     const y = state.profile.currentYear;

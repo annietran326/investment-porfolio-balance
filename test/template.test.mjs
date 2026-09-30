@@ -148,9 +148,9 @@ test("round-trip: accounts, spouse + dependent, growing income, time-boxed spend
     { name: "hobby (starts 2030, +3.5%)", monthly: 400, fromYear: 2030, toYear: null, growthPct: 3.5, variable: true }, // open-ended from a future year
   ];
   state.accounts = [
-    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
-    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "own", ownReturnPct: 6.5, ownVolPct: 12 },
-    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
+    { name: "Brokerage", type: "taxable", balance: 400_000, costBasis: 250_000, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
+    { name: "Work 401k", type: "401k", balance: 150_000, costBasis: null, contributionAnnual: 23_500, employerMatchAnnual: 5_000, contributeYears: 12, contributionGrowthPct: 2, invest: "own", ownReturnPct: 6.5, ownVolPct: 12, owner: "self" },
+    { name: "Roth", type: "roth_ira", balance: 30_000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
   ];
   state.economy.inflationPct = 3;
   state.simulation.targetSuccessPct = 85;
@@ -305,7 +305,7 @@ test("missing Income tab → section unchanged; present tabs replace theirs", ()
   // Derived spending is v2-complete: perpetual (fromYear/toYear null), inflation-tracking.
   assert.deepEqual(applied.spending, [{ name: "food", monthly: 900, fromYear: null, toYear: null, growthPct: null, variable: true }]);
   assert.deepEqual(applied.accounts, [
-    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15 },
+    { name: "Brokerage", type: "taxable", balance: 500000, costBasis: null, contributionAnnual: 0, employerMatchAnnual: 0, contributeYears: 0, contributionGrowthPct: null, invest: "buckets", ownReturnPct: 7, ownVolPct: 15, owner: "self" },
   ]);
 });
 

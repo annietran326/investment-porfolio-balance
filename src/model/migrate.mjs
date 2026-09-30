@@ -323,6 +323,16 @@ function migrateV9(v9) {
   };
 }
 
+/**
+ * v10 -> v11: required minimum distributions. Each account gains an owner
+ * (you, by default) so RMDs start at the right person's age.
+ * @param {any} v10
+ * @returns {import("./schema.mjs").RunwayState}
+ */
+function migrateV10(v10) {
+  return { ...v10, schemaVersion: 11, accounts: arr(v10.accounts).map((/** @type {any} */ a) => ({ ...a, owner: a.owner ?? "self" })) };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -335,6 +345,7 @@ const RUNGS = {
   7: migrateV7,
   8: migrateV8,
   9: migrateV9,
+  10: migrateV10,
 };
 
 /**

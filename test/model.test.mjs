@@ -460,3 +460,23 @@ test("v9 → v10: spending lines get a Variable flag (fixed-sounding names unche
   assert.deepEqual(state.spending.map((c) => c.variable), [false, false, false, true, true]);
   assert.deepEqual(state.simulation, { targetSuccessPct: 85, spendMorePct: 20 }, "the success target is kept");
 });
+
+test("v10 → v11: every account gets an owner (you) for required minimum distributions", () => {
+  const base = placeholderState();
+  const v10 = { ...base, schemaVersion: 10, accounts: base.accounts.map(({ owner, ...a }) => (void owner, a)) };
+  const { state } = migrate(v10);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(validate(state).errors, []);
+  assert.ok(state.accounts.every((a) => a.owner === "self"));
+});
+
+test("an account owned by a spouse who isn't set up is flagged and treated as yours", () => {
+  const s = placeholderState();
+  s.household.people = s.household.people.filter((p) => p.role !== "spouse");
+  s.accounts[1].owner = "spouse";
+  const v = validate(s);
+  assert.deepEqual(v.errors, []);
+  assert.ok(v.warnings.some((w) => w.path === "accounts[1].owner"));
+  s.accounts[1].owner = /** @type {any} */ ("partner");
+  assert.ok(validate(s).errors.some((e) => e.path === "accounts[1].owner"));
+});

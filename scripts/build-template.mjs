@@ -60,6 +60,7 @@ export const TEMPLATE_DEF = {
         { header: "Invested in (buckets or own)", field: "invest", type: "text", choices: ["buckets", "own"], optional: true },
         { header: "Own fund return %/yr (used when invested in own)", field: "ownReturnPct", type: "number", optional: true },
         { header: "Own fund swing %/yr (used when invested in own)", field: "ownVolPct", type: "number", optional: true },
+        { header: "Owner (self or spouse; for RMDs)", field: "owner", type: "text", choices: ["self", "spouse"], optional: true },
       ],
     },
     {

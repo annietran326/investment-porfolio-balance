@@ -17,7 +17,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -47,6 +47,9 @@ export const BASE_YEAR = 2026;
  * @property {AccountInvest} invest        "buckets" = part of the three-bucket plan; "own" = its own fund, left alone
  * @property {number} ownReturnPct         the own fund's return, %/yr before inflation (used when invest is "own")
  * @property {number} ownVolPct            the own fund's typical yearly swing (volatility), % (used when invest is "own")
+ * @property {AccountOwner} owner          whose account it is; sets when required minimum distributions start (traditional IRA / 401(k))
+ *
+ * @typedef {"self"|"spouse"} AccountOwner
  *
  * @typedef {Object} Buckets
  * The three investment buckets and the time-based rule that splits money
@@ -137,6 +140,7 @@ const RATE_SANITY_ABS = 25;
 
 export const ACCOUNT_TYPES = /** @type {AccountType[]} */ (["taxable", "traditional_ira", "401k", "roth_ira"]);
 export const ACCOUNT_INVEST = /** @type {AccountInvest[]} */ (["buckets", "own"]);
+export const ACCOUNT_OWNERS = /** @type {AccountOwner[]} */ (["self", "spouse"]);
 // A stock-heavy target-date fund's rough long-run return, before inflation.
 export const DEFAULT_OWN_RETURN_PCT = 7;
 // ...and its typical yearly swing: a little calmer than pure global equities.
@@ -165,6 +169,7 @@ export function newAccount(o = {}) {
     contributionAnnual: o.contributionAnnual ?? 0, employerMatchAnnual: o.employerMatchAnnual ?? 0,
     contributeYears: o.contributeYears ?? 0, contributionGrowthPct: o.contributionGrowthPct ?? null,
     invest: o.invest ?? "buckets", ownReturnPct: o.ownReturnPct ?? DEFAULT_OWN_RETURN_PCT, ownVolPct: o.ownVolPct ?? DEFAULT_OWN_VOL_PCT,
+    owner: o.owner ?? "self",
   };
 }
 /** @returns {Buckets} */
@@ -425,6 +430,10 @@ export function validate(s) {
     if (!ACCOUNT_INVEST.includes(a.invest)) add(errors, `${at}.invest`, `must be one of ${ACCOUNT_INVEST.join(", ")}`);
     if (requireNumber(errors, a.ownReturnPct, `${at}.ownReturnPct`)) warnIfExtremeRate(warnings, a.ownReturnPct, `${at}.ownReturnPct`);
     if (requireNumber(errors, a.ownVolPct, `${at}.ownVolPct`) && (a.ownVolPct < 0 || a.ownVolPct > 60)) add(errors, `${at}.ownVolPct`, "swing must be between 0 and 60%");
+    if (!ACCOUNT_OWNERS.includes(a.owner)) add(errors, `${at}.owner`, `must be one of ${ACCOUNT_OWNERS.join(", ")}`);
+    else if (a.owner === "spouse" && !(s.household?.people ?? []).some((p) => p.role === "spouse" && typeof p.currentAge === "number")) {
+      add(warnings, `${at}.owner`, "no spouse with an age is set up under Household profile, so this account is treated as yours");
+    }
     if (yearsOk && a.contributeYears < 0) add(errors, `${at}.contributeYears`, "can't be negative");
     if (yearsOk && a.contributeYears === 0 && ((a.contributionAnnual ?? 0) > 0 || (a.employerMatchAnnual ?? 0) > 0)) {
       add(warnings, `${at}.contributeYears`, "contributions are set but for 0 years, so none will be added. How many more years will you contribute?");

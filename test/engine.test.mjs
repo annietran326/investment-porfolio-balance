@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { simulate, prepare, runPlan, EARLY_WITHDRAWAL_START_AGE } from "../src/engine/simulate.mjs";
+import { simulate, prepare, runPlan, EARLY_WITHDRAWAL_START_AGE, rmdStartAge, rmdDivisor } from "../src/engine/simulate.mjs";
 import { monteCarlo, makePaths, runFutures, gapToTarget, drawReturn } from "../src/engine/montecarlo.mjs";
 import { goalMet } from "../src/engine/solver.mjs";
 import { pvFactor, bucketTargets, allocate, bucketFor, shares, surplusShares } from "../src/engine/buckets.mjs";
@@ -638,7 +638,7 @@ test("simulated futures are repeatable: the same inputs give the same answer", (
 test("with no swings, every simulated future is the expected-return plan", () => {
   const s = state();
   s.buckets = { ...s.buckets, preservationVolPct: 0, incomeVolPct: 0, equitiesVolPct: 0 };
-  s.accounts = s.accounts.map((a) => ({ ...a, ownVolPct: 0 }));
+  s.accounts = s.accounts.map((a) => ({ ...a, ownVolPct: 0, owner: "self" }));
   const expected = simulate(s);
   const mc = monteCarlo(s, {}, { runs: 20 });
   assert.equal(mc.successRate, goalMet(s, expected) ? 1 : 0);
@@ -718,4 +718,88 @@ test("the spend more scenario raises only variable lines, by the percent you set
   near(base.rows[0].spend, 36_000 + 12_000 + 10_000);
   near(more.rows[0].spend, 36_000 + 12_000 * 1.25 + 10_000, "only travel rises; housing and healthcare don't");
   near(more.rows[2].spend - base.rows[2].spend, 3_000, "a lasting step up, every year");
+});
+
+// ---------------------------------------------------------------------------
+// required minimum distributions
+// ---------------------------------------------------------------------------
+
+/** @param {number} age */
+const spouseAged = (age) => ({
+  name: "Spouse", role: "spouse", currentAge: age, annualCost: 0, fromYear: null, toYear: null,
+  social: { startAge: 67, monthly: 0, haircutPct: 0 }, health: { preMedicareAnnual: 0, postMedicareAnnual: 0, employerCoverageUntilAge: 200 },
+});
+
+test("RMD start age follows birth year (SECURE 2.0), and divisors follow the Uniform Lifetime Table", () => {
+  assert.equal(rmdStartAge(1950), 72);
+  assert.equal(rmdStartAge(1951), 73);
+  assert.equal(rmdStartAge(1959), 73);
+  assert.equal(rmdStartAge(1960), 75);
+  assert.equal(rmdStartAge(1990), 75);
+  assert.equal(rmdDivisor(74, 75), 0, "none before the start age");
+  assert.equal(rmdDivisor(75, 75), 24.6);
+  assert.equal(rmdDivisor(80, 73), 20.2);
+  assert.equal(rmdDivisor(90, 73), 12.2);
+  assert.equal(rmdDivisor(125, 73), 2.0, "past the table: its last entry");
+});
+
+test("an RMD comes out even when nothing is needed, and is reinvested in the taxable account", () => {
+  // Born 1951 (75 in 2026): RMDs from 73. $246,000 / 24.6 = $10,000; no tax, no spending, 0% returns.
+  const s = flat({ age: 75, years: 2, accounts: [newAccount({ name: "IRA", type: "traditional_ira", balance: 246_000 })] });
+  const sim = simulate(s);
+  near(sim.rows[0].rmd, 10_000);
+  near(sim.rows[0].withdrawn, 10_000);
+  near(sim.rows[0].bal, 246_000, "money moves between accounts; the total is unchanged");
+  near(sim.rows[1].rmd, 236_000 / 23.7, "next year: last year-end's IRA balance / the age-76 divisor");
+});
+
+test("an RMD is taxed as ordinary income and pays for the year's spending first", () => {
+  // $10,000 RMD at 20% = $2,000 tax; $8,000 covers the $5,000 spend; $3,000 is reinvested.
+  const s = flat({ age: 75, years: 1, spendMonthly: 5000 / 12, accounts: [newAccount({ name: "IRA", type: "traditional_ira", balance: 246_000 })] });
+  s.taxes = { ordinaryIncomePct: 20, capitalGainsPct: 0 };
+  const sim = simulate(s);
+  near(sim.rows[0].rmd, 10_000);
+  near(sim.rows[0].withdrawn, 10_000, "nothing beyond the RMD was needed");
+  near(sim.rows[0].tax, 2_000);
+  near(sim.rows[0].bal, 246_000 - 2_000 - 5_000);
+});
+
+test("RMDs start at 75 for someone born in 1960 or later; Roth IRAs never have them", () => {
+  const s = flat({ age: 64, years: 14, accounts: [
+    newAccount({ name: "IRA", type: "traditional_ira", balance: 100_000 }),
+    newAccount({ name: "Roth", type: "roth_ira", balance: 100_000 }),
+  ] });
+  const sim = simulate(s);
+  for (const r of sim.rows) {
+    if (r.age < 75) assert.equal(r.rmd, 0, `no RMD at ${r.age}`);
+    else if (r.age === 75) near(r.rmd, 100_000 / 24.6, "the IRA's RMD at 75; the Roth adds nothing");
+    else assert.ok(r.rmd > 0 && r.rmd < 100_000 / 20, `RMDs continue at ${r.age}`);
+  }
+});
+
+test("a spouse's account follows the spouse's age, then the survivor's after a death", () => {
+  // You are 70 (born 1956, RMDs from 73); your spouse is 80 and reaches the plan-to age of 82 after two years.
+  const s = flat({ age: 70, years: 12, accounts: [newAccount({ name: "Spouse IRA", type: "traditional_ira", balance: 202_000, owner: "spouse" })] });
+  s.household.people = [spouseAged(80)];
+  const sim = simulate(s);
+  near(sim.rows[0].rmd, 202_000 / 20.2, "the spouse is 80: divisor 20.2");
+  near(sim.rows[1].rmd, 192_000 / 19.4, "81: divisor 19.4");
+  assert.equal(sim.rows[2].rmd, 0, "the spouse has died; you (72) inherit it as your own and aren't at your RMD age yet");
+  assert.ok(sim.rows[3].rmd > 0, "you turn 73");
+  near(sim.rows[3].rmd, (192_000 - 192_000 / 19.4) / 26.5);
+
+  // The same account as yours: nothing until you're 73.
+  s.accounts[0].owner = "self";
+  const mine = simulate(s);
+  assert.deepEqual(mine.rows.slice(0, 3).map((r) => r.rmd), [0, 0, 0]);
+});
+
+test("RMD money from an own-fund 401(k) lands in the bucket plan", () => {
+  const s = flat({ age: 75, years: 1, accounts: [newAccount({ name: "401k", type: "401k", balance: 246_000, invest: "own", ownReturnPct: 0 })] });
+  const sim = simulate(s);
+  near(sim.rows[0].rmd, 10_000);
+  near(sim.path[1].bal, 246_000);
+  const P = prepare(s);
+  const res = runPlan(P);
+  near(res.balances[1], 246_000);
 });
