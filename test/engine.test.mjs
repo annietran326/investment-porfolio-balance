@@ -30,7 +30,10 @@ function flat(o = {}) {
   s.economy = { inflationPct: o.inflationPct ?? 0 };
   const r = o.returnPct ?? 0;
   s.buckets = { ...newBuckets(), preservationReturnPct: r, incomeReturnPct: r, equitiesReturnPct: r };
-  s.taxes = { ordinaryIncomePct: 0, capitalGainsPct: 0 };
+  // One set of rates for the whole plan (retirement rates from age 0) and no
+  // dividends, so withdrawal-tax tests can set a single rate. Tests of the
+  // yearly tax on taxable-account income set these explicitly.
+  s.taxes = { ...newTaxes(), workingOrdinaryIncomePct: 0, workingCapitalGainsPct: 0, ordinaryIncomePct: 0, capitalGainsPct: 0, retireAge: 0, dividendYieldPct: 0 };
   s.accounts = o.accounts ?? [newAccount({ name: "Brokerage", type: "taxable", balance: 100_000 })];
   s.incomes = [];
   s.spending = o.spendMonthly ? [{ name: "living", monthly: o.spendMonthly, fromYear: null, toYear: null, growthPct: null, variable: true }] : [];
@@ -155,7 +158,7 @@ test("traditional IRA / 401(k): ordinary rate on the whole withdrawal; +10% befo
 
 test("Roth: tax-free, and tapping it before 59½ is flagged", () => {
   const s = flat({ age: 50, spendMonthly: 1000, accounts: [newAccount({ name: "roth", type: "roth_ira", balance: 100_000 })] });
-  s.taxes = { ordinaryIncomePct: 30, capitalGainsPct: 30 };
+  s.taxes = { ...s.taxes, ordinaryIncomePct: 30, capitalGainsPct: 30 };
   const sim = simulate(s);
   assert.equal(sim.rows[0].tax, 0);
   near(sim.rows[0].withdrawn, 12_000);
@@ -741,7 +744,7 @@ test("an RMD comes out even when nothing is needed, and is reinvested in the tax
 test("an RMD is taxed as ordinary income and pays for the year's spending first", () => {
   // $10,000 RMD at 20% = $2,000 tax; $8,000 covers the $5,000 spend; $3,000 is reinvested.
   const s = flat({ age: 75, years: 1, spendMonthly: 5000 / 12, accounts: [newAccount({ name: "IRA", type: "traditional_ira", balance: 246_000 })] });
-  s.taxes = { ordinaryIncomePct: 20, capitalGainsPct: 0 };
+  s.taxes = { ...s.taxes, ordinaryIncomePct: 20, capitalGainsPct: 0 };
   const sim = simulate(s);
   near(sim.rows[0].rmd, 10_000);
   near(sim.rows[0].withdrawn, 10_000, "nothing beyond the RMD was needed");
@@ -884,4 +887,89 @@ test("capital preservation is shown in three layers by year: cash, short-term bo
   const d = simulate(s);
   assert.deepEqual(d.startPresLayers.total, { cash: 12_000, short: 36_000, medium: 48_000 });
   assert.deepEqual(d.startPresLayers.plan, { cash: 12_000, short: 24_000, medium: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// yearly tax on income earned in taxable accounts; working vs retirement rates
+// ---------------------------------------------------------------------------
+
+/** A one-account plan for the yearly-income-tax tests: returns 6 / 6 / 8%, no inflation. */
+function incomeTaxPlan(/** @type {any} */ invest, /** @type {any} */ type = "taxable", years = 2) {
+  const s = flat({ years, accounts: [newAccount({ name: "acct", type, balance: 100_000, invest })] });
+  s.buckets = { ...s.buckets, preservationReturnPct: 3, incomeReturnPct: 6, equitiesReturnPct: 8 };
+  s.taxes = { ...s.taxes, ordinaryIncomePct: 40, capitalGainsPct: 25, dividendYieldPct: 2 };
+  return s;
+}
+
+test("high income in a taxable account: its whole expected return is taxed yearly as interest", () => {
+  // $100k at 6% = $6,000 interest; 40% ordinary = $2,400 tax, paid out of the account.
+  const sim = simulate(incomeTaxPlan("income"));
+  near(sim.rows[0].incomeTax, 2_400);
+  near(sim.rows[0].tax, 2_400, "the year's tax column includes it");
+  near(sim.rows[0].bal, 106_000 - 2_400);
+  near(sim.rows[1].incomeTax, (106_000 - 2_400) * 0.06 * 0.4, "next year's interest is on the after-tax balance");
+});
+
+test("after-tax interest is added to cost basis, so selling it later owes no second tax", () => {
+  // Year 0 earns and is taxed; year 1 sells. Basis = 100k + 6k − 2.4k = value,
+  // so the gain share is zero and the sale itself is untaxed.
+  const s = incomeTaxPlan("income");
+  // Capital preservation earns 0% here: the plan moves money there ahead of the
+  // spending, and its growth is (deliberately) not taxed yearly, so it would carry a gain.
+  s.buckets.preservationReturnPct = 0;
+  s.spending = [{ name: "later", monthly: 1000, fromYear: 2027, toYear: null, growthPct: 0, variable: false }];
+  const sim = simulate(s);
+  near(sim.rows[1].withdrawn, 12_000, "no gross-up: nothing to tax on the sale");
+  near(sim.rows[1].tax, sim.rows[1].incomeTax, "only the yearly interest tax");
+});
+
+test("equities in a taxable account: only the dividend yield is taxed yearly, at the gains rate", () => {
+  // $100k, 2% dividends = $2,000; 25% = $500. The other 6% is unrealized growth.
+  const sim = simulate(incomeTaxPlan("equities"));
+  near(sim.rows[0].incomeTax, 500);
+  near(sim.rows[0].bal, 108_000 - 500);
+});
+
+test("capital preservation isn't taxed yearly (munis), and neither are IRAs or Roths", () => {
+  assert.equal(simulate(incomeTaxPlan("preservation")).rows[0].incomeTax, 0);
+  assert.equal(simulate(incomeTaxPlan("income", "traditional_ira")).rows[0].incomeTax, 0);
+  assert.equal(simulate(incomeTaxPlan("equities", "roth_ira")).rows[0].incomeTax, 0);
+});
+
+test("bucket-plan money in a taxable account is taxed on its high income and equities shares", () => {
+  const s = incomeTaxPlan("buckets", "taxable", 30);
+  s.spending = [{ name: "living", monthly: 300, fromYear: null, toYear: null, growthPct: 0, variable: false }];
+  const P = prepare(s);
+  const sim = runPlan(P);
+  const m = sim.startMix;
+  near(sim.rows[0].incomeTax, m.income * 0.06 * 0.4 + m.equities * 0.02 * 0.25, "income share at 40%, dividends at 25%", 0.5);
+  assert.ok(m.income > 0 && m.equities > 0, "the split holds both");
+});
+
+test("working rates apply before the retirement-rates age, retirement rates from it", () => {
+  // Age 60, retirement rates from 61: year 0 at 45%, year 1 at 30%.
+  const s = incomeTaxPlan("income");
+  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 45, ordinaryIncomePct: 30, retireAge: 61 };
+  const sim = simulate(s);
+  near(sim.rows[0].incomeTax, 6_000 * 0.45);
+  near(sim.rows[1].incomeTax, (106_000 - 2_700) * 0.06 * 0.3);
+});
+
+test("working rates also apply to withdrawals before the retirement-rates age", () => {
+  const s = flat({ age: 62, spendMonthly: 7500 / 12, accounts: [newAccount({ name: "ira", type: "traditional_ira", balance: 100_000 })] });
+  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 25, ordinaryIncomePct: 0, retireAge: 63 };
+  const sim = simulate(s);
+  near(sim.rows[0].tax, 2_500, "7,500 net at 25% = 10,000 gross");
+  near(sim.rows[1].tax, 0, "retired: 0%");
+});
+
+test("in a simulated future, interest is taxed on the expected return, not the year's actual return", () => {
+  // High income falls 10% this year: the fund still paid its 6% interest (the
+  // price fell more), so the tax is unchanged.
+  const s = incomeTaxPlan("income", "taxable", 1);
+  const P = prepare(s);
+  const path = { preservation: new Float64Array([0.03]), income: new Float64Array([-0.10]), equities: new Float64Array([0.08]) };
+  const sim = runPlan(P, { path });
+  near(sim.rows[0].incomeTax, 2_400);
+  near(sim.rows[0].bal, 90_000 - 2_400);
 });

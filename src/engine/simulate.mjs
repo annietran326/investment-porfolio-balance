@@ -32,6 +32,8 @@
 //
 // Each year, in order (pinned by tests):
 //   1. Every bucket (and each dedicated account, with its bucket) earns its return.
+//      Then income earned in TAXABLE accounts is taxed (see "Yearly tax on
+//      taxable-account income" below) and the tax comes out of that money.
 //   2. Contributions land.
 //   3. Required minimum distributions come out of traditional IRAs and
 //      401(k)s (see below). Then the year's net cash flow lands, with the
@@ -55,6 +57,23 @@
 //      yearly.) Rebalancing is treated as tax-free. The same rule applies all
 //      the way to the end of the plan: there is no separate late-life shift.
 //
+// Tax rates: two sets, while working (your age < taxes.retireAge) and in
+// retirement. Each year uses the set for your age that year.
+//
+// Yearly tax on taxable-account income (traditional IRA / 401(k) and Roth
+// money isn't taxed until it comes out, if ever):
+//   - high income: its EXPECTED return is treated as interest, all taxable at
+//     the ordinary income rate. In a simulated future the rest of the year's
+//     return (better or worse than expected) is a price change, taxed only
+//     when sold.
+//   - equities: the dividend yield x the start-of-year value, at the capital
+//     gains rate (qualified dividends). The rest is unrealized growth.
+//   - capital preservation: not taxed yearly (munis are tax-free; treating
+//     any taxable cash or bonds here the same way is a known simplification,
+//     offset by taxing its growth at the gains rate on withdrawal).
+//   The after-tax income is reinvested, so it's added to cost basis and isn't
+//   taxed again when sold.
+//
 // Withdrawal taxes:
 //   - taxable: capital-gains rate x the gain share of what's sold, where
 //     gain share = (value - basis) / value at that moment. Growth raises value
@@ -76,7 +95,8 @@
 // healthcare stop after that age; the survivor keeps the larger Social
 // Security check (from age 60). Household spending is unchanged after a death.
 //
-// Not modeled: Roth early-withdrawal rules, tax brackets, the still-working
+// Not modeled: Roth early-withdrawal rules, tax brackets (one rate per kind of
+// income per phase), the still-working
 // exception for 401(k) RMDs. Income is entered after tax.
 import { grownValue, effectiveGrowthPct } from "./growth.mjs";
 import { bucketReturns, bucketTargets, allocate, pvFactor, shares } from "./buckets.mjs";
@@ -158,7 +178,8 @@ function ssAnnualOf(social) {
  * @property {number} contrib  contributions into accounts (incl. employer match)
  * @property {number} withdrawn gross amount taken out of accounts (before tax), RMDs included
  * @property {number} rmd      required minimum distributions (part of withdrawn)
- * @property {number} tax      tax + penalties on those withdrawals
+ * @property {number} tax      tax this year: on withdrawals (incl. penalties) and on income earned in taxable accounts
+ * @property {number} incomeTax the part of `tax` on income earned in taxable accounts (interest and dividends)
  * @property {number} returnPct the return the whole portfolio earned this year, %
  * @property {Mix} mix         bucket shares of ALL the money (dedicated accounts included) at the start of the year (sum to 1)
  * @property {number} bal      end-of-year balance
@@ -378,8 +399,10 @@ export function prepare(s, overlay = {}) {
     rmdDivisors,
     planIdx,
     planReturns,
-    ordinaryRate: s.taxes.ordinaryIncomePct / 100,
-    gainsRate: s.taxes.capitalGainsPct / 100,
+    // Each year's rates: the working set before your retirement age, then the retirement set.
+    ordinaryRates: flows.map((f) => (f.age < s.taxes.retireAge ? s.taxes.workingOrdinaryIncomePct : s.taxes.ordinaryIncomePct) / 100),
+    gainsRates: flows.map((f) => (f.age < s.taxes.retireAge ? s.taxes.workingCapitalGainsPct : s.taxes.capitalGainsPct) / 100),
+    dividendYield: s.taxes.dividendYieldPct / 100,
     breachThreshold: s.endState.mode === "floor" ? s.endState.amounts.floor : 0,
   };
 }
@@ -424,7 +447,7 @@ function addToBuckets(B, amount, targets) {
  *   skips them for speed and reads `balances` instead).
  */
 export function runPlan(P, opts = {}) {
-  const { s, years, deflators, flows, targetsByYear, lateTargetsByYear, accessFrom, withdrawOrder, contribs, rmdDivisors, planIdx, planReturns, ordinaryRate, gainsRate, breachThreshold } = P;
+  const { s, years, deflators, flows, targetsByYear, lateTargetsByYear, accessFrom, withdrawOrder, contribs, rmdDivisors, planIdx, planReturns, ordinaryRates, gainsRates, dividendYield, breachThreshold } = P;
   const path = opts.path ?? null;
   const detail = opts.detail ?? true;
   const holdings = P.holdings.map((h) => ({ ...h }));
@@ -596,6 +619,9 @@ export function runPlan(P, opts = {}) {
     for (let idx = 0; idx < holdings.length; idx++) yearStartV[idx] = holdings[idx].v;
 
     // 1. Returns.
+    const ordinaryRate = ordinaryRates[i];
+    const gainsRate = gainsRates[i];
+    const B0 = { ...B };
     const rP = path ? path.preservation[i] : planReturns.preservation;
     const rI = path ? path.income[i] : planReturns.income;
     const rE = path ? path.equities[i] : planReturns.equities;
@@ -615,6 +641,40 @@ export function runPlan(P, opts = {}) {
     const startTotal = managedStart + dedicatedStart;
     const portfolioReturn = startTotal > 0 ? (sumOf(false) + sumOf(true)) / startTotal - 1 : managedFactor - 1;
 
+    // 1b. Yearly tax on income earned in taxable accounts: high income's
+    // expected return as interest (ordinary rate), equities' dividends (gains
+    // rate). Paid out of that money; the after-tax income adds to cost basis.
+    let incomeTax = 0;
+    const planTaxableShare = bucketsBefore > 0 ? Math.max(0, yearStartV[0]) / bucketsBefore : 0;
+    for (let idx = 0; idx < holdings.length; idx++) {
+      const h = holdings[idx];
+      if (h.pool !== "taxable" || !(h.v > 0)) continue;
+      let incomeBase = 0;
+      let equitiesBase = 0;
+      if (h.bucket === null) {
+        incomeBase = Math.max(0, B0.income) * planTaxableShare;
+        equitiesBase = Math.max(0, B0.equities) * planTaxableShare;
+      } else if (h.bucket === "income") incomeBase = Math.max(0, yearStartV[idx]);
+      else if (h.bucket === "equities") equitiesBase = Math.max(0, yearStartV[idx]);
+      const interest = incomeBase * Math.max(0, planReturns.income);
+      const dividends = equitiesBase * dividendYield;
+      let taxI = interest * ordinaryRate;
+      let taxE = dividends * gainsRate;
+      const owed = taxI + taxE;
+      if (!(owed > 0)) continue;
+      const scale = Math.min(1, h.v / owed);
+      taxI *= scale;
+      taxE *= scale;
+      h.v -= taxI + taxE;
+      h.basis += interest + dividends - taxI - taxE;
+      if (h.bucket === null) {
+        // Keep the buckets equal to the bucket-plan money.
+        B.income = Math.max(0, B.income - taxI);
+        B.equities = Math.max(0, B.equities - taxE);
+      }
+      incomeTax += taxI + taxE;
+    }
+
     // 2. Contributions.
     let contribTotal = 0;
     const c = contribs[i];
@@ -628,7 +688,7 @@ export function runPlan(P, opts = {}) {
     // 3a. Required minimum distributions: last year-end balance / the divisor
     // for the owner's age, taxed as ordinary income.
     let withdrawn = 0;
-    let tax = 0;
+    let tax = incomeTax;
     let rmd = 0;
     let cash = f.net;
     const div = rmdDivisors[i];
@@ -714,6 +774,7 @@ export function runPlan(P, opts = {}) {
         withdrawn: withdrawn / d,
         rmd: rmd / d,
         tax: tax / d,
+        incomeTax: incomeTax / d,
         returnPct: portfolioReturn * 100,
         mix: /** @type {Mix} */ (mix),
         bal,

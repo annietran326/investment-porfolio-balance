@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation } from "./schema.mjs";
+import { SCHEMA_VERSION, OLD_TAX_DEFAULTS, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation } from "./schema.mjs";
 
 // Old "own fund" defaults, used only by the rungs that created and then retired own funds.
 const DEFAULT_OWN_RETURN_PCT = 7;
@@ -402,6 +402,30 @@ function migrateV14(v14) {
   return { ...v14, schemaVersion: 15, buckets: { ...(v14.buckets ?? {}), liquidYears: newBuckets().liquidYears } };
 }
 
+/**
+ * v15 -> v16: taxes get a working-years set of rates, a retirement age where
+ * the retirement rates take over, and a dividend yield (income in taxable
+ * accounts is now taxed every year). Rates still at the old defaults (22% /
+ * 15% or 18%) move to the new, higher defaults; rates you changed are kept as
+ * your retirement rates.
+ * @param {any} v15
+ */
+function migrateV15(v15) {
+  const d = newTaxes();
+  const t = v15.taxes ?? {};
+  const ord = num(t.ordinaryIncomePct, OLD_TAX_DEFAULTS.ordinaryIncomePct);
+  const cg = num(t.capitalGainsPct, OLD_TAX_DEFAULTS.capitalGainsPct[0]);
+  return {
+    ...v15,
+    schemaVersion: 16,
+    taxes: {
+      ...d,
+      ordinaryIncomePct: ord === OLD_TAX_DEFAULTS.ordinaryIncomePct ? d.ordinaryIncomePct : ord,
+      capitalGainsPct: OLD_TAX_DEFAULTS.capitalGainsPct.includes(cg) ? d.capitalGainsPct : cg,
+    },
+  };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -419,6 +443,7 @@ const RUNGS = {
   12: migrateV12,
   13: migrateV13,
   14: migrateV14,
+  15: migrateV15,
 };
 
 /**

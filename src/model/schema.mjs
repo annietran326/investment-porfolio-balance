@@ -18,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -77,10 +77,18 @@ export const BASE_YEAR = 2026;
  * @property {number} spendMorePct     the "spend more" scenario: % increase on variable spending lines
  *
  * @typedef {Object} Taxes
- * Effective (average) rates, federal plus state, applied to money taken out of
- * accounts. Income streams are entered after tax.
- * @property {number} ordinaryIncomePct  on traditional IRA / 401(k) withdrawals
- * @property {number} capitalGainsPct    on the gain portion of taxable-account sales
+ * Marginal rates, federal plus state (plus the 3.8% net investment income tax
+ * where it applies), deliberately on the high side. Two sets: while working
+ * (before `retireAge`) and in retirement. Income streams are entered after tax.
+ * @property {number} workingOrdinaryIncomePct  while working: interest from high income held in taxable accounts,
+ *                                              and early traditional IRA / 401(k) withdrawals
+ * @property {number} workingCapitalGainsPct    while working: dividends and the gain portion of sales in taxable accounts
+ * @property {number} ordinaryIncomePct         in retirement: traditional IRA / 401(k) withdrawals and RMDs, and
+ *                                              interest from high income held in taxable accounts
+ * @property {number} capitalGainsPct           in retirement: dividends and the gain portion of sales in taxable accounts
+ * @property {number} retireAge                 your age when the retirement rates take over
+ * @property {number} dividendYieldPct          the part of the equities return paid out as dividends each year, %
+ *                                              (taxed yearly in taxable accounts; the rest is unrealized growth)
  *
  * @typedef {Object} Income
  * @property {string} name
@@ -207,8 +215,20 @@ export function newSimulation() {
   return { targetSuccessPct: 90, spendMorePct: 20 };
 }
 /** @returns {Taxes} */
+// Tax defaults are conservative marginal rates for a high-income California
+// household. Working: 32% federal + 3.8% NIIT + 9.3% CA = ~45% on interest;
+// 15% + 3.8% + 9.3% = ~28% on dividends and gains. Retirement: 24% federal +
+// 9.3% CA = ~33% on IRA withdrawals; 15% + 9.3% = ~24% on gains.
+export const OLD_TAX_DEFAULTS = { ordinaryIncomePct: 22, capitalGainsPct: [15, 18] };
 export function newTaxes() {
-  return { ordinaryIncomePct: 22, capitalGainsPct: 15 };
+  return {
+    workingOrdinaryIncomePct: 45,
+    workingCapitalGainsPct: 28,
+    ordinaryIncomePct: 33,
+    capitalGainsPct: 24,
+    retireAge: 65,
+    dividendYieldPct: 2,
+  };
 }
 /** @returns {Economy} */
 export function newEconomy() {
@@ -435,11 +455,18 @@ export function validate(s) {
     add(warnings, "buckets.equitiesReturnPct", "returns usually rise from capital preservation to high income to equities. Check the order.");
   }
 
-  // Taxes: effective rates, warned (not rejected) outside a plausible band.
-  for (const k of /** @type {const} */ (["ordinaryIncomePct", "capitalGainsPct"])) {
+  // Taxes: rates warned (not rejected) outside a plausible band.
+  for (const k of /** @type {const} */ (["workingOrdinaryIncomePct", "workingCapitalGainsPct", "ordinaryIncomePct", "capitalGainsPct"])) {
     if (requireNumber(errors, s.taxes[k], `taxes.${k}`) && (s.taxes[k] < 0 || s.taxes[k] > 60)) {
       add(warnings, `taxes.${k}`, `${s.taxes[k]}% is outside the expected 0–60% range`);
     }
+  }
+  if (requireNumber(errors, s.taxes.retireAge, "taxes.retireAge") && (s.taxes.retireAge < 0 || s.taxes.retireAge > 120)) {
+    add(errors, "taxes.retireAge", "must be between 0 and 120");
+  }
+  if (requireNumber(errors, s.taxes.dividendYieldPct, "taxes.dividendYieldPct")) {
+    if (s.taxes.dividendYieldPct < 0) add(errors, "taxes.dividendYieldPct", "must be 0 or more");
+    else if (s.taxes.dividendYieldPct > 8) add(warnings, "taxes.dividendYieldPct", `${s.taxes.dividendYieldPct}% is high for a stock fund (2% is typical)`);
   }
 
   s.accounts.forEach((a, i) => {

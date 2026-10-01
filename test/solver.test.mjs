@@ -106,7 +106,7 @@ test("gap: adding exactly the gap to the accounts makes the plan 'met'", () => {
 test("gap solver precondition: end balance never falls as savings today rise (incl. taxes and the split)", () => {
   const s = lean();
   s.accounts = [newAccount({ name: "IRA", type: "traditional_ira", balance: 150_000 }), newAccount({ name: "Brk", type: "taxable", balance: 150_000, costBasis: 20_000 })];
-  s.taxes = { ordinaryIncomePct: 30, capitalGainsPct: 25 };
+  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 30, workingCapitalGainsPct: 25, ordinaryIncomePct: 30, capitalGainsPct: 25 };
   let prev = -Infinity;
   for (let x = 0; x <= 3_000_000; x += 50_000) {
     const end = simulate(s, {}, x).endBal;
@@ -138,9 +138,9 @@ test("higher taxes never shrink the gap; a traditional IRA needs more than the s
   trad.accounts = [newAccount({ name: "IRA", type: "traditional_ira", balance: 300_000 })];
   assert.ok(gapOf(requiredSavings(trad)) > gapOf(requiredSavings(roth)), "ordinary tax (and the early penalty) cost real money");
   const hiTax = lean();
-  hiTax.taxes = { ordinaryIncomePct: 40, capitalGainsPct: 30 };
+  hiTax.taxes = { ...hiTax.taxes, workingOrdinaryIncomePct: 40, workingCapitalGainsPct: 30, ordinaryIncomePct: 40, capitalGainsPct: 30 };
   hiTax.accounts = [newAccount({ name: "Brk", type: "taxable", balance: 300_000, costBasis: 100_000 })];
   const loTax = structuredClone(hiTax);
-  loTax.taxes = { ordinaryIncomePct: 10, capitalGainsPct: 5 };
+  loTax.taxes = { ...loTax.taxes, workingOrdinaryIncomePct: 10, workingCapitalGainsPct: 5, ordinaryIncomePct: 10, capitalGainsPct: 5 };
   assert.ok(gapOf(requiredSavings(hiTax)) >= gapOf(requiredSavings(loTax)));
 });

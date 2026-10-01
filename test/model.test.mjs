@@ -538,3 +538,33 @@ test("v14 → v15 adds the liquid years setting (10)", () => {
   assert.equal(state.buckets.liquidYears, 10);
   assert.deepEqual(validate(state).errors, []);
 });
+
+// ---- v16: working vs retirement tax rates, dividend yield ----
+
+test("v15 -> v16: taxes still at the old defaults move to the new, higher defaults", () => {
+  const v15 = { ...structuredClone(defaultState()), schemaVersion: 15, taxes: { ordinaryIncomePct: 22, capitalGainsPct: 18 } };
+  const { state } = migrate(v15);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(state.taxes, newTaxes());
+  const fromFifteen = migrate({ ...v15, taxes: { ordinaryIncomePct: 22, capitalGainsPct: 15 } }).state;
+  assert.equal(fromFifteen.taxes.capitalGainsPct, newTaxes().capitalGainsPct);
+});
+
+test("v15 -> v16: rates you changed are kept as your retirement rates", () => {
+  const v15 = { ...structuredClone(defaultState()), schemaVersion: 15, taxes: { ordinaryIncomePct: 30, capitalGainsPct: 20 } };
+  const { state } = migrate(v15);
+  assert.equal(state.taxes.ordinaryIncomePct, 30);
+  assert.equal(state.taxes.capitalGainsPct, 20);
+  assert.equal(state.taxes.workingOrdinaryIncomePct, newTaxes().workingOrdinaryIncomePct);
+  assert.equal(state.taxes.dividendYieldPct, newTaxes().dividendYieldPct);
+  assert.deepEqual(validate(state).errors, []);
+});
+
+test("taxes: a missing retirement age or a negative dividend yield is an error", () => {
+  const s = defaultState();
+  /** @type {any} */ (s.taxes).retireAge = null;
+  s.taxes.dividendYieldPct = -1;
+  const { errors } = validate(s);
+  assert.ok(errors.some((e) => e.path === "taxes.retireAge"));
+  assert.ok(errors.some((e) => e.path === "taxes.dividendYieldPct"));
+});
