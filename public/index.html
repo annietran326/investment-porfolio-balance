@@ -155,10 +155,12 @@
       <div class="field"><label for="f-taxRetire">Retirement rates start in year</label><input id="f-taxRetire" type="number" step="1" data-path="taxes.retireYear"><div class="issue"></div></div>
       <div class="field"><label for="f-taxDiv">Equities dividend yield %</label><input id="f-taxDiv" type="number" step="0.1" data-path="taxes.dividendYieldPct"><div class="issue"></div></div>
     </div>
-    <div class="footnote"><b>Use your marginal rates</b> (the rate on your next dollar), federal plus state, including the 3.8% net investment income tax if your income is over $250K married / $200K single. Income streams are entered after tax, so these rates apply only to your investments.<br>
+    <div class="footnote">Federal plus state rates. Income streams are entered after tax, so these rates apply only to your investments.<br>
+      <b>While working, use your marginal rates</b> (the rate on your next dollar), including the 3.8% net investment income tax if your income is over $250K married / $200K single: investment income lands on top of your salary.<br>
+      <b>In retirement, use your average rates</b> on what you withdraw: with no salary, your first dollars of income fall in the low brackets (for a married couple, roughly the first $98K of taxable income pays 0% federal tax on long-term gains).<br>
       <b>Ordinary income rate:</b> on interest from high income held in a taxable account (every year), and on traditional IRA / 401(k) withdrawals and RMDs.<br>
       <b>Capital gains &amp; dividends rate:</b> on stock dividends in a taxable account (every year; the dividend yield is the part of the equities return paid out, about 1.5–2% for a global stock fund) and on the gain part of what you sell. California taxes both as ordinary income.<br>
-      <b>The defaults are deliberately conservative,</b> set for a high-income California household. While working: 45% ordinary (32% federal + 3.8% + 9.3% CA) and 28% on gains and dividends (15% + 3.8% + 9.3%). In retirement: 33% ordinary (24% federal + 9.3% CA) and 24% on gains (15% + 9.3%). At the very top brackets the rates are about 54% and 37%; in a lower bracket or a state without income tax, lower them.<br>
+      <b>The defaults are deliberately cautious,</b> set for a high-income California household. While working: 45% ordinary (32% federal + 3.8% + 9.3% CA) and 28% on gains and dividends (15% + 3.8% + 9.3%). In retirement: 25% ordinary, about what a married couple pays overall on $250K–$400K of IRA withdrawals, and 18% on gains, about what they pay when nearly all of a $300K-a-year withdrawal is gain. At the very top brackets the working rates are about 54% and 37%; with lower income or in a state without income tax, lower them all.<br>
       Capital preservation isn't taxed yearly (municipal bonds are tax-free); IRA, 401(k) and Roth money isn't taxed until it comes out, if ever.</div>
   </section>
 

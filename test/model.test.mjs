@@ -582,3 +582,18 @@ test("re-anchoring to a new year moves the retirement-rates year with it", () =>
   const next = reanchorYears(s, s.profile.currentYear + 2);
   assert.equal(next.taxes.retireYear, s.taxes.retireYear + 2);
 });
+
+// ---- v17: retirement tax rates are average rates ----
+
+test("v16 -> v17: retirement rates still at 33 / 24 move to 25 / 18; changed rates are kept", () => {
+  const base = { ...structuredClone(defaultState()), schemaVersion: 16 };
+  const atOld = migrate({ ...base, taxes: { ...base.taxes, ordinaryIncomePct: 33, capitalGainsPct: 24 } }).state;
+  assert.equal(atOld.schemaVersion, SCHEMA_VERSION);
+  assert.equal(atOld.taxes.ordinaryIncomePct, 25);
+  assert.equal(atOld.taxes.capitalGainsPct, 18);
+  const custom = migrate({ ...base, taxes: { ...base.taxes, ordinaryIncomePct: 30, capitalGainsPct: 12, retireYear: 2040 } }).state;
+  assert.equal(custom.taxes.ordinaryIncomePct, 30);
+  assert.equal(custom.taxes.capitalGainsPct, 12);
+  assert.equal(custom.taxes.retireYear, 2040, "everything else is untouched");
+  assert.deepEqual(validate(custom).errors, []);
+});

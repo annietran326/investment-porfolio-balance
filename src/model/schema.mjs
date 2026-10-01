@@ -18,7 +18,7 @@
 //   - Defaults live HERE, once. No `||`-style fallbacks at use sites: code either
 //     receives a validated state or rejects it.
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 // The year the pure defaults are authored against. The engine and model never
 // read the clock (a purity guarantee); the SERVER re-anchors fresh/placeholder
@@ -77,9 +77,10 @@ export const BASE_YEAR = 2026;
  * @property {number} spendMorePct     the "spend more" scenario: % increase on variable spending lines
  *
  * @typedef {Object} Taxes
- * Marginal rates, federal plus state (plus the 3.8% net investment income tax
- * where it applies), deliberately on the high side. Two sets: while working
- * (before `retireYear`) and in retirement. Income streams are entered after tax.
+ * Federal plus state rates, on the cautious side. Two sets: while working
+ * (before `retireYear`), MARGINAL rates (investment income stacks on salary,
+ * incl. the 3.8% net investment income tax); in retirement, AVERAGE rates on
+ * what's withdrawn (no salary, so the low brackets fill first). Income streams are entered after tax.
  * @property {number} workingOrdinaryIncomePct  while working: interest from high income held in taxable accounts,
  *                                              and early traditional IRA / 401(k) withdrawals
  * @property {number} workingCapitalGainsPct    while working: dividends and the gain portion of sales in taxable accounts
@@ -215,11 +216,14 @@ export function newSimulation() {
   return { targetSuccessPct: 90, spendMorePct: 20 };
 }
 /** @returns {Taxes} */
-// Tax defaults are conservative marginal rates for a high-income California
-// household. Working: 32% federal + 3.8% NIIT + 9.3% CA = ~45% on interest;
-// 15% + 3.8% + 9.3% = ~28% on dividends and gains. Retirement: 24% federal +
-// 9.3% CA = ~33% on IRA withdrawals; 15% + 9.3% = ~24% on gains.
+// Tax defaults are cautious rates for a high-income California household.
+// Working (marginal): 32% federal + 3.8% NIIT + 9.3% CA = ~45% on interest;
+// 15% + 3.8% + 9.3% = ~28% on dividends and gains. Retirement (average): ~25%
+// on sizable IRA withdrawals; ~18% on gains when nearly all of a $300K/yr
+// withdrawal is gain (part of the gains pay 0% federal).
 export const OLD_TAX_DEFAULTS = { ordinaryIncomePct: 22, capitalGainsPct: [15, 18] };
+// The v16 retirement defaults (marginal rates), replaced in v17 by average rates.
+export const V16_RETIREMENT_DEFAULTS = { ordinaryIncomePct: 33, capitalGainsPct: 24 };
 // Retirement rates start at 65 for the default 40-year-old (re-anchored with the other years).
 export const DEFAULT_RETIRE_YEAR = BASE_YEAR + 25;
 /** @param {number} [retireYear] */
@@ -227,8 +231,8 @@ export function newTaxes(retireYear = DEFAULT_RETIRE_YEAR) {
   return {
     workingOrdinaryIncomePct: 45,
     workingCapitalGainsPct: 28,
-    ordinaryIncomePct: 33,
-    capitalGainsPct: 24,
+    ordinaryIncomePct: 25,
+    capitalGainsPct: 18,
     retireYear,
     dividendYieldPct: 2,
   };

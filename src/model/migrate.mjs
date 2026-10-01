@@ -10,7 +10,7 @@
 //     assumed. The one exception is the v0 localStorage export, which predates
 //     versioning and enters ONLY via an explicit user-initiated import that
 //     declares version 0 (`declaredVersion: 0`).
-import { SCHEMA_VERSION, OLD_TAX_DEFAULTS, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation } from "./schema.mjs";
+import { SCHEMA_VERSION, OLD_TAX_DEFAULTS, V16_RETIREMENT_DEFAULTS, defaultState, newSpendingCategory, newIncome, newAccount, newBuckets, newEconomy, newTaxes, newSimulation } from "./schema.mjs";
 
 // Old "own fund" defaults, used only by the rungs that created and then retired own funds.
 const DEFAULT_OWN_RETURN_PCT = 7;
@@ -429,6 +429,20 @@ function migrateV15(v15) {
   };
 }
 
+/**
+ * v16 -> v17: retirement tax rates become average rates (25% ordinary, 18%
+ * gains) instead of marginal ones (33% / 24%). Rates still at the v16
+ * defaults move to the new ones; rates you changed are kept.
+ * @param {any} v16
+ */
+function migrateV16(v16) {
+  const d = newTaxes();
+  const t = { ...(v16.taxes ?? {}) };
+  if (t.ordinaryIncomePct === V16_RETIREMENT_DEFAULTS.ordinaryIncomePct) t.ordinaryIncomePct = d.ordinaryIncomePct;
+  if (t.capitalGainsPct === V16_RETIREMENT_DEFAULTS.capitalGainsPct) t.capitalGainsPct = d.capitalGainsPct;
+  return { ...v16, schemaVersion: 17, taxes: t };
+}
+
 /** @type {Record<number, (data: any) => any>} rung N migrates version N → N+1 */
 const RUNGS = {
   0: migrateV0,
@@ -447,6 +461,7 @@ const RUNGS = {
   13: migrateV13,
   14: migrateV14,
   15: migrateV15,
+  16: migrateV16,
 };
 
 /**
