@@ -560,11 +560,25 @@ test("v15 -> v16: rates you changed are kept as your retirement rates", () => {
   assert.deepEqual(validate(state).errors, []);
 });
 
-test("taxes: a missing retirement age or a negative dividend yield is an error", () => {
+test("taxes: a missing retirement year or a negative dividend yield is an error", () => {
   const s = defaultState();
-  /** @type {any} */ (s.taxes).retireAge = null;
+  /** @type {any} */ (s.taxes).retireYear = null;
   s.taxes.dividendYieldPct = -1;
   const { errors } = validate(s);
-  assert.ok(errors.some((e) => e.path === "taxes.retireAge"));
+  assert.ok(errors.some((e) => e.path === "taxes.retireYear"));
   assert.ok(errors.some((e) => e.path === "taxes.dividendYieldPct"));
+});
+
+test("v15 -> v16: retirement rates start the year you turn 65", () => {
+  const base = structuredClone(defaultState());
+  const v15 = { ...base, schemaVersion: 15, profile: { ...base.profile, currentAge: 50, currentYear: 2026 }, taxes: { ordinaryIncomePct: 22, capitalGainsPct: 18 } };
+  assert.equal(migrate(v15).state.taxes.retireYear, 2041);
+  const older = { ...v15, profile: { ...v15.profile, currentAge: 70 } };
+  assert.equal(migrate(older).state.taxes.retireYear, 2026, "already past 65: retirement rates from now");
+});
+
+test("re-anchoring to a new year moves the retirement-rates year with it", () => {
+  const s = defaultState();
+  const next = reanchorYears(s, s.profile.currentYear + 2);
+  assert.equal(next.taxes.retireYear, s.taxes.retireYear + 2);
 });

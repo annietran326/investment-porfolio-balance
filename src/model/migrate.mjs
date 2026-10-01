@@ -403,7 +403,7 @@ function migrateV14(v14) {
 }
 
 /**
- * v15 -> v16: taxes get a working-years set of rates, a retirement age where
+ * v15 -> v16: taxes get a working-years set of rates, a year from which
  * the retirement rates take over, and a dividend yield (income in taxable
  * accounts is now taxed every year). Rates still at the old defaults (22% /
  * 15% or 18%) move to the new, higher defaults; rates you changed are kept as
@@ -411,7 +411,9 @@ function migrateV14(v14) {
  * @param {any} v15
  */
 function migrateV15(v15) {
-  const d = newTaxes();
+  // Retirement rates start the year you turn 65 (or now, if you're past it).
+  const year = num(v15.profile?.currentYear, 2026);
+  const d = newTaxes(year + Math.max(0, 65 - num(v15.profile?.currentAge, 65)));
   const t = v15.taxes ?? {};
   const ord = num(t.ordinaryIncomePct, OLD_TAX_DEFAULTS.ordinaryIncomePct);
   const cg = num(t.capitalGainsPct, OLD_TAX_DEFAULTS.capitalGainsPct[0]);
@@ -420,6 +422,7 @@ function migrateV15(v15) {
     schemaVersion: 16,
     taxes: {
       ...d,
+      ...t,
       ordinaryIncomePct: ord === OLD_TAX_DEFAULTS.ordinaryIncomePct ? d.ordinaryIncomePct : ord,
       capitalGainsPct: OLD_TAX_DEFAULTS.capitalGainsPct.includes(cg) ? d.capitalGainsPct : cg,
     },

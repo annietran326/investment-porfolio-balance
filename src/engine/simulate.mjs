@@ -57,8 +57,8 @@
 //      yearly.) Rebalancing is treated as tax-free. The same rule applies all
 //      the way to the end of the plan: there is no separate late-life shift.
 //
-// Tax rates: two sets, while working (your age < taxes.retireAge) and in
-// retirement. Each year uses the set for your age that year.
+// Tax rates: two sets, while working (years before taxes.retireYear) and in
+// retirement (from that year on).
 //
 // Yearly tax on taxable-account income (traditional IRA / 401(k) and Roth
 // money isn't taxed until it comes out, if ever):
@@ -399,9 +399,9 @@ export function prepare(s, overlay = {}) {
     rmdDivisors,
     planIdx,
     planReturns,
-    // Each year's rates: the working set before your retirement age, then the retirement set.
-    ordinaryRates: flows.map((f) => (f.age < s.taxes.retireAge ? s.taxes.workingOrdinaryIncomePct : s.taxes.ordinaryIncomePct) / 100),
-    gainsRates: flows.map((f) => (f.age < s.taxes.retireAge ? s.taxes.workingCapitalGainsPct : s.taxes.capitalGainsPct) / 100),
+    // Each year's rates: the working set before the retirement year, then the retirement set.
+    ordinaryRates: flows.map((f) => (f.year < s.taxes.retireYear ? s.taxes.workingOrdinaryIncomePct : s.taxes.ordinaryIncomePct) / 100),
+    gainsRates: flows.map((f) => (f.year < s.taxes.retireYear ? s.taxes.workingCapitalGainsPct : s.taxes.capitalGainsPct) / 100),
     dividendYield: s.taxes.dividendYieldPct / 100,
     breachThreshold: s.endState.mode === "floor" ? s.endState.amounts.floor : 0,
   };

@@ -33,7 +33,7 @@ function flat(o = {}) {
   // One set of rates for the whole plan (retirement rates from age 0) and no
   // dividends, so withdrawal-tax tests can set a single rate. Tests of the
   // yearly tax on taxable-account income set these explicitly.
-  s.taxes = { ...newTaxes(), workingOrdinaryIncomePct: 0, workingCapitalGainsPct: 0, ordinaryIncomePct: 0, capitalGainsPct: 0, retireAge: 0, dividendYieldPct: 0 };
+  s.taxes = { ...newTaxes(), workingOrdinaryIncomePct: 0, workingCapitalGainsPct: 0, ordinaryIncomePct: 0, capitalGainsPct: 0, retireYear: 0, dividendYieldPct: 0 };
   s.accounts = o.accounts ?? [newAccount({ name: "Brokerage", type: "taxable", balance: 100_000 })];
   s.incomes = [];
   s.spending = o.spendMonthly ? [{ name: "living", monthly: o.spendMonthly, fromYear: null, toYear: null, growthPct: null, variable: true }] : [];
@@ -946,18 +946,18 @@ test("bucket-plan money in a taxable account is taxed on its high income and equ
   assert.ok(m.income > 0 && m.equities > 0, "the split holds both");
 });
 
-test("working rates apply before the retirement-rates age, retirement rates from it", () => {
-  // Age 60, retirement rates from 61: year 0 at 45%, year 1 at 30%.
+test("working rates apply before the retirement-rates year, retirement rates from it", () => {
+  // Retirement rates from 2027: 2026 at 45%, 2027 at 30%.
   const s = incomeTaxPlan("income");
-  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 45, ordinaryIncomePct: 30, retireAge: 61 };
+  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 45, ordinaryIncomePct: 30, retireYear: 2027 };
   const sim = simulate(s);
   near(sim.rows[0].incomeTax, 6_000 * 0.45);
   near(sim.rows[1].incomeTax, (106_000 - 2_700) * 0.06 * 0.3);
 });
 
-test("working rates also apply to withdrawals before the retirement-rates age", () => {
+test("working rates also apply to withdrawals before the retirement-rates year", () => {
   const s = flat({ age: 62, spendMonthly: 7500 / 12, accounts: [newAccount({ name: "ira", type: "traditional_ira", balance: 100_000 })] });
-  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 25, ordinaryIncomePct: 0, retireAge: 63 };
+  s.taxes = { ...s.taxes, workingOrdinaryIncomePct: 25, ordinaryIncomePct: 0, retireYear: 2027 };
   const sim = simulate(s);
   near(sim.rows[0].tax, 2_500, "7,500 net at 25% = 10,000 gross");
   near(sim.rows[1].tax, 0, "retired: 0%");

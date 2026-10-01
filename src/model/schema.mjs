@@ -79,14 +79,14 @@ export const BASE_YEAR = 2026;
  * @typedef {Object} Taxes
  * Marginal rates, federal plus state (plus the 3.8% net investment income tax
  * where it applies), deliberately on the high side. Two sets: while working
- * (before `retireAge`) and in retirement. Income streams are entered after tax.
+ * (before `retireYear`) and in retirement. Income streams are entered after tax.
  * @property {number} workingOrdinaryIncomePct  while working: interest from high income held in taxable accounts,
  *                                              and early traditional IRA / 401(k) withdrawals
  * @property {number} workingCapitalGainsPct    while working: dividends and the gain portion of sales in taxable accounts
  * @property {number} ordinaryIncomePct         in retirement: traditional IRA / 401(k) withdrawals and RMDs, and
  *                                              interest from high income held in taxable accounts
  * @property {number} capitalGainsPct           in retirement: dividends and the gain portion of sales in taxable accounts
- * @property {number} retireAge                 your age when the retirement rates take over
+ * @property {number} retireYear                the first year the retirement rates apply
  * @property {number} dividendYieldPct          the part of the equities return paid out as dividends each year, %
  *                                              (taxed yearly in taxable accounts; the rest is unrealized growth)
  *
@@ -220,13 +220,16 @@ export function newSimulation() {
 // 15% + 3.8% + 9.3% = ~28% on dividends and gains. Retirement: 24% federal +
 // 9.3% CA = ~33% on IRA withdrawals; 15% + 9.3% = ~24% on gains.
 export const OLD_TAX_DEFAULTS = { ordinaryIncomePct: 22, capitalGainsPct: [15, 18] };
-export function newTaxes() {
+// Retirement rates start at 65 for the default 40-year-old (re-anchored with the other years).
+export const DEFAULT_RETIRE_YEAR = BASE_YEAR + 25;
+/** @param {number} [retireYear] */
+export function newTaxes(retireYear = DEFAULT_RETIRE_YEAR) {
   return {
     workingOrdinaryIncomePct: 45,
     workingCapitalGainsPct: 28,
     ordinaryIncomePct: 33,
     capitalGainsPct: 24,
-    retireAge: 65,
+    retireYear,
     dividendYieldPct: 2,
   };
 }
@@ -303,6 +306,7 @@ export function reanchorYears(state, targetYear) {
   const shift = (/** @type {number|null} */ y) => (typeof y === "number" ? y + delta : y);
   const next = structuredClone(state);
   next.profile.currentYear = targetYear;
+  if (typeof next.taxes?.retireYear === "number") next.taxes.retireYear += delta;
   for (const inc of next.incomes) {
     inc.fromYear += delta;
     inc.toYear += delta;
@@ -461,8 +465,8 @@ export function validate(s) {
       add(warnings, `taxes.${k}`, `${s.taxes[k]}% is outside the expected 0–60% range`);
     }
   }
-  if (requireNumber(errors, s.taxes.retireAge, "taxes.retireAge") && (s.taxes.retireAge < 0 || s.taxes.retireAge > 120)) {
-    add(errors, "taxes.retireAge", "must be between 0 and 120");
+  if (requireNumber(errors, s.taxes.retireYear, "taxes.retireYear") && !Number.isInteger(s.taxes.retireYear)) {
+    add(errors, "taxes.retireYear", "must be a whole year, like 2045");
   }
   if (requireNumber(errors, s.taxes.dividendYieldPct, "taxes.dividendYieldPct")) {
     if (s.taxes.dividendYieldPct < 0) add(errors, "taxes.dividendYieldPct", "must be 0 or more");
